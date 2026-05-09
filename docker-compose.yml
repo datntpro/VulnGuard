@@ -1,0 +1,33 @@
+services:
+  # ─────────────────────────────────────────────
+  # VulnGuard — API + Scanner Engine
+  # Ollama chạy sẵn trên máy local, KHÔNG cần Docker
+  # ─────────────────────────────────────────────
+  vulnguard:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: vulnguard-api
+    ports:
+      - "${VULNGUARD_PORT:-8080}:8080"
+    volumes:
+      - ./storage:/app/storage
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${SCAN_WORKSPACE:-/tmp}:/workspace
+    environment:
+      - DATABASE_URL=sqlite:////app/storage/db/vulnguard.db
+      # host.docker.internal → trỏ vào máy thật (Ollama đang chạy ở đó)
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT:-120}
+      - MAX_SCANS_PER_PROJECT=${MAX_SCANS_PER_PROJECT:-5}
+      - APP_ENV=${APP_ENV:-production}
+    # Cần extra_hosts để container resolve host.docker.internal trên Linux
+    # macOS/Windows Docker Desktop tự xử lý, không cần dòng này
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: vulnguard-network

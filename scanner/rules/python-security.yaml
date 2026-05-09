@@ -1,0 +1,151 @@
+rules:
+  # ── SQL Injection ──────────────────────────────────────────────────────────
+  - id: sql-injection-string-concat
+    patterns:
+      - pattern: |
+          $CURSOR.execute($QUERY + ...)
+      - pattern: |
+          $CURSOR.execute("..." + $INPUT)
+    message: "SQL injection via string concatenation. Use parameterized queries."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021"
+
+  - id: sql-injection-format
+    patterns:
+      - pattern: |
+          $CURSOR.execute(f"...{$INPUT}...")
+      - pattern: |
+          $CURSOR.execute("...%s..." % $INPUT)
+    message: "SQL injection via f-string or % formatting. Use parameterized queries."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-89"
+
+  # ── Command Injection ──────────────────────────────────────────────────────
+  - id: subprocess-shell-true
+    patterns:
+      - pattern: subprocess.run($CMD, ..., shell=True, ...)
+      - pattern: subprocess.call($CMD, ..., shell=True, ...)
+      - pattern: subprocess.Popen($CMD, ..., shell=True, ...)
+      - pattern: subprocess.check_output($CMD, ..., shell=True, ...)
+    message: "subprocess with shell=True can lead to command injection."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021"
+
+  - id: os-system-injection
+    pattern: os.system($CMD)
+    message: "os.system() is vulnerable to command injection. Use subprocess with a list."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78"
+
+  # ── Insecure Deserialization ───────────────────────────────────────────────
+  - id: pickle-loads
+    patterns:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: _pickle.loads(...)
+    message: "Deserialization with pickle is dangerous with untrusted data."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021"
+
+  - id: yaml-unsafe-load
+    patterns:
+      - pattern: yaml.load($DATA)
+      - pattern: yaml.load($DATA, Loader=yaml.Loader)
+      - pattern: yaml.load($DATA, Loader=yaml.UnsafeLoader)
+    message: "yaml.load() with untrusted input can execute arbitrary code. Use yaml.safe_load()."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"
+
+  # ── Cryptography ───────────────────────────────────────────────────────────
+  - id: weak-hash-md5
+    patterns:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.new("md5", ...)
+    message: "MD5 is cryptographically broken. Use SHA-256 or stronger."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-327"
+
+  - id: weak-hash-sha1
+    patterns:
+      - pattern: hashlib.sha1(...)
+      - pattern: hashlib.new("sha1", ...)
+    message: "SHA-1 is deprecated for security use. Use SHA-256 or stronger."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-327"
+
+  # ── Hardcoded Secrets ──────────────────────────────────────────────────────
+  - id: hardcoded-password-variable
+    patterns:
+      - pattern: $VAR = "$PASS"
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(password|passwd|pwd|secret|api_key|apikey|token|auth|credential)
+      - metavariable-regex:
+          metavariable: $PASS
+          regex: .{8,}
+    message: "Possible hardcoded credential in variable. Use environment variables."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798"
+      owasp: "A07:2021"
+
+  # ── Path Traversal ─────────────────────────────────────────────────────────
+  - id: open-with-user-input
+    patterns:
+      - pattern: open($PATH + $INPUT, ...)
+      - pattern: open(f"...{$INPUT}...", ...)
+    message: "Opening files with user-controlled paths can lead to path traversal."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-22"
+
+  # ── Debug/Dev Settings ─────────────────────────────────────────────────────
+  - id: flask-debug-true
+    patterns:
+      - pattern: app.run(..., debug=True, ...)
+      - pattern: app.run(debug=True)
+    message: "Flask debug mode enabled. Never use in production."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-94"
+
+  - id: django-debug-true
+    pattern: DEBUG = True
+    message: "Django DEBUG=True should never be used in production."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-489"
+
+  # ── SSRF ──────────────────────────────────────────────────────────────────
+  - id: requests-with-user-url
+    patterns:
+      - pattern: requests.get($URL + $INPUT, ...)
+      - pattern: requests.post($URL + $INPUT, ...)
+    message: "Making HTTP requests with user-controlled URLs can lead to SSRF."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-918"

@@ -1,0 +1,67 @@
+# Environment & Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Database
+storage/db/*.db
+storage/db/*.sqlite3
+
+# Reports (generated at runtime)
+storage/reports/*.html
+storage/reports/*.json
+storage/reports/*.csv
+
+# Scanner config (generated at runtime)
+storage/scanner_config.json
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
+# Docker
+.docker/
+
+# Resources / Sample projects (user workspace data)
+resources/*
+!resources/.gitkeep
+
+# Node
+node_modules/
+
+# Logs
+*.log
+debug.log
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Byte-compiled
+*.pyc
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/

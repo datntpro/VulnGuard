@@ -1,0 +1,1626 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VulnGuard — DevSecOps Scanner</title>
+<style>
+  :root {
+    --bg: #0f1117; --bg2: #161b22; --bg3: #1c2128; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --text3: #6e7681;
+    --critical: #da3633; --high: #e85d25; --medium: #d29922; --low: #3fb950; --info: #58a6ff;
+    --accent: #238636; --accent2: #1f6feb; --blocked: #da3633; --approved: #3fb950;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; height: 100vh; padding: 16px 0; display: flex; flex-direction: column; z-index: 100; }
+  .logo { padding: 8px 16px 20px; font-size: 18px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .logo span { color: var(--accent2); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--text2); border-left: 3px solid transparent; transition: all .15s; }
+  .nav-item:hover, .nav-item.active { background: var(--bg3); color: var(--text); border-left-color: var(--accent2); }
+  .main { margin-left: 220px; padding: 24px; }
+  .page { display: none; }
+  .page.active { display: block; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 20px; }
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+  .stat-num { font-size: 32px; font-weight: 700; }
+  .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  .c { color: var(--critical); } .h { color: var(--high); } .m { color: var(--medium); } .l { color: var(--low); } .i { color: var(--info); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .badge-critical { background: #da363320; color: var(--critical); border: 1px solid var(--critical); }
+  .badge-high { background: #e85d2520; color: var(--high); border: 1px solid var(--high); }
+  .badge-medium { background: #d2992220; color: var(--medium); border: 1px solid var(--medium); }
+  .badge-low { background: #3fb95020; color: var(--low); border: 1px solid var(--low); }
+  .badge-info { background: #58a6ff20; color: var(--info); border: 1px solid var(--info); }
+  .badge-open { background: #8b949e20; color: var(--text2); }
+  .badge-accepted { background: #1f6feb20; color: var(--accent2); }
+  .badge-fp { background: #3fb95020; color: var(--low); }
+  .badge-fixed { background: #3fb95020; color: var(--low); }
+  .badge-blocked { background: #da363320; color: var(--critical); }
+  .badge-approved { background: #3fb95020; color: var(--low); }
+  .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: 500; transition: all .15s; }
+  .btn-primary { background: var(--accent2); color: white; }
+  .btn-primary:hover { background: #388bfd; }
+  .btn-danger { background: var(--critical); color: white; }
+  .btn-danger:hover { background: #f85149; }
+  .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--text2); }
+  .btn-sm { padding: 4px 12px; font-size: 12px; }
+  input, select, textarea { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 8px 12px; font-size: 14px; width: 100%; outline: none; font-family: inherit; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent2); }
+  label { font-size: 13px; color: var(--text2); margin-bottom: 6px; display: block; }
+  .form-group { margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); color: var(--text2); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--bg3); }
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--bg3); border: 1px solid var(--border); margin: 1px; }
+  .text-sm { font-size: 12px; color: var(--text2); }
+  .text-mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 12px; }
+  .vuln-row { cursor: pointer; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; width: 800px; max-width: 95vw; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+  .ai-box { background: var(--bg3); border: 1px solid #1f6feb40; border-radius: 6px; padding: 14px; margin-top: 12px; }
+  .ai-label { font-size: 11px; color: var(--accent2); font-weight: 600; text-transform: uppercase; margin-bottom: 6px; }
+  .code-block { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; white-space: pre-wrap; overflow-x: auto; margin: 8px 0; color: #e2c08d; }
+  .flex { display: flex; gap: 8px; align-items: center; }
+  .flex-between { display: flex; justify-content: space-between; align-items: center; }
+  .ml-auto { margin-left: auto; }
+  .mt-16 { margin-top: 16px; }
+  .mb-16 { margin-bottom: 16px; }
+  .separator { height: 1px; background: var(--border); margin: 16px 0; }
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text2); }
+  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  .loading { display: flex; align-items: center; gap: 8px; color: var(--text2); padding: 20px; }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .progress-bar { height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .progress-fill { height: 100%; border-radius: 2px; transition: width .3s; }
+  .scan-status-pending { color: var(--text2); } .scan-status-running { color: var(--medium); } .scan-status-completed { color: var(--low); } .scan-status-failed { color: var(--critical); }
+  .approve-blocked { background: #da363315; border: 1px solid var(--critical); border-radius: 6px; padding: 12px 16px; color: var(--critical); }
+  .approve-ok { background: #3fb95015; border: 1px solid var(--low); border-radius: 6px; padding: 12px 16px; color: var(--low); }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filter-bar select { width: auto; min-width: 120px; }
+  .compare-col { flex: 1; }
+  .compare-new { color: var(--critical); } .compare-fixed { color: var(--low); } .compare-persisted { color: var(--medium); }
+  .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .tab { padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--text2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent2); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+  .notice { background: #1f6feb15; border: 1px solid #1f6feb40; border-radius: 6px; padding: 10px 14px; font-size: 13px; color: var(--info); margin-bottom: 12px; }
+  .waiver-form { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-top: 12px; }
+
+  /* ── Scan Progress Panel ─────────────────────────────── */
+  .progress-modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; width: 640px; max-width: 95vw; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; }
+  .progress-bar-lg { height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; margin: 12px 0; }
+  .progress-fill-lg { height: 100%; border-radius: 4px; transition: width .5s ease; background: linear-gradient(90deg, var(--accent2), #388bfd); }
+  .progress-fill-lg.done { background: var(--low); }
+  .progress-fill-lg.failed { background: var(--critical); }
+  .tool-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .tool-row:last-child { border-bottom: none; }
+  .tool-icon { font-size: 16px; width: 22px; text-align: center; flex-shrink: 0; }
+  .tool-name { flex: 1; color: var(--text); }
+  .tool-name.pending { color: var(--text3); }
+  .tool-count { font-size: 12px; color: var(--text2); min-width: 60px; text-align: right; }
+  .tool-dur { font-size: 11px; color: var(--text3); min-width: 44px; text-align: right; }
+  .tool-spinner { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+  .path-warning { background: #da363315; border: 1px solid var(--critical); border-radius: 6px; padding: 10px 14px; font-size: 13px; color: var(--critical); margin-bottom: 12px; }
+  .scan-type-group { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .scan-type-tag { padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #1f6feb20; color: var(--accent2); border: 1px solid #1f6feb40; }
+
+  /* ── Scanner Tool Row ────────────────────────────────── */
+  .scanner-tool-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .scanner-tool-row:last-child { border-bottom: none; }
+  .scanner-icon { font-size: 20px; width: 28px; text-align: center; flex-shrink: 0; }
+  .scanner-info { flex: 1; min-width: 0; }
+  .scanner-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .scanner-desc { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .scanner-version { font-size: 11px; font-family: monospace; color: var(--text3); margin-top: 2px; }
+  .scanner-type-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); border: 1px solid var(--border); color: var(--text3); }
+  .install-hint { font-size: 11px; color: var(--critical); margin-top: 3px; font-family: monospace; }
+  .toggle-wrap { flex-shrink: 0; }
+  .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; cursor: pointer; inset: 0; background: var(--bg3); border: 1px solid var(--border); border-radius: 22px; transition: .2s; }
+  .toggle-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background: var(--text3); border-radius: 50%; transition: .2s; }
+  .toggle input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+  .toggle input:checked + .toggle-slider:before { transform: translateX(18px); background: white; }
+  .toggle input:disabled + .toggle-slider { opacity: 0.4; cursor: not-allowed; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .status-dot.ok { background: var(--low); }
+  .status-dot.missing { background: var(--critical); }
+  .status-dot.disabled { background: var(--text3); }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="logo">🛡️ <span>Vuln</span>Guard</div>
+  <div class="nav-item active" onclick="navigate('dashboard')" id="nav-dashboard">📊 Dashboard</div>
+  <div class="nav-item" onclick="navigate('projects')" id="nav-projects">📁 Projects</div>
+  <div class="nav-item" onclick="navigate('scans')" id="nav-scans">🔍 Scans</div>
+  <div class="nav-item" onclick="navigate('compare')" id="nav-compare">🔀 Compare</div>
+  <div class="nav-item" onclick="navigate('settings')" id="nav-settings">⚙️ Settings</div>
+</div>
+
+<!-- ── Scan Progress Modal ───────────────────────────────────── -->
+<div class="modal-overlay" id="scan-progress-modal">
+  <div class="progress-modal">
+    <div class="modal-header">
+      <div>
+        <strong id="sp-title">🔍 Đang scan...</strong>
+        <div class="text-sm" style="margin-top:4px;" id="sp-path"></div>
+      </div>
+      <div id="sp-pct" style="font-size:22px;font-weight:700;color:var(--accent2);">0%</div>
+    </div>
+    <div class="modal-body">
+      <!-- Path warning -->
+      <div id="sp-path-warning" class="path-warning" style="display:none;">
+        ⚠️ <strong>Path không tồn tại trong container!</strong><br>
+        <span id="sp-path-warning-msg"></span>
+      </div>
+      <!-- Overall progress bar -->
+      <div class="progress-bar-lg">
+        <div class="progress-fill-lg" id="sp-fill" style="width:0%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:16px;">
+        <span id="sp-status-text">Đang khởi động...</span>
+        <span id="sp-counts"></span>
+      </div>
+      <!-- Per-tool list -->
+      <div id="sp-tools-list"></div>
+      <!-- Error -->
+      <div id="sp-error" style="display:none;" class="path-warning"></div>
+      <!-- Final summary (shown when done) -->
+      <div id="sp-final" style="display:none;margin-top:16px;">
+        <div class="separator"></div>
+        <h2>Kết quả scan</h2>
+        <div id="sp-final-grid" class="grid4" style="gap:8px;margin-bottom:12px;"></div>
+        <div id="sp-scanner-logs" style="margin-top:8px;"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="sp-close-btn" onclick="closeProgressModal()" style="display:none;">Đóng</button>
+      <button class="btn btn-primary" id="sp-view-btn" onclick="closeProgressAndViewVulns()" style="display:none;">Xem Vulnerabilities →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="main">
+
+  <!-- DASHBOARD PAGE -->
+  <div class="page active" id="page-dashboard">
+    <div class="flex-between mb-16">
+      <h1>Dashboard</h1>
+      <button class="btn btn-primary" onclick="navigate('projects')">+ New Scan</button>
+    </div>
+    <div id="dashboard-content">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- PROJECTS PAGE -->
+  <div class="page" id="page-projects">
+    <div class="flex-between mb-16">
+      <h1>Projects</h1>
+      <button class="btn btn-primary" onclick="openCreateProject()">+ Tạo Project</button>
+    </div>
+    <div id="projects-list">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- SCANS PAGE -->
+  <div class="page" id="page-scans">
+    <h1 id="scans-title">Scans</h1>
+    <div id="scans-content">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- COMPARE PAGE -->
+  <div class="page" id="page-compare">
+    <h1>So sánh Scans</h1>
+    <div class="card">
+      <div class="grid2">
+        <div class="form-group">
+          <label>Project</label>
+          <select id="compare-project" onchange="loadCompareScans()">
+            <option value="">— Chọn project —</option>
+          </select>
+        </div>
+        <div></div>
+        <div class="form-group">
+          <label>Scan cũ (baseline)</label>
+          <select id="compare-scan-old"><option value="">— Chọn scan —</option></select>
+        </div>
+        <div class="form-group">
+          <label>Scan mới (current)</label>
+          <select id="compare-scan-new"><option value="">— Chọn scan —</option></select>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="runCompare()">So sánh</button>
+    </div>
+    <div id="compare-result"></div>
+  </div>
+
+  <!-- SETTINGS PAGE -->
+  <div class="page" id="page-settings">
+    <h1>Settings</h1>
+
+    <!-- Ollama Status -->
+    <div class="card">
+      <h2>🤖 Ollama AI Status</h2>
+      <div id="ollama-status-bar" class="notice" style="margin-bottom:0;">Đang kiểm tra...</div>
+    </div>
+
+    <!-- Active Model -->
+    <div class="card">
+      <h2>Model đang dùng</h2>
+      <div class="flex" style="gap:10px;align-items:flex-end;">
+        <div style="flex:1;">
+          <label>Active model (dùng cho AI analysis)</label>
+          <select id="active-model-select" onchange="setActiveModel()">
+            <option value="">— Chưa có model nào —</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="setActiveModel()">Áp dụng</button>
+      </div>
+      <div id="active-model-msg" style="font-size:13px;margin-top:8px;"></div>
+    </div>
+
+    <!-- Pull Model -->
+    <div class="card">
+      <h2>📥 Pull Model mới</h2>
+      <div class="notice" style="margin-bottom:14px;">
+        Model được lưu local, chỉ cần pull 1 lần. Internet cần thiết khi pull.
+        Sau khi pull xong, chọn model ở mục "Model đang dùng" phía trên.
+      </div>
+
+      <!-- Quick pick -->
+      <label style="margin-bottom:8px;display:block;">Chọn nhanh model phổ biến:</label>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('llama3.2')">llama3.2 (~2GB) ⚡</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('qwen2.5-coder:7b')">qwen2.5-coder:7b (~5GB) 👍 Code</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('deepseek-coder:6.7b')">deepseek-coder:6.7b (~4GB) ⭐ Best</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('codellama:7b')">codellama:7b (~4GB)</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('mistral:7b-instruct')">mistral:7b-instruct (~4GB)</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('phi3:mini')">phi3:mini (~2GB) 🪶 Nhẹ</button>
+      </div>
+
+      <div class="flex" style="gap:8px;">
+        <input id="pull-model-input" placeholder="Tên model, ví dụ: llama3.2 hoặc deepseek-coder:6.7b" style="flex:1;">
+        <button class="btn btn-primary" onclick="pullModel()">Pull</button>
+      </div>
+
+      <!-- Pull progress -->
+      <div id="pull-progress" style="display:none;margin-top:14px;">
+        <div class="flex" style="margin-bottom:6px;">
+          <span id="pull-status-text" class="text-sm">Đang pull...</span>
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="cancelPull()">Hủy</button>
+        </div>
+        <div class="progress-bar"><div id="pull-progress-fill" class="progress-fill" style="background:var(--accent2);width:0%;"></div></div>
+        <div id="pull-log" class="code-block" style="margin-top:8px;max-height:120px;overflow-y:auto;font-size:11px;color:var(--text2);"></div>
+      </div>
+    </div>
+
+    <!-- Installed Models -->
+    <div class="card">
+      <h2>📦 Models đã cài</h2>
+      <div id="installed-models-list">
+        <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      </div>
+    </div>
+
+    <!-- Scanner Tools Health -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:14px;">
+        <h2 style="margin-bottom:0;">🛠️ Scanner Tools</h2>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div id="scanner-summary" class="text-sm" style="color:var(--text2);"></div>
+          <button class="btn btn-ghost btn-sm" onclick="loadScannerHealth()">🔄 Refresh</button>
+          <button class="btn btn-primary btn-sm" id="scanner-save-btn" onclick="saveScannerConfig()" style="display:none;">💾 Lưu</button>
+        </div>
+      </div>
+      <div class="notice" style="margin-bottom:12px;">
+        ✅ = Đã cài &nbsp;|&nbsp; ❌ = Chưa cài &nbsp;|&nbsp; Toggle để enable/disable tool khi scan.<br>
+        Tool bị disable sẽ không chạy trong các lần scan tiếp theo.
+      </div>
+      <div id="scanner-tools-list">
+        <div class="loading"><div class="spinner"></div>Đang kiểm tra...</div>
+      </div>
+    </div>
+
+    <!-- Severity Threshold Info -->
+    <div class="card">
+      <h2>⚙️ Severity Threshold (Block Approve)</h2>
+      <p class="text-sm" style="margin-bottom:10px;">Cấu hình trong file <span class="text-mono">.env</span> → <span class="text-mono">BLOCK_SEVERITY_THRESHOLD</span></p>
+      <div id="threshold-info" class="notice">Đang tải...</div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- Vuln Detail Modal -->
+<div class="modal-overlay" id="vuln-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <span id="modal-severity-badge"></span>
+        <strong id="modal-title" style="margin-left:8px;font-size:15px;"></strong>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab(this,'tab-detail')">Chi tiết</div>
+        <div class="tab" onclick="switchTab(this,'tab-ai')">🤖 AI Analysis</div>
+        <div class="tab" onclick="switchTab(this,'tab-waiver')">📋 Waiver</div>
+      </div>
+      <div class="tab-content active" id="tab-detail">
+        <div class="grid2">
+          <div><label>Tool</label><div id="modal-tool" class="text-mono"></div></div>
+          <div><label>Scan Type</label><div id="modal-scan-type"></div></div>
+          <div><label>Rule/CVE</label><div id="modal-rule" class="text-mono"></div></div>
+          <div><label>Status</label><div id="modal-status"></div></div>
+          <div><label>File</label><div id="modal-file" class="text-mono text-sm"></div></div>
+          <div><label>Line</label><div id="modal-line" class="text-mono"></div></div>
+        </div>
+        <div id="modal-pkg-row" style="display:none" class="mt-16">
+          <div class="grid2">
+            <div><label>Package</label><div id="modal-pkg" class="text-mono"></div></div>
+            <div><label>Fixed Version</label><div id="modal-fixed" class="text-mono" style="color:var(--low)"></div></div>
+          </div>
+        </div>
+        <div class="form-group mt-16">
+          <label>Mô tả</label>
+          <div id="modal-desc" class="text-sm" style="line-height:1.6;white-space:pre-wrap;"></div>
+        </div>
+        <div id="modal-code-row">
+          <label>Code snippet</label>
+          <div id="modal-code" class="code-block"></div>
+        </div>
+        <div class="mt-16 flex gap-8">
+          <button class="btn btn-ghost btn-sm" onclick="markFP()">Mark False Positive</button>
+          <button class="btn btn-ghost btn-sm" onclick="markOpen()">Reset to Open</button>
+        </div>
+      </div>
+      <div class="tab-content" id="tab-ai">
+        <div id="ai-loading" class="loading"><div class="spinner"></div>AI đang phân tích...</div>
+        <div id="ai-content" style="display:none">
+          <div class="ai-box">
+            <div class="ai-label">False Positive Likelihood</div>
+            <div id="ai-fp" style="font-size:22px;font-weight:700;"></div>
+            <div id="ai-fp-reason" class="text-sm mt-16"></div>
+          </div>
+          <div class="grid2 mt-16">
+            <div class="ai-box">
+              <div class="ai-label">🌐 Môi trường PUBLIC (Internet)</div>
+              <div id="ai-exploit-public" style="line-height:1.6;font-size:13px;"></div>
+            </div>
+            <div class="ai-box">
+              <div class="ai-label">🔒 Môi trường PRIVATE (Internal)</div>
+              <div id="ai-exploit-private" style="line-height:1.6;font-size:13px;"></div>
+            </div>
+          </div>
+          <div class="ai-box mt-16">
+            <div class="ai-label">💡 Giải thích (tiếng Việt)</div>
+            <div id="ai-explanation" style="line-height:1.7;font-size:13px;"></div>
+          </div>
+          <div class="ai-box mt-16">
+            <div class="ai-label">🔧 Gợi ý Fix</div>
+            <div id="ai-fix" style="line-height:1.7;font-size:13px;white-space:pre-wrap;"></div>
+          </div>
+        </div>
+        <div id="ai-unavailable" style="display:none" class="empty-state">
+          <div class="icon">🤖</div>
+          <p>AI chưa phân tích vulnerability này</p>
+          <button class="btn btn-primary mt-16" onclick="requestAI()">Phân tích ngay</button>
+        </div>
+      </div>
+      <div class="tab-content" id="tab-waiver">
+        <div id="waiver-existing" style="display:none">
+          <h2>Waiver hiện tại</h2>
+          <div class="card">
+            <div class="grid2">
+              <div><label>Approver</label><div id="waiver-approver"></div></div>
+              <div><label>Ngày tạo</label><div id="waiver-date"></div></div>
+              <div><label>Hết hạn</label><div id="waiver-expiry"></div></div>
+              <div><label>Loại</label><div id="waiver-type"></div></div>
+            </div>
+            <div class="form-group mt-16"><label>Lý do</label><div id="waiver-reason" style="line-height:1.6;"></div></div>
+            <button class="btn btn-danger btn-sm mt-16" onclick="deleteWaiver()">Xóa Waiver</button>
+          </div>
+        </div>
+        <div id="waiver-form-section">
+          <h2>Tạo Waiver / Accept Risk</h2>
+          <div class="notice">Waiver cho phép approve deploy dù còn vulnerability này. Cần ghi rõ lý do và người chịu trách nhiệm.</div>
+          <div class="waiver-form">
+            <div class="form-group">
+              <label>Tên người approve *</label>
+              <input id="waiver-approver-name" placeholder="Nguyễn Văn A">
+            </div>
+            <div class="form-group">
+              <label>Email</label>
+              <input id="waiver-approver-email" type="email" placeholder="approver@company.com">
+            </div>
+            <div class="form-group">
+              <label>Lý do chấp nhận rủi ro * (tối thiểu 10 ký tự)</label>
+              <textarea id="waiver-reason-input" rows="3" placeholder="Vd: Vulnerability này không có exploit public. Đã xác nhận với security team rằng environment là private-only và có network isolation..."></textarea>
+            </div>
+            <div class="form-group">
+              <label>Ngày hết hạn (để trống = không hết hạn)</label>
+              <input id="waiver-expiry-input" type="date">
+            </div>
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:8px;">
+                <input type="checkbox" id="waiver-is-fp" style="width:auto;">
+                Đây là False Positive (không phải vulnerability thật)
+              </label>
+            </div>
+            <button class="btn btn-primary" onclick="submitWaiver()">Tạo Waiver</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span id="modal-vuln-id" class="text-sm text-mono" style="margin-right:auto;"></span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal()">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Project Modal -->
+<div class="modal-overlay" id="create-project-modal">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-header"><strong>Tạo Project mới</strong><button class="btn btn-ghost btn-sm" onclick="closeCreateProject()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Tên project *</label><input id="new-project-name" placeholder="my-backend-service"></div>
+      <div class="form-group"><label>Mô tả</label><input id="new-project-desc" placeholder="Spring Boot + PostgreSQL service"></div>
+      <div class="form-group"><label>Tech stacks (chọn nhiều)</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;" id="stack-checkboxes"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeCreateProject()">Hủy</button>
+      <button class="btn btn-primary" onclick="createProject()">Tạo Project</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trigger Scan Modal -->
+<div class="modal-overlay" id="scan-modal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header"><strong>Trigger Scan</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('scan-modal').classList.remove('open')">✕</button></div>
+    <div class="modal-body">
+      <div class="notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).</div>
+      <div class="form-group mt-16"><label>Scan path *</label><input id="scan-path" value="/workspace" placeholder="/workspace/my-app"></div>
+      <div class="form-group"><label>Scan types</label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+          <label style="display:flex;align-items:center;gap:4px;width:auto;"><input type="checkbox" class="scan-type-cb" value="SAST" checked style="width:auto;"> SAST</label>
+          <label style="display:flex;align-items:center;gap:4px;width:auto;"><input type="checkbox" class="scan-type-cb" value="SCA" checked style="width:auto;"> SCA</label>
+          <label style="display:flex;align-items:center;gap:4px;width:auto;"><input type="checkbox" class="scan-type-cb" value="IAC" checked style="width:auto;"> IaC</label>
+          <label style="display:flex;align-items:center;gap:4px;width:auto;"><input type="checkbox" class="scan-type-cb" value="CONTAINER" style="width:auto;"> Container</label>
+          <label style="display:flex;align-items:center;gap:4px;width:auto;"><input type="checkbox" class="scan-type-cb" value="SECRETS" checked style="width:auto;"> Secrets</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="scan-run-ai" checked style="width:auto;"> Chạy AI analysis sau khi scan
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('scan-modal').classList.remove('open')">Hủy</button>
+      <button class="btn btn-primary" onclick="triggerScan()">🚀 Bắt đầu Scan</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';  // Same origin
+let currentProjectId = null;
+let currentScanId = null;
+let currentVulnId = null;
+let pollInterval = null;
+
+// ─── Navigation ───────────────────────────────────────────────
+function navigate(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.getElementById('nav-' + page).classList.add('active');
+
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects };
+  if (loaders[page]) loaders[page]();
+}
+
+// ─── API helpers ──────────────────────────────────────────────
+async function api(path, opts = {}) {
+  const r = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!r.ok) { const t = await r.text(); throw new Error(t); }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+// ─── Severity utils ───────────────────────────────────────────
+function sevBadge(s) {
+  const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
+  return `<span class="badge ${cls[s] || 'badge-info'}">${s}</span>`;
+}
+function statusBadge(s) {
+  const cls = { OPEN: 'badge-open', ACCEPTED: 'badge-accepted', FALSE_POSITIVE: 'badge-fp', FIXED: 'badge-fixed' };
+  const lbl = { OPEN: 'Open', ACCEPTED: 'Accepted', FALSE_POSITIVE: 'False Positive', FIXED: 'Fixed' };
+  return `<span class="badge ${cls[s] || ''}">${lbl[s] || s}</span>`;
+}
+function fmtDate(d) { return d ? new Date(d).toLocaleString('vi-VN') : '—'; }
+
+// ─── DASHBOARD ───────────────────────────────────────────────
+async function loadDashboard() {
+  const el = document.getElementById('dashboard-content');
+  try {
+    const projects = await api('/api/projects');
+    if (!projects.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">🛡️</div><p>Chưa có project nào</p><button class="btn btn-primary mt-16" onclick="navigate('projects')">Tạo Project đầu tiên</button></div>`;
+      return;
+    }
+
+    let totalC = 0, totalH = 0, totalM = 0, totalL = 0, totalOpen = 0;
+    const projectCards = await Promise.all(projects.map(async p => {
+      const scans = await api(`/api/projects/${p.id}/scans`);
+      const latest = scans[0];
+      const s = latest?.summary || {};
+      totalC += s.CRITICAL || 0; totalH += s.HIGH || 0; totalM += s.MEDIUM || 0; totalL += s.LOW || 0;
+      totalOpen += s.open || 0;
+      return { p, latest, s };
+    }));
+
+    el.innerHTML = `
+      <div class="grid4 mb-16">
+        <div class="stat-card"><div class="stat-num c">${totalC}</div><div class="stat-label">CRITICAL</div></div>
+        <div class="stat-card"><div class="stat-num h">${totalH}</div><div class="stat-label">HIGH</div></div>
+        <div class="stat-card"><div class="stat-num m">${totalM}</div><div class="stat-label">MEDIUM</div></div>
+        <div class="stat-card"><div class="stat-num l">${totalOpen}</div><div class="stat-label">Open Issues</div></div>
+      </div>
+      <h2>Projects</h2>
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table>
+          <thead><tr><th>Project</th><th>Last Scan</th><th>C</th><th>H</th><th>M</th><th>L</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${projectCards.map(({p, latest, s}) => `
+              <tr>
+                <td><strong>${p.name}</strong><br><span class="text-sm">${p.description || ''}</span></td>
+                <td class="text-sm">${latest ? '#' + latest.scan_number + ' — ' + fmtDate(latest.started_at) : '—'}</td>
+                <td class="c">${s.CRITICAL || 0}</td>
+                <td class="h">${s.HIGH || 0}</td>
+                <td class="m">${s.MEDIUM || 0}</td>
+                <td class="l">${s.LOW || 0}</td>
+                <td>${latest ? `<span class="scan-status-${latest.status.toLowerCase()}">${latest.status}</span>` : '—'}</td>
+                <td><button class="btn btn-ghost btn-sm" onclick="openProjectScans('${p.id}','${p.name}')">Xem</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+// ─── PROJECTS ─────────────────────────────────────────────────
+async function loadProjects() {
+  const el = document.getElementById('projects-list');
+  try {
+    const projects = await api('/api/projects');
+    if (!projects.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">📁</div><p>Chưa có project nào</p></div>`;
+      return;
+    }
+    el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+      ${projects.map(p => `
+        <div class="card" style="cursor:pointer" onclick="openProjectScans('${p.id}','${p.name}')">
+          <div class="flex-between">
+            <strong style="font-size:16px;">${p.name}</strong>
+            <span class="text-sm">${p.scan_count} scan(s)</span>
+          </div>
+          <div class="text-sm" style="margin-top:4px;">${p.description || 'Không có mô tả'}</div>
+          <div style="margin-top:10px;">${(p.language_stacks||[]).map(s => `<span class="tag">${s}</span>`).join('')}</div>
+          <div class="flex" style="margin-top:12px;gap:6px;">
+            <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openScanModal('${p.id}')">🚀 Scan</button>
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteProject('${p.id}','${p.name}')">🗑️</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+const STACKS = ['java','kotlin','python','javascript','typescript','go','c','cpp','terraform','ansible','kubernetes','docker'];
+function openCreateProject() {
+  document.getElementById('new-project-name').value = '';
+  document.getElementById('new-project-desc').value = '';
+  const cb = document.getElementById('stack-checkboxes');
+  cb.innerHTML = STACKS.map(s => `<label style="display:flex;align-items:center;gap:4px;width:auto;font-size:13px;"><input type="checkbox" class="stack-cb" value="${s}" style="width:auto;"> ${s}</label>`).join('');
+  document.getElementById('create-project-modal').classList.add('open');
+}
+function closeCreateProject() { document.getElementById('create-project-modal').classList.remove('open'); }
+
+async function createProject() {
+  const name = document.getElementById('new-project-name').value.trim();
+  if (!name) return alert('Nhập tên project');
+  const stacks = [...document.querySelectorAll('.stack-cb:checked')].map(c => c.value);
+  try {
+    await api('/api/projects', { method: 'POST', body: { name, description: document.getElementById('new-project-desc').value, language_stacks: stacks }});
+    closeCreateProject();
+    loadProjects();
+  } catch(e) { alert('Lỗi: ' + e.message); }
+}
+
+async function deleteProject(id, name) {
+  if (!confirm(`Xóa project "${name}"? Tất cả scans và vulns sẽ bị xóa.`)) return;
+  await api(`/api/projects/${id}`, { method: 'DELETE' });
+  loadProjects();
+}
+
+// ─── SCANS ────────────────────────────────────────────────────
+function openProjectScans(projectId, projectName) {
+  currentProjectId = projectId;
+  navigate('scans');
+  document.getElementById('scans-title').textContent = `Scans — ${projectName}`;
+  loadScans(projectId);
+}
+
+async function loadScans(projectId) {
+  const el = document.getElementById('scans-content');
+  try {
+    const scans = await api(`/api/projects/${projectId}/scans`);
+    if (!scans.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><p>Chưa có scan nào</p><button class="btn btn-primary mt-16" onclick="openScanModal('${projectId}')">🚀 Bắt đầu Scan</button></div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div class="flex mb-16">
+        <button class="btn btn-primary" onclick="openScanModal('${projectId}')">🚀 Scan mới</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        ${scans.map(sc => renderScanCard(sc, projectId)).join('')}
+      </div>`;
+
+    // Auto-poll running scans (2s interval for fresh progress data)
+    const running = scans.find(s => s.status === 'RUNNING' || s.status === 'PENDING');
+    if (running) {
+      clearInterval(pollInterval);
+      pollInterval = setInterval(() => loadScans(projectId), 2000);
+    } else {
+      clearInterval(pollInterval);
+    }
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+function renderScanCard(sc, projectId) {
+  const s = sc.summary || {};
+  const scannerLogs = s.scanner_logs || {};
+  const progress = sc.scanner_progress || {};
+  const statusColor = { PENDING: 'var(--text2)', RUNNING: 'var(--medium)', COMPLETED: 'var(--low)', FAILED: 'var(--critical)' };
+  const statusIcon = { PENDING: '⏳', RUNNING: '⚡', COMPLETED: '✅', FAILED: '❌' };
+
+  // Per-tool progress rows (RUNNING state)
+  let runningProgressHtml = '';
+  if (sc.status === 'RUNNING' && Object.keys(progress.tools || {}).length > 0) {
+    const total = progress.total_tools || 0;
+    const done = progress.completed_tools || 0;
+    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+    const toolsHtml = Object.entries(progress.tools || {}).map(([tool, t]) => {
+      const ts = t.status || 'pending';
+      const icon = ts === 'done' ? '✅' : ts === 'error' ? '❌' : ts === 'running' ? '⚡' : '⏳';
+      const count = ts === 'done' ? ` <span style="color:var(--text3);">(${t.count||0})</span>` : '';
+      return `<span style="font-size:12px;color:${ts==='pending'?'var(--text3)':ts==='done'?'var(--text2)':'var(--medium)'};">${icon} ${escHtml(t.label||tool)}${count}</span>`;
+    }).join('<br>');
+    runningProgressHtml = `
+      <div style="margin-top:12px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px;">
+          <span>Tiến độ: ${done}/${total} tools</span><span>${pct}%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" style="background:var(--accent2);width:${pct}%;"></div></div>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px;">${toolsHtml}</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openProgressModal('${sc.id}','${sc.scan_path}',${JSON.stringify(sc.scan_types||[])});pollScanProgress('${sc.id}')">Xem tiến độ chi tiết →</button>
+      </div>`;
+  } else if (sc.status === 'RUNNING') {
+    runningProgressHtml = `<div class="loading" style="margin-top:8px;"><div class="spinner"></div>Đang khởi động scanners...</div>`;
+  }
+
+  // Scanner logs table (COMPLETED state)
+  let scannerLogsHtml = '';
+  if (sc.status === 'COMPLETED' && Object.keys(scannerLogs).length > 0) {
+    const logRows = Object.entries(scannerLogs).map(([tool, log]) => {
+      const icon = log.status === 'ok' ? '✅' : '❌';
+      const countColor = log.count > 0 ? 'color:var(--medium)' : 'color:var(--text3)';
+      return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);">
+        <span>${icon} ${escHtml(log.label||tool)}</span>
+        <span style="${countColor};font-weight:600;">${log.count||0} findings</span>
+      </div>`;
+    }).join('');
+    scannerLogsHtml = `
+      <details style="margin-top:10px;cursor:pointer;">
+        <summary style="font-size:12px;color:var(--text2);">Xem chi tiết từng tool (${Object.keys(scannerLogs).length} tools đã chạy)</summary>
+        <div style="margin-top:8px;background:var(--bg3);border-radius:6px;padding:10px;">${logRows}</div>
+      </details>`;
+  }
+
+  return `
+    <div class="card">
+      <div class="flex-between">
+        <div class="flex">
+          <strong>Scan #${sc.scan_number}</strong>
+          <span style="color:${statusColor[sc.status]};font-size:13px;margin-left:8px;">${statusIcon[sc.status]} ${sc.status}</span>
+          ${sc.status === 'RUNNING' ? '<div class="spinner" style="margin-left:4px;"></div>' : ''}
+        </div>
+        <span class="text-sm">${fmtDate(sc.started_at)}</span>
+      </div>
+      <div class="text-sm" style="margin-top:8px;">
+        📂 <span class="text-mono">${escHtml(sc.scan_path)}</span> &nbsp;|&nbsp;
+        ${(sc.scan_types||[]).map(t=>`<span class="tag">${t}</span>`).join('')}
+      </div>
+      ${sc.status === 'COMPLETED' ? `
+        <div class="grid4" style="margin-top:12px;gap:8px;">
+          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+            <div class="stat-num c" style="font-size:22px;">${s.CRITICAL||0}</div><div class="stat-label">Critical</div>
+          </div>
+          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+            <div class="stat-num h" style="font-size:22px;">${s.HIGH||0}</div><div class="stat-label">High</div>
+          </div>
+          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+            <div class="stat-num m" style="font-size:22px;">${s.MEDIUM||0}</div><div class="stat-label">Medium</div>
+          </div>
+          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+            <div class="stat-num l" style="font-size:22px;">${s.LOW||0}</div><div class="stat-label">Low</div>
+          </div>
+        </div>
+        ${scannerLogsHtml}
+        <div class="flex" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="openVulns('${sc.id}')">Xem ${s.total||0} Vulnerabilities →</button>
+          <button class="btn btn-sm" style="background:#7c3aed;color:#fff;" onclick="openAIReport('${sc.id}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${sc.id}')" title="Tải xuống báo cáo AI dạng file .html để gửi email hoặc lưu trữ">⬇ Tải .html</button>
+          <button class="btn btn-ghost btn-sm" onclick="checkApprove('${projectId}','${sc.id}')">✅ Approve Check</button>
+        </div>
+      ` : sc.status === 'FAILED' ? `
+        <div style="color:var(--critical);font-size:13px;margin-top:8px;background:#da363310;border-radius:6px;padding:10px;">
+          ❌ <strong>Thất bại:</strong> ${escHtml(sc.error_message||'Scan thất bại')}
+        </div>
+      ` : runningProgressHtml}
+    </div>`;
+}
+
+// ─── VULNS ────────────────────────────────────────────────────
+let allVulns = [];
+async function openVulns(scanId) {
+  currentScanId = scanId;
+  const el = document.getElementById('scans-content');
+  el.innerHTML = `<div class="flex mb-16"><button class="btn btn-ghost btn-sm" onclick="loadScans('${currentProjectId}')">← Về Scans</button></div><div class="loading"><div class="spinner"></div>Đang tải vulnerabilities...</div>`;
+
+  try {
+    allVulns = await api(`/api/projects/scans/${scanId}/vulns`);
+    renderVulnTable();
+  } catch(e) {
+    el.innerHTML += `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+  }
+}
+
+function renderVulnTable() {
+  const sevFilter = document.getElementById('filter-sev')?.value || '';
+  const statusFilter = document.getElementById('filter-status')?.value || '';
+  const typeFilter = document.getElementById('filter-type')?.value || '';
+  const searchFilter = document.getElementById('filter-search')?.value?.toLowerCase() || '';
+
+  let filtered = allVulns.filter(v => {
+    if (sevFilter && v.severity !== sevFilter) return false;
+    if (statusFilter && v.status !== statusFilter) return false;
+    if (typeFilter && v.scan_type !== typeFilter) return false;
+    if (searchFilter && !v.title.toLowerCase().includes(searchFilter) && !(v.file_path||'').toLowerCase().includes(searchFilter)) return false;
+    return true;
+  });
+
+  const el = document.getElementById('scans-content');
+  el.innerHTML = `
+    <div class="flex-between mb-16">
+      <div class="flex">
+        <button class="btn btn-ghost btn-sm" onclick="loadScans('${currentProjectId}')">← Về Scans</button>
+        <span style="margin-left:12px;font-size:14px;">${filtered.length}/${allVulns.length} vulnerabilities</span>
+      </div>
+      <div class="flex" style="gap:6px;">
+        <button class="btn btn-sm" style="background:#7c3aed;color:#fff;" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo AI dạng file .html">⬇ Tải .html</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export toàn bộ kết quả scan ra CSV (mở được bằng Excel)">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <input style="max-width:200px;" id="filter-search" placeholder="Tìm theo tên/file..." value="${searchFilter}" oninput="renderVulnTable()">
+      <select id="filter-sev" onchange="renderVulnTable()">
+        <option value="">All Severity</option>
+        <option value="CRITICAL" ${sevFilter==='CRITICAL'?'selected':''}>Critical</option>
+        <option value="HIGH" ${sevFilter==='HIGH'?'selected':''}>High</option>
+        <option value="MEDIUM" ${sevFilter==='MEDIUM'?'selected':''}>Medium</option>
+        <option value="LOW" ${sevFilter==='LOW'?'selected':''}>Low</option>
+      </select>
+      <select id="filter-status" onchange="renderVulnTable()">
+        <option value="">All Status</option>
+        <option value="OPEN" ${statusFilter==='OPEN'?'selected':''}>Open</option>
+        <option value="ACCEPTED" ${statusFilter==='ACCEPTED'?'selected':''}>Accepted</option>
+        <option value="FALSE_POSITIVE" ${statusFilter==='FALSE_POSITIVE'?'selected':''}>False Positive</option>
+      </select>
+      <select id="filter-type" onchange="renderVulnTable()">
+        <option value="">All Types</option>
+        <option value="SAST">SAST</option><option value="SCA">SCA</option>
+        <option value="IAC">IaC</option><option value="CONTAINER">Container</option>
+        <option value="SECRETS">Secrets</option>
+      </select>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table>
+        <thead><tr><th width="90">Severity</th><th width="80">Type</th><th>Vulnerability</th><th width="200">File</th><th width="80">Tool</th><th width="90">Status</th></tr></thead>
+        <tbody>
+          ${filtered.length ? filtered.map(v => `
+            <tr class="vuln-row" onclick="openVulnDetail('${v.id}')">
+              <td>${sevBadge(v.severity)}</td>
+              <td><span class="tag">${v.scan_type}</span></td>
+              <td>
+                <div>${v.title}</div>
+                ${v.cve ? `<span class="text-mono text-sm" style="color:var(--info)">${v.cve}</span>` : ''}
+                ${v.package_name ? `<span class="text-sm"> ${v.package_name}@${v.package_version||''}</span>` : ''}
+              </td>
+              <td class="text-mono text-sm">${(v.file_path||'').slice(-30)}${v.line_start ? ':'+v.line_start : ''}</td>
+              <td class="text-sm">${v.tool}</td>
+              <td>${statusBadge(v.status)}</td>
+            </tr>
+          `).join('') : '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2)">Không có vulnerability nào phù hợp</td></tr>'}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ─── EXPORT ───────────────────────────────────────────────────
+function openAIReport(scanId) {
+  // Mở báo cáo HTML trong tab mới
+  const url = `${API}/api/scans/${scanId}/report`;
+  window.open(url, '_blank');
+}
+
+function downloadAIReport(scanId) {
+  // Force download file .html
+  const url = `${API}/api/scans/${scanId}/report?download=true`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.click();
+}
+
+function exportScan(scanId, format) {
+  // Lấy giá trị filter hiện tại để export đúng những gì đang hiển thị
+  const sev    = document.getElementById('filter-sev')?.value    || '';
+  const status = document.getElementById('filter-status')?.value || '';
+  const type   = document.getElementById('filter-type')?.value   || '';
+
+  const params = new URLSearchParams({ format });
+  if (sev)    params.append('severity',  sev);
+  if (status) params.append('status',    status);
+  if (type)   params.append('scan_type', type);
+
+  const url = `${API}/api/projects/scans/${scanId}/export?${params.toString()}`;
+
+  // Trigger download bằng cách tạo thẻ <a> ẩn
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ─── VULN DETAIL MODAL ───────────────────────────────────────
+function openVulnDetail(vulnId) {
+  currentVulnId = vulnId;
+  const v = allVulns.find(x => x.id === vulnId);
+  if (!v) return;
+
+  document.getElementById('modal-severity-badge').innerHTML = sevBadge(v.severity);
+  document.getElementById('modal-title').textContent = v.title;
+  document.getElementById('modal-tool').textContent = v.tool;
+  document.getElementById('modal-scan-type').innerHTML = `<span class="tag">${v.scan_type}</span>`;
+  document.getElementById('modal-rule').textContent = v.rule_id || '—';
+  document.getElementById('modal-status').innerHTML = statusBadge(v.status);
+  document.getElementById('modal-file').textContent = v.file_path || '—';
+  document.getElementById('modal-line').textContent = v.line_start ? `${v.line_start}${v.line_end && v.line_end !== v.line_start ? '–'+v.line_end : ''}` : '—';
+  document.getElementById('modal-desc').textContent = v.description || '—';
+  document.getElementById('modal-vuln-id').textContent = v.id.slice(0, 16) + '...';
+
+  const codeEl = document.getElementById('modal-code');
+  const codeRow = document.getElementById('modal-code-row');
+  if (v.code_snippet) { codeEl.textContent = v.code_snippet; codeRow.style.display = 'block'; }
+  else codeRow.style.display = 'none';
+
+  const pkgRow = document.getElementById('modal-pkg-row');
+  if (v.package_name) {
+    document.getElementById('modal-pkg').textContent = `${v.package_name} @ ${v.package_version||'?'}`;
+    document.getElementById('modal-fixed').textContent = v.fixed_version || 'No fix available';
+    pkgRow.style.display = 'block';
+  } else pkgRow.style.display = 'none';
+
+  // AI tab
+  const aiLoading = document.getElementById('ai-loading');
+  const aiContent = document.getElementById('ai-content');
+  const aiNA = document.getElementById('ai-unavailable');
+  if (v.ai_explanation) {
+    aiLoading.style.display = 'none'; aiNA.style.display = 'none'; aiContent.style.display = 'block';
+    const fpColor = parseFloat(v.ai_false_positive_likelihood) > 50 ? 'var(--low)' : 'var(--critical)';
+    document.getElementById('ai-fp').innerHTML = `<span style="color:${fpColor}">${v.ai_false_positive_likelihood || '?'}</span>`;
+    document.getElementById('ai-fp-reason').textContent = v.ai_false_positive_reason || '';
+    document.getElementById('ai-exploit-public').textContent = v.ai_exploitability_public || '—';
+    document.getElementById('ai-exploit-private').textContent = v.ai_exploitability_private || '—';
+    document.getElementById('ai-explanation').textContent = v.ai_explanation || '—';
+    document.getElementById('ai-fix').textContent = v.ai_fix_suggestion || '—';
+  } else {
+    aiLoading.style.display = 'none'; aiContent.style.display = 'none'; aiNA.style.display = 'block';
+  }
+
+  // Waiver tab
+  const waiverExisting = document.getElementById('waiver-existing');
+  const waiverForm = document.getElementById('waiver-form-section');
+  if (v.waiver) {
+    waiverExisting.style.display = 'block'; waiverForm.style.display = 'none';
+    document.getElementById('waiver-approver').textContent = v.waiver.approver_name + (v.waiver.approver_email ? ` <${v.waiver.approver_email}>` : '');
+    document.getElementById('waiver-date').textContent = fmtDate(v.waiver.created_at);
+    document.getElementById('waiver-expiry').textContent = v.waiver.expiry_date ? fmtDate(v.waiver.expiry_date) : 'Không hết hạn';
+    document.getElementById('waiver-type').innerHTML = v.waiver.is_false_positive ? '<span class="badge badge-fp">False Positive</span>' : '<span class="badge badge-accepted">Accept Risk</span>';
+    document.getElementById('waiver-reason').textContent = v.waiver.reason;
+  } else {
+    waiverExisting.style.display = 'none'; waiverForm.style.display = 'block';
+    document.getElementById('waiver-approver-name').value = '';
+    document.getElementById('waiver-approver-email').value = '';
+    document.getElementById('waiver-reason-input').value = '';
+    document.getElementById('waiver-expiry-input').value = '';
+    document.getElementById('waiver-is-fp').checked = false;
+  }
+
+  switchTab(document.querySelector('.tab'), 'tab-detail');
+  document.getElementById('vuln-modal').classList.add('open');
+}
+
+function closeModal() { document.getElementById('vuln-modal').classList.remove('open'); }
+function switchTab(el, tabId) {
+  el.closest('.modal-body, .modal, .page, .card')?.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  el.closest('.modal-body, .modal, .page, .card')?.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.getElementById(tabId)?.classList.add('active');
+}
+
+async function markFP() {
+  try { await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status: 'FALSE_POSITIVE' }}); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+}
+async function markOpen() {
+  try { await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status: 'OPEN' }}); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+}
+async function refreshCurrentVuln() {
+  const idx = allVulns.findIndex(v => v.id === currentVulnId);
+  if (idx >= 0) { allVulns[idx] = await api(`/api/vulns/${currentVulnId}`); openVulnDetail(currentVulnId); }
+}
+
+async function submitWaiver() {
+  const name = document.getElementById('waiver-approver-name').value.trim();
+  const reason = document.getElementById('waiver-reason-input').value.trim();
+  if (!name) return alert('Nhập tên approver');
+  if (reason.length < 10) return alert('Lý do phải có ít nhất 10 ký tự');
+  const expiry = document.getElementById('waiver-expiry-input').value;
+  try {
+    await api(`/api/vulns/${currentVulnId}/waiver`, { method: 'POST', body: {
+      approver_name: name,
+      approver_email: document.getElementById('waiver-approver-email').value,
+      reason,
+      expiry_date: expiry || null,
+      is_false_positive: document.getElementById('waiver-is-fp').checked,
+    }});
+    await refreshCurrentVuln();
+  } catch(e) { alert('Lỗi: ' + e.message); }
+}
+async function deleteWaiver() {
+  if (!confirm('Xóa waiver này?')) return;
+  try { await api(`/api/vulns/${currentVulnId}/waiver`, { method: 'DELETE' }); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+}
+
+// ─── SCAN TRIGGER ─────────────────────────────────────────────
+function openScanModal(projectId) {
+  currentProjectId = projectId;
+  document.getElementById('scan-modal').classList.add('open');
+}
+
+async function triggerScan() {
+  const path = document.getElementById('scan-path').value.trim();
+  if (!path) return alert('Nhập scan path');
+  const types = [...document.querySelectorAll('.scan-type-cb:checked')].map(c => c.value);
+  if (!types.length) return alert('Chọn ít nhất 1 scan type');
+  const runAI = document.getElementById('scan-run-ai').checked;
+  document.getElementById('scan-modal').classList.remove('open');
+  try {
+    const scan = await api(`/api/projects/${currentProjectId}/scans`, {
+      method: 'POST',
+      body: { scan_path: path, scan_types: types, run_ai_analysis: runAI }
+    });
+    openProgressModal(scan.id, path, types);
+    loadScans(currentProjectId);
+  } catch(e) { alert('Lỗi: ' + e.message); }
+}
+
+// ─── SCAN PROGRESS MODAL ──────────────────────────────────────
+let progressPollTimer = null;
+let progressScanId = null;
+
+function openProgressModal(scanId, path, types) {
+  progressScanId = scanId;
+  document.getElementById('sp-title').textContent = '🔍 Đang scan...';
+  document.getElementById('sp-path').textContent = '📂 ' + path;
+  document.getElementById('sp-path-warning').style.display = 'none';
+  document.getElementById('sp-error').style.display = 'none';
+  document.getElementById('sp-final').style.display = 'none';
+  document.getElementById('sp-close-btn').style.display = 'none';
+  document.getElementById('sp-view-btn').style.display = 'none';
+  document.getElementById('sp-pct').textContent = '0%';
+  document.getElementById('sp-pct').style.color = 'var(--accent2)';
+  document.getElementById('sp-fill').style.width = '0%';
+  document.getElementById('sp-fill').className = 'progress-fill-lg';
+  document.getElementById('sp-status-text').textContent = 'Đang khởi động scanners...';
+  document.getElementById('sp-counts').textContent = '';
+
+  // Show scan types being run
+  const typesHtml = types.map(t => `<span class="scan-type-tag">${t}</span>`).join('');
+  document.getElementById('sp-tools-list').innerHTML = `
+    <div style="margin-bottom:12px;">${typesHtml}</div>
+    <div class="loading"><div class="spinner"></div>Đang chờ scanners khởi động...</div>`;
+
+  document.getElementById('scan-progress-modal').classList.add('open');
+
+  // Start polling
+  clearInterval(progressPollTimer);
+  progressPollTimer = setInterval(() => pollScanProgress(scanId), 2000);
+  // First poll immediately after short delay
+  setTimeout(() => pollScanProgress(scanId), 800);
+}
+
+async function pollScanProgress(scanId) {
+  try {
+    const data = await api(`/api/projects/scans/${scanId}/progress`);
+    updateProgressUI(data);
+
+    // Stop polling when done
+    if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+      clearInterval(progressPollTimer);
+      loadScans(currentProjectId);  // Refresh scan list
+    }
+  } catch(e) {
+    // Ignore poll errors silently
+  }
+}
+
+function updateProgressUI(data) {
+  const status = data.status;
+  const pct = data.percent || 0;
+  const tools = data.tools || {};
+  const total = data.total_tools || 0;
+  const done = data.completed_tools || 0;
+
+  // Path warning
+  if (data.error_message && data.error_message.includes('không tồn tại')) {
+    document.getElementById('sp-path-warning').style.display = 'block';
+    document.getElementById('sp-path-warning-msg').textContent = data.error_message;
+  }
+
+  // Update progress bar
+  const fillEl = document.getElementById('sp-fill');
+  fillEl.style.width = pct + '%';
+  if (status === 'COMPLETED') {
+    fillEl.className = 'progress-fill-lg done';
+    document.getElementById('sp-title').textContent = '✅ Scan hoàn thành';
+    document.getElementById('sp-pct').style.color = 'var(--low)';
+  } else if (status === 'FAILED') {
+    fillEl.className = 'progress-fill-lg failed';
+    document.getElementById('sp-title').textContent = '❌ Scan thất bại';
+    document.getElementById('sp-pct').style.color = 'var(--critical)';
+  }
+
+  document.getElementById('sp-pct').textContent = pct + '%';
+  document.getElementById('sp-status-text').textContent =
+    status === 'COMPLETED' ? `Hoàn thành — ${data.total_findings_so_far} findings` :
+    status === 'FAILED'    ? 'Scan thất bại' :
+    status === 'RUNNING'   ? `Đang chạy ${done}/${total} tools...` :
+                             'Đang chuẩn bị...';
+  document.getElementById('sp-counts').textContent =
+    total > 0 ? `${done}/${total} tools` : '';
+
+  // Error message
+  if (data.error_message && status === 'FAILED') {
+    const errEl = document.getElementById('sp-error');
+    errEl.style.display = 'block';
+    errEl.innerHTML = `❌ <strong>Lỗi:</strong> ${escHtml(data.error_message)}`;
+  }
+
+  // Per-tool list
+  if (Object.keys(tools).length > 0) {
+    let html = '';
+    for (const [toolName, t] of Object.entries(tools)) {
+      const ts = t.status || 'pending';
+      const icon = ts === 'done' ? '✅' : ts === 'error' ? '❌' : ts === 'running' ? '' : '⏳';
+      const countTxt = ts === 'done' ? `${t.count || 0} found` : ts === 'error' ? 'error' : '';
+      const durTxt = t.duration_s != null ? `${t.duration_s}s` : '';
+      const nameCls = ts === 'pending' ? 'tool-name pending' : 'tool-name';
+      html += `
+        <div class="tool-row">
+          <div class="tool-icon">${ts === 'running' ? '' : icon}</div>
+          ${ts === 'running' ? '<div class="tool-spinner"></div>' : ''}
+          <div class="${nameCls}">${escHtml(t.label || toolName)}</div>
+          <div class="tool-count" style="color:${ts==='done' && t.count>0 ? 'var(--medium)' : 'var(--text3)'};">${countTxt}</div>
+          <div class="tool-dur">${durTxt}</div>
+        </div>`;
+    }
+    document.getElementById('sp-tools-list').innerHTML = html;
+  }
+
+  // Final summary
+  if (status === 'COMPLETED' && data.final_summary) {
+    const s = data.final_summary;
+    const grid = document.getElementById('sp-final-grid');
+    grid.innerHTML = `
+      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+        <div class="stat-num c" style="font-size:24px;">${s.CRITICAL||0}</div><div class="stat-label">Critical</div>
+      </div>
+      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+        <div class="stat-num h" style="font-size:24px;">${s.HIGH||0}</div><div class="stat-label">High</div>
+      </div>
+      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+        <div class="stat-num m" style="font-size:24px;">${s.MEDIUM||0}</div><div class="stat-label">Medium</div>
+      </div>
+      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+        <div class="stat-num l" style="font-size:24px;">${s.LOW||0}</div><div class="stat-label">Low</div>
+      </div>`;
+
+    // Scanner logs table
+    const logs = s.scanner_logs || {};
+    if (Object.keys(logs).length > 0) {
+      let rows = '';
+      for (const [tool, log] of Object.entries(logs)) {
+        const icon = log.status === 'ok' ? '✅' : '❌';
+        rows += `<tr>
+          <td>${icon} ${escHtml(log.label || tool)}</td>
+          <td style="text-align:right;">${log.count || 0}</td>
+          <td style="text-align:right;color:var(--text3);">${log.duration_s || 0}s</td>
+          <td style="color:var(--critical);font-size:11px;">${escHtml(log.error || '')}</td>
+        </tr>`;
+      }
+      document.getElementById('sp-scanner-logs').innerHTML = `
+        <table><thead><tr>
+          <th>Tool</th><th style="text-align:right;">Findings</th>
+          <th style="text-align:right;">Thời gian</th><th>Ghi chú</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    document.getElementById('sp-final').style.display = 'block';
+    document.getElementById('sp-close-btn').style.display = 'inline-block';
+    if ((s.total || 0) > 0) {
+      document.getElementById('sp-view-btn').style.display = 'inline-block';
+    }
+  }
+
+  if (status === 'FAILED') {
+    document.getElementById('sp-close-btn').style.display = 'inline-block';
+  }
+}
+
+function closeProgressModal() {
+  clearInterval(progressPollTimer);
+  document.getElementById('scan-progress-modal').classList.remove('open');
+}
+
+function closeProgressAndViewVulns() {
+  closeProgressModal();
+  if (progressScanId) openVulns(progressScanId);
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── APPROVE CHECK ────────────────────────────────────────────
+async function checkApprove(projectId, scanId) {
+  try {
+    const result = await api(`/api/projects/${projectId}/approve-check?scan_id=${scanId}`);
+    const isBlocked = result.approve_status === 'BLOCKED';
+    const html = `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:300;display:flex;align-items:center;justify-content:center;" onclick="this.remove()">
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:28px;max-width:480px;width:90%;" onclick="event.stopPropagation()">
+          <div class="${isBlocked ? 'approve-blocked' : 'approve-ok'}" style="font-size:15px;font-weight:600;margin-bottom:16px;">
+            ${result.message}
+          </div>
+          ${isBlocked ? `
+            <h3 style="font-size:13px;margin-bottom:8px;">Vulnerabilities cần xử lý:</h3>
+            ${result.blocked_vulns.map(v => `
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
+                ${sevBadge(v.severity)} <span>${v.title.slice(0,50)}</span>
+              </div>`).join('')}
+          ` : '<p class="text-sm" style="color:var(--text2);">Scan đủ điều kiện deploy lên production.</p>'}
+          <button class="btn btn-primary" style="margin-top:16px;width:100%;" onclick="this.closest('[onclick]').remove()">Đóng</button>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch(e) { alert(e.message); }
+}
+
+// ─── COMPARE ──────────────────────────────────────────────────
+async function loadCompareProjects() {
+  const sel = document.getElementById('compare-project');
+  const projects = await api('/api/projects');
+  sel.innerHTML = '<option value="">— Chọn project —</option>' + projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+}
+
+async function loadCompareScans() {
+  const projectId = document.getElementById('compare-project').value;
+  if (!projectId) return;
+  const scans = await api(`/api/projects/${projectId}/scans`);
+  const opts = scans.map(s => `<option value="${s.id}">#${s.scan_number} — ${fmtDate(s.started_at)} (${s.status})</option>`).join('');
+  document.getElementById('compare-scan-old').innerHTML = '<option value="">— Scan cũ —</option>' + opts;
+  document.getElementById('compare-scan-new').innerHTML = '<option value="">— Scan mới —</option>' + opts;
+}
+
+async function runCompare() {
+  const projectId = document.getElementById('compare-project').value;
+  const scanOld = document.getElementById('compare-scan-old').value;
+  const scanNew = document.getElementById('compare-scan-new').value;
+  if (!projectId || !scanOld || !scanNew) return alert('Chọn đủ project và 2 scans');
+  if (scanOld === scanNew) return alert('Chọn 2 scan khác nhau');
+
+  const el = document.getElementById('compare-result');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>Đang so sánh...</div>';
+
+  try {
+    const r = await api(`/api/projects/${projectId}/compare?scan_old_id=${scanOld}&scan_new_id=${scanNew}`);
+    const { diff, summary } = r;
+
+    el.innerHTML = `
+      <div class="${summary.approve_status === 'BLOCKED' ? 'approve-blocked' : 'approve-ok'}" style="margin-bottom:16px;font-weight:600;">
+        ${summary.approve_message}
+      </div>
+      <div class="grid4 mb-16">
+        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 New</div></div>
+        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Fixed</div></div>
+        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">⏳ Persisted</div></div>
+        <div class="stat-card"><div class="stat-num c">${summary.blocked_count}</div><div class="stat-label">⛔ Blocked</div></div>
+      </div>
+      ${renderCompareSection('🆕 New Vulnerabilities', diff.new, 'compare-new')}
+      ${renderCompareSection('✅ Fixed Vulnerabilities', diff.fixed, 'compare-fixed')}
+      ${renderCompareSection('⏳ Persisted (chưa fix)', diff.persisted, 'compare-persisted')}
+    `;
+  } catch(e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`; }
+}
+
+function renderCompareSection(title, vulns, cls) {
+  if (!vulns.length) return `<div class="card"><strong>${title}</strong>: <span style="color:var(--text2)">Không có</span></div>`;
+  return `
+    <div class="card" style="margin-bottom:12px;">
+      <h2><span class="${cls}">${title} (${vulns.length})</span></h2>
+      <table style="margin-top:8px;">
+        <thead><tr><th>Severity</th><th>Title</th><th>File</th><th>Tool</th></tr></thead>
+        <tbody>
+          ${vulns.map(v => `<tr><td>${sevBadge(v.severity)}</td><td>${v.title.slice(0,50)}</td><td class="text-mono text-sm">${(v.file_path||'').slice(-30)}</td><td class="text-sm">${v.tool}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ─── SETTINGS ─────────────────────────────────────────────────
+let pullAbortController = null;
+
+async function loadSettings() {
+  await Promise.all([loadOllamaStatus(), loadInstalledModels(), loadScannerHealth()]);
+  document.getElementById('threshold-info').textContent =
+    '🔒 Severity threshold: HIGH — Vuln CRITICAL hoặc HIGH còn OPEN sẽ block approve. Chỉnh BLOCK_SEVERITY_THRESHOLD trong .env để thay đổi.';
+}
+
+async function loadOllamaStatus() {
+  const bar = document.getElementById('ollama-status-bar');
+  try {
+    const r = await api('/api/ollama/health');
+    bar.style.background = '#3fb95015'; bar.style.borderColor = '#3fb95040'; bar.style.color = 'var(--low)';
+    bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
+  } catch(e) {
+    bar.style.background = '#da363315'; bar.style.borderColor = '#da363340'; bar.style.color = 'var(--critical)';
+    bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Có 2 cách xử lý:<br>
+      <span style="font-size:12px;">
+        1. Chạy Ollama service: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">docker compose up -d ollama</code><br>
+        2. Không dùng AI analysis: bỏ tick "Run AI Analysis" khi trigger scan.
+      </span>`;
+  }
+}
+
+// ─── SCANNER TOOLS HEALTH CHECK ──────────────────────────────
+let scannerEnabledState = {};  // { tool_name: bool }
+
+async function loadScannerHealth() {
+  const el = document.getElementById('scanner-tools-list');
+  const summaryEl = document.getElementById('scanner-summary');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>Đang kiểm tra tools...</div>';
+  try {
+    const data = await api('/api/settings/scanners');
+    const tools = data.tools || [];
+    const s = data.summary || {};
+
+    summaryEl.innerHTML = `
+      <span style="color:var(--low);">✅ ${s.installed} installed</span> &nbsp;
+      <span style="color:var(--medium);">⚡ ${s.enabled} enabled</span>
+      ${s.not_installed > 0 ? `&nbsp;<span style="color:var(--critical);">❌ ${s.not_installed} missing</span>` : ''}`;
+
+    // Build enabled state
+    scannerEnabledState = {};
+    tools.forEach(t => { scannerEnabledState[t.tool] = t.enabled; });
+
+    // Group by scan_type
+    const groups = {};
+    tools.forEach(t => {
+      const g = t.scan_type || 'Other';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(t);
+    });
+
+    let html = '';
+    for (const [groupName, groupTools] of Object.entries(groups)) {
+      html += `<div style="margin-bottom:4px;margin-top:12px;font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;">${groupName}</div>`;
+      html += '<div>';
+      groupTools.forEach(t => {
+        const installed = t.installed;
+        const enabled = t.enabled;
+        const statusDot = installed
+          ? (enabled ? '<span class="status-dot ok"></span>' : '<span class="status-dot disabled"></span>')
+          : '<span class="status-dot missing"></span>';
+
+        html += `
+          <div class="scanner-tool-row">
+            <div class="scanner-icon">${t.icon || '🔧'}</div>
+            <div class="scanner-info">
+              <div class="scanner-name">
+                ${statusDot}
+                ${escHtml(t.label)}
+                <span class="scanner-type-badge">${escHtml(t.scan_type)}</span>
+              </div>
+              <div class="scanner-desc">${escHtml(t.description || '')}</div>
+              ${installed
+                ? `<div class="scanner-version">📌 ${escHtml(t.version || 'installed')}</div>`
+                : `<div class="install-hint">⚠ Chưa cài — <code>${escHtml(t.install_hint || '')}</code></div>`
+              }
+            </div>
+            <div class="toggle-wrap">
+              <label class="toggle" title="${installed ? (enabled ? 'Click để disable' : 'Click để enable') : 'Tool chưa được cài'}">
+                <input type="checkbox"
+                  id="toggle-${t.tool}"
+                  ${enabled ? 'checked' : ''}
+                  ${!installed ? 'disabled' : ''}
+                  onchange="onScannerToggle('${t.tool}', this.checked)">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>`;
+      });
+      html += '</div>';
+    }
+
+    el.innerHTML = html;
+    document.getElementById('scanner-save-btn').style.display = 'none';
+  } catch(e) {
+    el.innerHTML = `<p class="text-sm" style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function onScannerToggle(toolName, checked) {
+  scannerEnabledState[toolName] = checked;
+  document.getElementById('scanner-save-btn').style.display = 'inline-block';
+
+  // Update status dot realtime
+  const toggle = document.getElementById(`toggle-${toolName}`);
+  if (toggle) {
+    const row = toggle.closest('.scanner-tool-row');
+    const dot = row?.querySelector('.status-dot');
+    if (dot) {
+      dot.className = checked ? 'status-dot ok' : 'status-dot disabled';
+    }
+  }
+}
+
+async function saveScannerConfig() {
+  const btn = document.getElementById('scanner-save-btn');
+  btn.textContent = '⏳ Đang lưu...';
+  btn.disabled = true;
+  try {
+    await api('/api/settings/scanners', {
+      method: 'PUT',
+      body: { enabled_tools: scannerEnabledState }
+    });
+    btn.textContent = '✅ Đã lưu';
+    btn.style.background = 'var(--accent)';
+    setTimeout(() => {
+      btn.style.display = 'none';
+      btn.style.background = '';
+      btn.textContent = '💾 Lưu';
+      btn.disabled = false;
+    }, 2000);
+  } catch(e) {
+    btn.textContent = '❌ Lỗi';
+    btn.disabled = false;
+    alert('Lỗi khi lưu: ' + e.message);
+  }
+}
+
+async function loadInstalledModels() {
+  const el = document.getElementById('installed-models-list');
+  const sel = document.getElementById('active-model-select');
+  try {
+    const data = await api('/api/ollama/models');
+    const models = data.models || [];
+    const active = data.active_model;
+
+    // Update dropdown
+    sel.innerHTML = models.length
+      ? models.map(m => `<option value="${m.name}" ${m.name === active ? 'selected' : ''}>${m.name} (${m.size_gb} GB)</option>`).join('')
+      : '<option value="">— Chưa có model nào —</option>';
+
+    if (!models.length) {
+      el.innerHTML = `<div class="empty-state" style="padding:20px;"><p>Chưa có model nào. Hãy pull model ở mục phía trên.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = `<table>
+      <thead><tr><th>Model</th><th>Size</th><th>Ngày cài</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        ${models.map(m => `
+          <tr>
+            <td class="text-mono">${m.name}</td>
+            <td>${m.size_gb} GB</td>
+            <td class="text-sm">${m.modified_at ? new Date(m.modified_at).toLocaleDateString('vi-VN') : '—'}</td>
+            <td>${m.is_active ? '<span class="badge badge-approved">Active</span>' : ''}</td>
+            <td>
+              ${!m.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteModel('${m.name}')">Xóa</button>` : ''}
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+  } catch(e) {
+    el.innerHTML = `<p class="text-sm" style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+  }
+}
+
+async function setActiveModel() {
+  const sel = document.getElementById('active-model-select');
+  const model = sel.value;
+  if (!model) return;
+  const msg = document.getElementById('active-model-msg');
+  try {
+    await api('/api/ollama/active-model', { method: 'PUT', body: { model } });
+    msg.style.color = 'var(--low)';
+    msg.textContent = `✅ Đã đổi active model thành "${model}"`;
+    loadInstalledModels();
+    loadOllamaStatus();
+  } catch(e) {
+    msg.style.color = 'var(--critical)';
+    msg.textContent = '❌ ' + e.message;
+  }
+}
+
+function setPullModel(name) {
+  document.getElementById('pull-model-input').value = name;
+}
+
+async function pullModel() {
+  const name = document.getElementById('pull-model-input').value.trim();
+  if (!name) return alert('Nhập tên model');
+
+  const progressEl = document.getElementById('pull-progress');
+  const statusText = document.getElementById('pull-status-text');
+  const progressFill = document.getElementById('pull-progress-fill');
+  const logEl = document.getElementById('pull-log');
+  progressEl.style.display = 'block';
+  logEl.textContent = '';
+  progressFill.style.width = '5%';
+  statusText.textContent = `Đang pull "${name}"...`;
+
+  pullAbortController = new AbortController();
+
+  try {
+    const response = await fetch('/api/ollama/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: name }),
+      signal: pullAbortController.signal,
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value);
+      for (const line of text.split('\n').filter(l => l.trim())) {
+        try {
+          const data = JSON.parse(line);
+          const status = data.status || '';
+          const completed = data.completed || 0;
+          const total = data.total || 0;
+
+          if (total > 0) {
+            const pct = Math.round((completed / total) * 100);
+            progressFill.style.width = pct + '%';
+            statusText.textContent = `${status} — ${pct}% (${(completed/1e9).toFixed(2)}/${(total/1e9).toFixed(2)} GB)`;
+          } else {
+            statusText.textContent = status;
+          }
+
+          logEl.textContent = line;
+          logEl.scrollTop = logEl.scrollHeight;
+
+          if (status === 'success' || data.error) {
+            progressFill.style.width = data.error ? '0%' : '100%';
+            progressFill.style.background = data.error ? 'var(--critical)' : 'var(--low)';
+            statusText.textContent = data.error ? `❌ Lỗi: ${data.error}` : `✅ Pull "${name}" thành công!`;
+            if (!data.error) {
+              setTimeout(() => { progressEl.style.display = 'none'; loadInstalledModels(); }, 2000);
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+      statusText.textContent = '❌ ' + e.message;
+      progressFill.style.background = 'var(--critical)';
+    } else {
+      statusText.textContent = 'Đã hủy';
+      progressEl.style.display = 'none';
+    }
+  } finally {
+    pullAbortController = null;
+    loadInstalledModels();
+  }
+}
+
+function cancelPull() {
+  if (pullAbortController) pullAbortController.abort();
+}
+
+async function deleteModel(name) {
+  if (!confirm(`Xóa model "${name}"? Sẽ cần pull lại nếu muốn dùng.`)) return;
+  try {
+    await api(`/api/ollama/models/${name}`, { method: 'DELETE' });
+    loadInstalledModels();
+  } catch(e) { alert('Lỗi: ' + e.message); }
+}
+
+// ─── Init ──────────────────────────────────────────────────────
+loadDashboard();
+</script>
+</body>
+</html>
