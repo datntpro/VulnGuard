@@ -2,8 +2,6 @@
 
 **VulnGuard** là công cụ scan bảo mật chạy hoàn toàn local, tích hợp AI phân tích (Ollama), hỗ trợ đầy đủ pipeline DevSecOps — từ scan code đến tạo báo cáo bảo mật tiếng Việt.
 
-> Developed by **AST Team**
-
 ---
 
 ## 🚀 Quick Start
