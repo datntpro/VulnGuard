@@ -1053,7 +1053,7 @@ def _render_html(
 </div>
 
 <div class="report-footer">
-  <strong>VulnGuard</strong> · Powered by AST Team - Tạo lúc {_esc(generated_at)}
+  <strong>VulnGuard</strong> · Powered by <a href="https://1vision.work" target="_blank" style="color:#3b82f6;">1VISION</a> - Tạo lúc {_esc(generated_at)}
   <br>Báo cáo được tạo tự động bởi AI và công cụ scan. Vui lòng xem xét kỹ trước khi hành động.
 </div>
 
