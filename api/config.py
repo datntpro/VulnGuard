@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     max_scans_per_project: int = 5
     block_severity_threshold: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"] = "HIGH"
     app_env: str = "production"
+    # "docker" (default) hoặc "native" — native install set qua .env (DEPLOY_MODE=native)
+    # Dùng để Web UI hiển thị hint scan path đúng (path container vs path thật trên host)
+    deploy_mode: Literal["docker", "native"] = "docker"
 
 
 settings = Settings()

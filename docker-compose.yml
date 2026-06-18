@@ -15,6 +15,7 @@ services:
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ${SCAN_WORKSPACE:-/tmp}:/workspace
     environment:
+      - DEPLOY_MODE=docker
       - DATABASE_URL=sqlite:////app/storage/db/vulnguard.db
       # host.docker.internal → trỏ vào máy thật (Ollama đang chạy ở đó)
       - OLLAMA_URL=http://host.docker.internal:11434

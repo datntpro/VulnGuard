@@ -82,6 +82,7 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
         }
 
         scan.status = ScanStatus.RUNNING
+        scan.started_at = datetime.utcnow()
         scan.scanner_progress = initial_progress
         db.commit()
 
@@ -165,33 +166,26 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
         db.commit()
         db.refresh(scan)
 
-        # AI Analysis
-        if run_ai and findings:
-            analyzer = AIAnalyzer()
-            vulns = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
-            for vuln in vulns:
-                try:
-                    analysis = await analyzer.analyze(vuln)
-                    vuln.ai_false_positive_likelihood = analysis.get("false_positive_likelihood")
-                    vuln.ai_exploitability_public = analysis.get("exploitability_public")
-                    vuln.ai_exploitability_private = analysis.get("exploitability_private")
-                    vuln.ai_explanation = analysis.get("explanation")
-                    vuln.ai_fix_suggestion = analysis.get("fix_suggestion")
-                    vuln.ai_analyzed_at = datetime.utcnow()
-                    db.commit()
-                except Exception:
-                    pass
-
-        # Final summary
-        vulns = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
-        summary = _compute_summary(vulns)
+        # ── Phase 1 DONE: Đánh dấu scan COMPLETED ngay (không đợi AI) ────
+        # UI sẽ thấy kết quả scan ngay lập tức
+        vulns_for_summary = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+        summary = _compute_summary(vulns_for_summary)
         summary["scanner_logs"] = scanner_logs
+        summary["ai_status"] = "pending" if (run_ai and findings) else "skipped"
+        summary["ai_total"] = len(vulns_for_summary) if (run_ai and findings) else 0
+        summary["ai_done"] = 0
         scan.summary = summary
         scan.status = ScanStatus.COMPLETED
         scan.completed_at = datetime.utcnow()
         db.commit()
 
+        # ── Phase 2: AI Analysis (chạy tiếp sau khi scan đã COMPLETED) ───
+        if run_ai and findings:
+            await _run_ai_analysis(scan_id, scanner_logs)
+
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Scan {scan_id} failed: {e}", exc_info=True)
         scan = db.query(Scan).filter(Scan.id == scan_id).first()
         if scan:
             scan.status = ScanStatus.FAILED
@@ -200,6 +194,132 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
             db.commit()
     finally:
         db.close()
+
+
+async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
+    """Chạy AI analysis cho từng vuln — có concurrency limit, timeout, progress tracking."""
+    import logging
+    import asyncio as _asyncio
+    from scanner.ai_analyzer import AIAnalyzer
+
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+
+    try:
+        vulns = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+        total = len(vulns)
+        if not total:
+            return
+
+        logger.info(f"[AI] Bắt đầu phân tích {total} vulnerabilities cho scan {scan_id}")
+
+        analyzer = AIAnalyzer()
+        done_count = 0
+        semaphore = _asyncio.Semaphore(3)  # Tối đa 3 vuln song song
+
+        # Cập nhật progress ban đầu
+        def _update_ai_progress(done: int, status: str = "analyzing"):
+            _db = SessionLocal()
+            try:
+                _scan = _db.query(Scan).filter(Scan.id == scan_id).first()
+                if _scan and _scan.summary:
+                    s = dict(_scan.summary)
+                    s["ai_status"] = status
+                    s["ai_done"] = done
+                    s["ai_total"] = total
+                    s["scanner_logs"] = scanner_logs
+                    _scan.summary = s
+                    _db.commit()
+            except Exception as _e:
+                logger.warning(f"[AI] Không cập nhật được progress: {_e}")
+            finally:
+                _db.close()
+
+        _update_ai_progress(0, "analyzing")
+
+        async def _analyze_one(vuln_id: str, vuln_data: dict):
+            nonlocal done_count
+            async with semaphore:
+                try:
+                    # Per-vuln timeout = OLLAMA_TIMEOUT (default 120s)
+                    analysis = await _asyncio.wait_for(
+                        analyzer.analyze_raw(vuln_data),
+                        timeout=analyzer.timeout,
+                    )
+                    # Persist kết quả cho vuln này
+                    _db = SessionLocal()
+                    try:
+                        _v = _db.query(Vulnerability).filter(Vulnerability.id == vuln_id).first()
+                        if _v:
+                            _v.ai_false_positive_likelihood = analysis.get("false_positive_likelihood")
+                            _v.ai_exploitability_public = analysis.get("exploitability_public")
+                            _v.ai_exploitability_private = analysis.get("exploitability_private")
+                            _v.ai_explanation = analysis.get("explanation")
+                            _v.ai_fix_suggestion = analysis.get("fix_suggestion")
+                            _v.ai_analyzed_at = datetime.utcnow()
+                            _db.commit()
+                    finally:
+                        _db.close()
+
+                    logger.debug(f"[AI] ✓ Vuln {vuln_id[:8]}...")
+                except _asyncio.TimeoutError:
+                    logger.warning(f"[AI] ⏱ Timeout vuln {vuln_id[:8]}... (>{analyzer.timeout}s)")
+                except Exception as _e:
+                    logger.error(f"[AI] ✗ Lỗi vuln {vuln_id[:8]}...: {_e}")
+                finally:
+                    done_count += 1
+                    # Cập nhật progress mỗi 5 vuln hoặc lần cuối
+                    if done_count % 5 == 0 or done_count == total:
+                        _update_ai_progress(done_count, "analyzing")
+
+        # Serialize vuln data trước (tránh SQLAlchemy session issues khi dùng async)
+        vuln_snapshots = [
+            (v.id, {
+                "id": v.id,
+                "tool": v.tool,
+                "scan_type": v.scan_type.value if hasattr(v.scan_type, "value") else str(v.scan_type),
+                "rule_id": v.rule_id or "",
+                "title": v.title,
+                "severity": v.severity.value if hasattr(v.severity, "value") else str(v.severity),
+                "file_path": v.file_path or "",
+                "line_start": v.line_start or 0,
+                "description": (v.description or "")[:500],
+                "code_snippet": (v.code_snippet or "")[:300],
+                "cwe": v.cwe or "",
+                "cve": v.cve or "",
+                "package_name": v.package_name or "",
+                "package_version": v.package_version or "",
+                "fixed_version": v.fixed_version or "",
+            })
+            for v in vulns
+        ]
+
+        # Chạy tất cả concurrently (với semaphore limit = 3)
+        tasks = [_analyze_one(vid, vdata) for vid, vdata in vuln_snapshots]
+        await _asyncio.gather(*tasks, return_exceptions=True)
+
+        # Đánh dấu AI done
+        _update_ai_progress(total, "done")
+        logger.info(f"[AI] ✔ Hoàn thành {done_count}/{total} vulns cho scan {scan_id}")
+
+    except Exception as e:
+        logger.error(f"[AI] Fatal error scan {scan_id}: {e}", exc_info=True)
+        # Cập nhật status AI failed nhưng scan vẫn COMPLETED
+        try:
+            _db2 = SessionLocal()
+            _scan2 = _db2.query(Scan).filter(Scan.id == scan_id).first()
+            if _scan2 and _scan2.summary:
+                s = dict(_scan2.summary)
+                s["ai_status"] = "error"
+                s["ai_error"] = str(e)[:200]
+                _scan2.summary = s
+                _db2.commit()
+            _db2.close()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
 
 
 # ─────────────────────────────────────────────

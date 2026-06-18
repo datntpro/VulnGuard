@@ -85,37 +85,63 @@ class AIAnalyzer:
         return os.environ.get("OLLAMA_MODEL", "llama3.2")
 
     async def analyze(self, vuln) -> Dict[str, Any]:
-        """Phân tích một vulnerability với Ollama."""
-        # Refresh model mỗi lần analyze (user có thể đổi model giữa chừng)
+        """Phân tích một vulnerability với Ollama (nhận ORM object)."""
         self.model = self._get_active_model()
+        vuln_data = {
+            "tool": getattr(vuln, 'tool', ''),
+            "scan_type": getattr(vuln, 'scan_type', ''),
+            "rule_id": getattr(vuln, 'rule_id', '') or '',
+            "title": getattr(vuln, 'title', ''),
+            "severity": getattr(vuln, 'severity', '').value if hasattr(getattr(vuln, 'severity', ''), 'value') else str(getattr(vuln, 'severity', '')),
+            "file_path": getattr(vuln, 'file_path', '') or '',
+            "line_start": getattr(vuln, 'line_start', 0) or 0,
+            "description": (getattr(vuln, 'description', '') or '')[:500],
+            "code_snippet": (getattr(vuln, 'code_snippet', '') or '')[:300],
+            "cwe": getattr(vuln, 'cwe', '') or '',
+            "cve": getattr(vuln, 'cve', '') or '',
+            "package_name": getattr(vuln, 'package_name', '') or '',
+            "package_version": getattr(vuln, 'package_version', '') or '',
+            "fixed_version": getattr(vuln, 'fixed_version', '') or '',
+        }
+        return await self.analyze_raw(vuln_data)
 
+    async def analyze_raw(self, vuln_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Phân tích từ dict (dùng cho concurrent async — tránh SQLAlchemy session issues)."""
+        self.model = self._get_active_model()
         prompt = ANALYSIS_PROMPT_TEMPLATE.format(
-            tool=getattr(vuln, 'tool', ''),
-            scan_type=getattr(vuln, 'scan_type', ''),
-            rule_id=getattr(vuln, 'rule_id', '') or '',
-            title=getattr(vuln, 'title', ''),
-            severity=getattr(vuln, 'severity', '').value if hasattr(getattr(vuln, 'severity', ''), 'value') else str(getattr(vuln, 'severity', '')),
-            file_path=getattr(vuln, 'file_path', '') or '',
-            line=getattr(vuln, 'line_start', 0) or 0,
-            description=(getattr(vuln, 'description', '') or '')[:500],
-            code_snippet=(getattr(vuln, 'code_snippet', '') or '')[:300],
-            cwe=getattr(vuln, 'cwe', '') or '',
-            cve=getattr(vuln, 'cve', '') or '',
-            package_name=getattr(vuln, 'package_name', '') or '',
-            package_version=getattr(vuln, 'package_version', '') or '',
-            fixed_version=getattr(vuln, 'fixed_version', '') or '',
+            tool=vuln_data.get("tool", ""),
+            scan_type=vuln_data.get("scan_type", ""),
+            rule_id=vuln_data.get("rule_id", ""),
+            title=vuln_data.get("title", ""),
+            severity=vuln_data.get("severity", ""),
+            file_path=vuln_data.get("file_path", ""),
+            line=vuln_data.get("line_start", 0),
+            description=vuln_data.get("description", ""),
+            code_snippet=vuln_data.get("code_snippet", ""),
+            cwe=vuln_data.get("cwe", ""),
+            cve=vuln_data.get("cve", ""),
+            package_name=vuln_data.get("package_name", ""),
+            package_version=vuln_data.get("package_version", ""),
+            fixed_version=vuln_data.get("fixed_version", ""),
         )
-
         try:
             response_text = await self._call_ollama(prompt)
             return self._parse_response(response_text)
         except Exception as e:
-            logger.error(f"AI analysis failed for {getattr(vuln, 'id', 'unknown')}: {e}")
+            logger.error(f"AI analysis failed for {vuln_data.get('title', '?')[:50]}: {e}")
             return self._fallback_analysis(str(e))
 
     async def _call_ollama(self, prompt: str) -> str:
-        """Gọi Ollama API."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        """Gọi Ollama API với timeout phân tách rõ: connect 10s, read = ollama_timeout."""
+        # httpx.Timeout: connect, read, write, pool — phải set read timeout riêng
+        # vì LLM generate chậm, chỉ cần connect nhanh
+        timeout = httpx.Timeout(
+            connect=10.0,       # Kết nối tới Ollama: 10s
+            read=float(self.timeout),   # Đọc response (LLM generate): ollama_timeout
+            write=10.0,
+            pool=5.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{self.ollama_url}/api/generate",
                 json={

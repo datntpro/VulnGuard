@@ -1,0 +1,24 @@
+[Unit]
+Description=VulnGuard - Local DevSecOps Security Scanner (native, no Docker)
+After=network.target
+# Không bắt buộc Ollama phải chạy trước, app vẫn start được và báo lỗi AI
+# riêng nếu Ollama chưa sẵn sàng.
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=__PROJECT_DIR__/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port __VULNGUARD_PORT__
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:__PROJECT_DIR__/storage/vulnguard.log
+StandardError=append:__PROJECT_DIR__/storage/vulnguard.error.log
+
+# Hardening cơ bản — không quá chặt để tránh chặn scanner subprocess
+NoNewPrivileges=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target

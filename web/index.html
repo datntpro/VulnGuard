@@ -182,6 +182,7 @@
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:16px;">
         <span id="sp-status-text">Đang khởi động...</span>
         <span id="sp-counts"></span>
+        <span id="sp-elapsed" style="color:var(--text3);"></span>
       </div>
       <!-- Per-tool list -->
       <div id="sp-tools-list"></div>
@@ -510,7 +511,7 @@
   <div class="modal" style="max-width:560px;">
     <div class="modal-header"><strong>Trigger Scan</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('scan-modal').classList.remove('open')">✕</button></div>
     <div class="modal-body">
-      <div class="notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).</div>
+      <div class="notice" id="scan-path-notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).</div>
       <div class="form-group mt-16"><label>Scan path *</label><input id="scan-path" value="/workspace" placeholder="/workspace/my-app"></div>
       <div class="form-group"><label>Scan types</label>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
@@ -1053,8 +1054,22 @@ async function deleteWaiver() {
 }
 
 // ─── SCAN TRIGGER ─────────────────────────────────────────────
+let deployMode = 'docker';
+api('/api/health').then(h => { deployMode = h.deploy_mode || 'docker'; }).catch(() => {});
+
 function openScanModal(projectId) {
   currentProjectId = projectId;
+  const notice = document.getElementById('scan-path-notice');
+  const input = document.getElementById('scan-path');
+  if (deployMode === 'native') {
+    notice.innerHTML = 'Bản cài native (không Docker) — nhập <strong>đường dẫn thật trên máy</strong>, ví dụ <code>/home/user/projects/my-app</code>.';
+    if (input.value === '/workspace') input.value = '';
+    input.placeholder = '/home/user/projects/my-app';
+  } else {
+    notice.innerHTML = 'Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).';
+    if (!input.value) input.value = '/workspace';
+    input.placeholder = '/workspace/my-app';
+  }
   document.getElementById('scan-modal').classList.add('open');
 }
 
@@ -1078,6 +1093,9 @@ async function triggerScan() {
 // ─── SCAN PROGRESS MODAL ──────────────────────────────────────
 let progressPollTimer = null;
 let progressScanId = null;
+let progressPollErrors = 0;  // Đếm số lần poll lỗi liên tiếp
+let progressElapsedTimer = null;
+let progressStartTime = null;
 
 function openProgressModal(scanId, path, types) {
   progressScanId = scanId;
@@ -1103,7 +1121,16 @@ function openProgressModal(scanId, path, types) {
 
   document.getElementById('scan-progress-modal').classList.add('open');
 
-  // Start polling
+  // Reset error counter khi mở modal mới
+  progressPollErrors = 0;
+  // Start elapsed timer
+  progressStartTime = Date.now();
+  clearInterval(progressElapsedTimer);
+  progressElapsedTimer = setInterval(() => {
+    const secs = Math.floor((Date.now() - progressStartTime) / 1000);
+    const el = document.getElementById('sp-elapsed');
+    if (el) el.textContent = `⏱ ${secs}s`;
+  }, 1000);
   clearInterval(progressPollTimer);
   progressPollTimer = setInterval(() => pollScanProgress(scanId), 2000);
   // First poll immediately after short delay
@@ -1113,6 +1140,7 @@ function openProgressModal(scanId, path, types) {
 async function pollScanProgress(scanId) {
   try {
     const data = await api(`/api/projects/scans/${scanId}/progress`);
+    progressPollErrors = 0;  // Reset khi poll thành công
     updateProgressUI(data);
 
     // Stop polling when done
@@ -1121,7 +1149,21 @@ async function pollScanProgress(scanId) {
       loadScans(currentProjectId);  // Refresh scan list
     }
   } catch(e) {
-    // Ignore poll errors silently
+    progressPollErrors++;
+    // Hiển thị cảnh báo sau 5 lần lỗi liên tiếp (~10 giây)
+    if (progressPollErrors >= 5) {
+      const errEl = document.getElementById('sp-error');
+      if (errEl) {
+        errEl.style.display = 'block';
+        errEl.innerHTML = `⚠️ <strong>Mất kết nối API</strong> — Không thể lấy trạng thái scan.<br><small>Lỗi: ${escHtml(e.message)}</small>`;
+      }
+      // Dừng poll sau 15 lần lỗi liên tiếp (≈30 giây)
+      if (progressPollErrors >= 15) {
+        clearInterval(progressPollTimer);
+        document.getElementById('sp-title').textContent = '⚠️ Kết nối bị mất';
+        document.getElementById('sp-close-btn').style.display = 'inline-block';
+      }
+    }
   }
 }
 
@@ -1145,10 +1187,12 @@ function updateProgressUI(data) {
     fillEl.className = 'progress-fill-lg done';
     document.getElementById('sp-title').textContent = '✅ Scan hoàn thành';
     document.getElementById('sp-pct').style.color = 'var(--low)';
+    clearInterval(progressElapsedTimer);  // Dừng đồng hồ khi xong
   } else if (status === 'FAILED') {
     fillEl.className = 'progress-fill-lg failed';
     document.getElementById('sp-title').textContent = '❌ Scan thất bại';
     document.getElementById('sp-pct').style.color = 'var(--critical)';
+    clearInterval(progressElapsedTimer);  // Dừng đồng hồ khi thất bại
   }
 
   document.getElementById('sp-pct').textContent = pct + '%';
@@ -1206,6 +1250,55 @@ function updateProgressUI(data) {
         <div class="stat-num l" style="font-size:24px;">${s.LOW||0}</div><div class="stat-label">Low</div>
       </div>`;
 
+    // ── AI Analysis progress banner ──────────────────────────────────────
+    const aiStatus = s.ai_status || 'skipped';
+    const aiDone   = s.ai_done  || 0;
+    const aiTotal  = s.ai_total || 0;
+    let aiHtml = '';
+    if (aiStatus === 'analyzing') {
+      const aiPct = aiTotal > 0 ? Math.round(aiDone / aiTotal * 100) : 0;
+      aiHtml = `
+        <div id="sp-ai-banner" style="background:#1f6feb15;border:1px solid #1f6feb40;border-radius:6px;padding:10px 14px;margin-top:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <span style="font-size:12px;font-weight:600;color:var(--accent2);">🤖 AI đang phân tích vulnerabilities...</span>
+            <span style="font-size:12px;color:var(--text2);">${aiDone}/${aiTotal} (${aiPct}%)</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill" style="background:var(--accent2);width:${aiPct}%;transition:width .5s;"></div></div>
+          <div style="font-size:11px;color:var(--text3);margin-top:4px;">Bạn có thể xem vulns ngay — AI sẽ cập nhật phân tích nền</div>
+        </div>`;
+      // Tiếp tục poll mỗi 3s để cập nhật AI progress
+      if (!progressPollTimer) {
+        progressPollTimer = setInterval(() => pollScanProgress(progressScanId), 3000);
+      }
+    } else if (aiStatus === 'done') {
+      aiHtml = `
+        <div style="background:#3fb95015;border:1px solid #3fb95040;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--low);">
+          🤖 AI đã phân tích xong ${aiTotal} vulnerabilities
+        </div>`;
+      clearInterval(progressPollTimer);
+      progressPollTimer = null;
+    } else if (aiStatus === 'error') {
+      aiHtml = `
+        <div style="background:#da363315;border:1px solid #da363340;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--critical);">
+          ⚠️ AI analysis gặp lỗi — ${escHtml(s.ai_error || 'Kiểm tra Ollama service')}
+        </div>`;
+    } else if (aiStatus === 'pending') {
+      aiHtml = `
+        <div style="background:#d2992215;border:1px solid #d2992240;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--medium);">
+          🤖 Đang khởi động AI analysis...
+        </div>`;
+    }
+    const existingBanner = document.getElementById('sp-ai-banner-wrap');
+    if (!existingBanner) {
+      const wrap = document.createElement('div');
+      wrap.id = 'sp-ai-banner-wrap';
+      wrap.innerHTML = aiHtml;
+      document.getElementById('sp-final-grid').insertAdjacentElement('afterend', wrap);
+    } else {
+      existingBanner.innerHTML = aiHtml;
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     // Scanner logs table
     const logs = s.scanner_logs || {};
     if (Object.keys(logs).length > 0) {
@@ -1240,6 +1333,7 @@ function updateProgressUI(data) {
 
 function closeProgressModal() {
   clearInterval(progressPollTimer);
+  clearInterval(progressElapsedTimer);
   document.getElementById('scan-progress-modal').classList.remove('open');
 }
 

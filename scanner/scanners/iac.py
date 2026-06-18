@@ -92,7 +92,7 @@ class CheckovScanner(BaseScanner):
 class TrivyIaCScanner(BaseScanner):
     """Trivy IaC scan — Terraform, K8s manifests."""
     scan_type = "IAC"
-    tool_name = "trivy"
+    tool_name = "trivy-iac"
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []

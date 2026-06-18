@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
+from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report
 
@@ -22,6 +23,46 @@ def _run_migrations():
             pass  # Column đã tồn tại — bình thường
 
 _run_migrations()
+
+
+def _cleanup_stale_scans():
+    """Reset các scan PENDING/RUNNING về FAILED khi app restart.
+
+    Lý do: khi container bị stop/restart, tất cả background tasks đang chạy
+    sẽ bị kill đột ngột. Nếu không cleanup, các scan này sẽ mãi ở trạng
+    thái RUNNING/PENDING dù không có gì đang chạy cả.
+    """
+    from api.database import SessionLocal
+    from api.models import Scan, ScanStatus
+    from sqlalchemy import text
+    from datetime import datetime
+
+    db = SessionLocal()
+    try:
+        stale = db.query(Scan).filter(
+            Scan.status.in_([ScanStatus.RUNNING, ScanStatus.PENDING])
+        ).all()
+
+        if stale:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[Startup] Tìm thấy {len(stale)} scan bị treo — reset về FAILED")
+            for scan in stale:
+                scan.status = ScanStatus.FAILED
+                scan.error_message = (
+                    "Scan bị gián đoạn do container restart. "
+                    "Vui lòng chạy lại scan."
+                )
+                scan.completed_at = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Startup] Cleanup lỗi: {e}")
+    finally:
+        db.close()
+
+
+_cleanup_stale_scans()
 
 app = FastAPI(
     title="VulnGuard API",
@@ -51,7 +92,7 @@ app.include_router(report.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "VulnGuard"}
+    return {"status": "ok", "service": "VulnGuard", "deploy_mode": app_settings.deploy_mode}
 
 
 # Serve Web UI

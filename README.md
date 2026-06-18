@@ -4,6 +4,9 @@
 
 > Powered by **[1VISION](https://1vision.work)**
 
+> 🐧 **Máy không cài được Docker?** Xem hướng dẫn cài đặt native (Python venv + systemd):
+> [docs/NATIVE_INSTALL.md](docs/NATIVE_INSTALL.md)
+
 ---
 
 ## 🚀 Quick Start

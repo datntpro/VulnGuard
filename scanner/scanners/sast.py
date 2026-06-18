@@ -4,15 +4,30 @@ SAST Scanners:
 - Bandit: Python-specific
 """
 import json
+import logging
 import os
+import socket
 from typing import List, Dict, Any
 
 from scanner.scanners.base import BaseScanner, run_command, normalize_severity, make_fingerprint
+
+logger = logging.getLogger(__name__)
 
 # Thư mục chứa bundled semgrep rules (luôn hoạt động, không cần internet)
 BUNDLED_RULES_DIR = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "rules")
 )
+
+
+def _has_internet(host: str = "semgrep.dev", port: int = 443, timeout: float = 3.0) -> bool:
+    """Kiểm tra nhanh có kết nối internet không (tránh timeout 120s của semgrep)."""
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except Exception:
+        return False
+
 
 
 class SemgrepScanner(BaseScanner):
@@ -47,22 +62,29 @@ class SemgrepScanner(BaseScanner):
                     seen_fps.add(fp)
                 all_findings.append(f)
 
-        # ── Bước 1: Bundled rules (luôn hoạt động) ──────────────────────────
+        # ── Bước 1: Bundled rules (luôn hoạt động, không cần internet) ──────
         bundled_rules = os.path.join(BUNDLED_RULES_DIR, "python-security.yaml")
         if os.path.exists(bundled_rules):
+            logger.info("Semgrep: chạy bundled rules...")
             add_findings(await self._run_semgrep(["--config", bundled_rules]))
+        else:
+            logger.warning(f"Semgrep: bundled rules không tìm thấy tại {bundled_rules}")
 
-        # ── Bước 2: Online/cached registry rules (bonus nếu có) ─────────────
-        config_args = []
-        for ruleset in self.ONLINE_RULESETS:
-            config_args += ["--config", ruleset]
-
-        online = await self._run_semgrep(config_args)
-        add_findings(online)
+        # ── Bước 2: Online/cached registry rules (chỉ khi có internet) ──────
+        # Kiểm tra internet trước để tránh treo 120s khi offline
+        if _has_internet():
+            logger.info("Semgrep: có internet — chạy online registry rules...")
+            config_args = []
+            for ruleset in self.ONLINE_RULESETS:
+                config_args += ["--config", ruleset]
+            online = await self._run_semgrep(config_args, timeout=90)
+            add_findings(online)
+        else:
+            logger.info("Semgrep: không có internet — bỏ qua online registry rules (offline mode)")
 
         return all_findings
 
-    async def _run_semgrep(self, config_args: List[str]) -> List[Dict[str, Any]]:
+    async def _run_semgrep(self, config_args: List[str], timeout: int = 90) -> List[Dict[str, Any]]:
         """Chạy semgrep với config args đã cho."""
         cmd = [
             "semgrep",
@@ -76,7 +98,9 @@ class SemgrepScanner(BaseScanner):
             self.scan_path,
         ]
 
-        rc, stdout, stderr = await run_command(cmd, timeout=120)
+        rc, stdout, stderr = await run_command(cmd, timeout=timeout)
+        if rc == -1 and "timeout" in stderr.lower():
+            logger.warning(f"Semgrep timeout sau {timeout}s")
 
         if not stdout.strip():
             return []
