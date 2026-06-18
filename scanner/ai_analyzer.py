@@ -69,8 +69,12 @@ class AIAnalyzer:
     def __init__(self):
         # Đọc fresh mỗi lần instantiate — không dùng module-level vars
         # để pick up model thay đổi qua UI (PUT /api/ollama/active-model)
-        self.ollama_url = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
-        self.timeout = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
+        # Dùng cùng nguồn cấu hình với api/config.py (Settings) để tránh 2 default
+        # khác nhau cho cùng 1 biến — Settings đã tự đọc env var OLLAMA_URL/
+        # OLLAMA_TIMEOUT nếu có, nên không cần đọc os.environ riêng ở đây nữa.
+        from api.config import settings as _settings
+        self.ollama_url = _settings.ollama_url
+        self.timeout = _settings.ollama_timeout
 
         # Ưu tiên: active model đã set qua UI > env var > default
         self.model = self._get_active_model()
@@ -141,7 +145,7 @@ class AIAnalyzer:
             write=10.0,
             pool=5.0,
         )
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(
                 f"{self.ollama_url}/api/generate",
                 json={
@@ -194,7 +198,7 @@ class AIAnalyzer:
 
     async def check_ollama_health(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
                 r = await client.get(f"{self.ollama_url}/api/tags")
                 return r.status_code == 200
         except Exception:
@@ -202,7 +206,7 @@ class AIAnalyzer:
 
     async def get_available_models(self):
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
                 r = await client.get(f"{self.ollama_url}/api/tags")
                 data = r.json()
                 return [m["name"] for m in data.get("models", [])]

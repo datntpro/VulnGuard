@@ -11,8 +11,18 @@ import subprocess
 from typing import Dict, Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+class ScannerSettingsUpdate(BaseModel):
+    """Body cho PUT /api/settings/scanners.
+
+    Trước đây endpoint nhận raw `dict` không validate — payload sai field/kiểu
+    dữ liệu sẽ âm thầm bị bỏ qua (degrade về {}) thay vì trả lỗi 422 rõ ràng.
+    """
+    enabled_tools: Dict[str, bool] = {}
 
 # File lưu config enable/disable
 SCANNER_CONFIG_FILE = os.environ.get("SCANNER_CONFIG_FILE", "/app/storage/scanner_config.json")
@@ -197,15 +207,14 @@ def get_scanner_settings():
 
 
 @router.put("/scanners")
-def update_scanner_settings(body: dict):
+def update_scanner_settings(body: ScannerSettingsUpdate):
     """Lưu enable/disable config.
 
     Body: { "enabled_tools": { "bandit": true, "semgrep": false, ... } }
     """
-    enabled_tools = body.get("enabled_tools", {})
     # Chỉ lưu các tools có trong registry
     valid_tools = {t["tool"] for t in TOOL_REGISTRY}
-    filtered = {k: bool(v) for k, v in enabled_tools.items() if k in valid_tools}
+    filtered = {k: v for k, v in body.enabled_tools.items() if k in valid_tools}
     _save_config(filtered)
     return {"ok": True, "saved": filtered}
 

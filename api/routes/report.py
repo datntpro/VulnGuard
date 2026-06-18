@@ -182,11 +182,26 @@ def _dedup_and_group(vulns: List[Vulnerability]):
             # Lấy AI data từ item có data tốt nhất
             ai_expl = ""
             ai_fix = ""
+            ai_fp_likelihood = ""
+            ai_fp_reason = ""
+            ai_exploit_public = ""
+            ai_exploit_private = ""
+            ai_analyzed_count = 0
             for item in items:
                 if item.get("ai_explanation") and not ai_expl:
                     ai_expl = item["ai_explanation"]
                 if item.get("ai_fix_suggestion") and not ai_fix:
                     ai_fix = item["ai_fix_suggestion"]
+                if item.get("ai_fp_likelihood") and not ai_fp_likelihood:
+                    ai_fp_likelihood = item["ai_fp_likelihood"]
+                if item.get("ai_fp_reason") and not ai_fp_reason:
+                    ai_fp_reason = item["ai_fp_reason"]
+                if item.get("ai_exploitability_public") and not ai_exploit_public:
+                    ai_exploit_public = item["ai_exploitability_public"]
+                if item.get("ai_exploitability_private") and not ai_exploit_private:
+                    ai_exploit_private = item["ai_exploitability_private"]
+                if item.get("ai_analyzed"):
+                    ai_analyzed_count += 1
 
             # CVE list cho SCA
             cve_list = list({
@@ -210,19 +225,24 @@ def _dedup_and_group(vulns: List[Vulnerability]):
                 title = f"{package_name} {package_version}".strip()
 
             groups.append({
-                "group_key":       gk,
-                "title":           title,
-                "severity":        highest_sev,
-                "tools":           all_tools,
-                "items":           sorted(items, key=lambda x: SEVERITY_ORDER.get(x["severity"], 99)),
-                "count":           len(items),
-                "ai_explanation":  ai_expl,
-                "ai_fix_suggestion": ai_fix,
-                "package_name":    package_name,
-                "package_version": package_version,
-                "fixed_version":   fixed_version,
-                "cve_list":        sorted(cve_list),
-                "scan_type":       scan_type,
+                "group_key":             gk,
+                "title":                 title,
+                "severity":              highest_sev,
+                "tools":                 all_tools,
+                "items":                 sorted(items, key=lambda x: SEVERITY_ORDER.get(x["severity"], 99)),
+                "count":                 len(items),
+                "ai_explanation":        ai_expl,
+                "ai_fix_suggestion":     ai_fix,
+                "ai_fp_likelihood":      ai_fp_likelihood,
+                "ai_fp_reason":          ai_fp_reason,
+                "ai_exploitability_public":  ai_exploit_public,
+                "ai_exploitability_private": ai_exploit_private,
+                "ai_analyzed_count":     ai_analyzed_count,
+                "package_name":          package_name,
+                "package_version":       package_version,
+                "fixed_version":         fixed_version,
+                "cve_list":              sorted(cve_list),
+                "scan_type":             scan_type,
             })
 
         # Sort: severity cao nhất trước, sau đó count
@@ -246,7 +266,7 @@ def _group_key(vd: dict) -> str:
 
 def _vuln_to_dict(v: Vulnerability) -> dict:
     return {
-        "id":                  v.id,
+        "id":                   v.id,
         "title":               v.title or "",
         "description":         v.description or "",
         "severity":            v.severity.value if v.severity else "INFO",
@@ -269,6 +289,10 @@ def _vuln_to_dict(v: Vulnerability) -> dict:
         "ai_explanation":      v.ai_explanation or "",
         "ai_fix_suggestion":   v.ai_fix_suggestion or "",
         "ai_fp_likelihood":    v.ai_false_positive_likelihood or "",
+        "ai_fp_reason":        getattr(v, 'ai_false_positive_reason', None) or "",
+        "ai_exploitability_public":  v.ai_exploitability_public or "",
+        "ai_exploitability_private": v.ai_exploitability_private or "",
+        "ai_analyzed":         v.ai_analyzed_at is not None,
     }
 
 
@@ -419,24 +443,88 @@ def _render_html(
             if g.get("fixed_version"):
                 fix_version_html = f'<div class="fix-version">✅ Phiên bản vá: <strong>{_esc(g["fixed_version"])}</strong></div>'
 
-            # AI explanation — bỏ qua fallback error messages
-            ai_expl_html = ""
-            ai_expl = g.get("ai_explanation", "")
-            if ai_expl and not _is_fallback_text(ai_expl):
-                ai_expl_html = f"""
+            # AI block — hiển thị đầy đủ khi có data, hoặc "chưa phân tích"
+            ai_expl      = g.get("ai_explanation", "")
+            ai_fix       = g.get("ai_fix_suggestion", "")
+            ai_fp_pct    = g.get("ai_fp_likelihood", "")
+            ai_fp_reason = g.get("ai_fp_reason", "")
+            ai_pub       = g.get("ai_exploitability_public", "")
+            ai_priv      = g.get("ai_exploitability_private", "")
+            has_ai       = bool(ai_expl and not _is_fallback_text(ai_expl))
+
+            ai_section_html = ""
+            if has_ai:
+                # FP likelihood badge
+                fp_pct_num = 0
+                try:
+                    fp_pct_num = float(ai_fp_pct.replace("%", "").strip()) if ai_fp_pct else 0
+                except Exception:
+                    pass
+                fp_color = "#16a34a" if fp_pct_num > 50 else "#dc2626"
+                fp_badge = (
+                    f'<span style="background:{fp_color}15;color:{fp_color};'
+                    f'border:1px solid {fp_color}40;border-radius:4px;'
+                    f'padding:1px 8px;font-size:12px;font-weight:700;">'
+                    f'{_esc(ai_fp_pct)} khả năng FP</span>'
+                ) if ai_fp_pct else ""
+
+                # FP reason row
+                fp_reason_html = (
+                    f'<div style="font-size:12px;color:#475569;margin-top:4px;">'
+                    f'<em>{_esc(ai_fp_reason)}</em></div>'
+                ) if ai_fp_reason and not _is_fallback_text(ai_fp_reason) else ""
+
+                # Exploitability rows
+                exploit_html = ""
+                if ai_pub and not _is_fallback_text(ai_pub):
+                    exploit_html += f"""
+                    <div style="margin-top:8px;">
+                      <div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                                  letter-spacing:.5px;color:#0369a1;margin-bottom:3px;">
+                        🌐 Khả năng khai thác (Public)
+                      </div>
+                      <p style="font-size:13px;color:#1e3a5f;line-height:1.5;">{_esc(ai_pub)}</p>
+                    </div>"""
+                if ai_priv and not _is_fallback_text(ai_priv):
+                    exploit_html += f"""
+                    <div style="margin-top:8px;">
+                      <div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                                  letter-spacing:.5px;color:#7c3aed;margin-bottom:3px;">
+                        🔒 Khả năng khai thác (Private)
+                      </div>
+                      <p style="font-size:13px;color:#1e3a5f;line-height:1.5;">{_esc(ai_priv)}</p>
+                    </div>"""
+
+                ai_section_html = f"""
                 <div class="ai-block">
-                  <div class="ai-label">🤖 Phân tích AI</div>
-                  <p>{_esc(ai_expl)}</p>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <div class="ai-label" style="margin-bottom:0;">🤖 Phân tích AI</div>
+                    {fp_badge}
+                  </div>
+                  {fp_reason_html}
+                  {exploit_html}
+                  <div style="margin-top:{'8' if exploit_html else '4'}px;">
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                                letter-spacing:.5px;color:#0369a1;margin-bottom:4px;">
+                      📋 Giải thích
+                    </div>
+                    <p>{_esc(ai_expl)}</p>
+                  </div>
                 </div>"""
 
-            # AI fix suggestion — bỏ qua fallback
-            ai_fix_html = ""
-            ai_fix = g.get("ai_fix_suggestion", "")
-            if ai_fix and not _is_fallback_text(ai_fix):
-                ai_fix_html = f"""
+                if ai_fix and not _is_fallback_text(ai_fix):
+                    ai_section_html += f"""
                 <div class="ai-block fix-block">
                   <div class="ai-label">🔧 Hướng dẫn khắc phục</div>
                   <p>{_esc(ai_fix)}</p>
+                </div>"""
+            else:
+                # Chưa có AI data — hiển thị badge nhỏ
+                ai_section_html = """
+                <div style="margin:8px 16px;padding:6px 12px;background:#f8fafc;
+                            border:1px dashed #cbd5e1;border-radius:6px;
+                            font-size:12px;color:#94a3b8;">
+                  🤖 Chưa có phân tích AI — chạy lại scan với AI Analysis được bật
                 </div>"""
 
             # Locations / findings
@@ -512,8 +600,7 @@ def _render_html(
               </div>
               {f'<div class="pills">{pills_html}</div>' if pills_html else ""}
               {fix_version_html}
-              {ai_expl_html}
-              {ai_fix_html}
+              {ai_section_html}
               {findings_html}
             </div>""")
 

@@ -40,7 +40,7 @@ class SetModelRequest(BaseModel):
 async def ollama_health():
     """Kiểm tra Ollama service có đang chạy không."""
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
             r.raise_for_status()
             return {"status": "ok", "ollama_url": OLLAMA_URL, "active_model": get_active_model()}
@@ -52,7 +52,7 @@ async def ollama_health():
 async def list_models():
     """Danh sách models đã cài trong Ollama."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
             r.raise_for_status()
             data = r.json()
@@ -84,7 +84,7 @@ async def pull_model(payload: PullRequest):
 
     async def stream_pull():
         try:
-            async with httpx.AsyncClient(timeout=None) as client:  # No timeout khi pull
+            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:  # No timeout khi pull
                 async with client.stream(
                     "POST",
                     f"{OLLAMA_URL}/api/pull",
@@ -105,7 +105,7 @@ async def delete_model(model_name: str):
     if model_name == get_active_model():
         raise HTTPException(status_code=400, detail="Không thể xóa model đang active. Đổi model khác trước.")
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
             r = await client.request(
                 "DELETE",
                 f"{OLLAMA_URL}/api/delete",
@@ -129,7 +129,7 @@ async def set_active_model(payload: SetModelRequest):
 
     # Kiểm tra model có tồn tại không
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
             data = r.json()
             installed = [m["name"] for m in data.get("models", [])]

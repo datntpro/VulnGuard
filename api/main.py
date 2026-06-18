@@ -22,6 +22,13 @@ def _run_migrations():
         except Exception:
             pass  # Column đã tồn tại — bình thường
 
+        # Thêm ai_false_positive_reason nếu chưa có
+        try:
+            conn.execute(text("ALTER TABLE vulnerabilities ADD COLUMN ai_false_positive_reason TEXT"))
+            conn.commit()
+        except Exception:
+            pass  # Column đã tồn tại — bình thường
+
 _run_migrations()
 
 
@@ -75,7 +82,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # Không dùng allow_credentials=True cùng allow_origins=["*"] — tổ hợp này bị
+    # browser từ chối với credentialed requests, và app không dùng cookie nên
+    # không cần credentials xuyên origin.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

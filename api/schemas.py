@@ -121,6 +121,7 @@ class VulnOut(BaseModel):
     fixed_version: Optional[str]
     status: VulnStatus
     ai_false_positive_likelihood: Optional[str]
+    ai_false_positive_reason: Optional[str]
     ai_exploitability_public: Optional[str]
     ai_exploitability_private: Optional[str]
     ai_explanation: Optional[str]

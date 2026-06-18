@@ -108,6 +108,7 @@ class Vulnerability(Base):
 
     # AI Analysis
     ai_false_positive_likelihood = Column(String(10), nullable=True)  # "85%"
+    ai_false_positive_reason = Column(Text, nullable=True)            # Lý do đánh giá FP
     ai_exploitability_public = Column(Text, nullable=True)
     ai_exploitability_private = Column(Text, nullable=True)
     ai_explanation = Column(Text, nullable=True)           # Tiếng Việt

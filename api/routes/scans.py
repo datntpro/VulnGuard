@@ -17,6 +17,11 @@ from api.config import settings
 
 router = APIRouter(prefix="/api/projects", tags=["scans"])
 
+# Thứ tự ưu tiên hiển thị severity (CRITICAL trước, INFO sau cùng).
+# Dùng để sort trong Python vì order_by(Vulnerability.severity) ở SQL chỉ
+# sort theo thứ tự Enum khai báo trong DB, không phải theo mức độ nghiêm trọng.
+SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
 
 def _compute_summary(vulns: List[Vulnerability]) -> dict:
     summary = {s.value: 0 for s in Severity}
@@ -41,7 +46,6 @@ def _compute_summary(vulns: List[Vulnerability]) -> dict:
 async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, run_ai: bool):
     """Chạy scan trong background với live progress updates."""
     from scanner.orchestrator import Orchestrator, TOOL_LABELS
-    from scanner.ai_analyzer import AIAnalyzer
 
     db = SessionLocal()
     completed_tools = {}  # tool_name -> log dict
@@ -252,11 +256,12 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
                         _v = _db.query(Vulnerability).filter(Vulnerability.id == vuln_id).first()
                         if _v:
                             _v.ai_false_positive_likelihood = analysis.get("false_positive_likelihood")
-                            _v.ai_exploitability_public = analysis.get("exploitability_public")
-                            _v.ai_exploitability_private = analysis.get("exploitability_private")
-                            _v.ai_explanation = analysis.get("explanation")
-                            _v.ai_fix_suggestion = analysis.get("fix_suggestion")
-                            _v.ai_analyzed_at = datetime.utcnow()
+                            _v.ai_false_positive_reason     = analysis.get("false_positive_reason")
+                            _v.ai_exploitability_public     = analysis.get("exploitability_public")
+                            _v.ai_exploitability_private    = analysis.get("exploitability_private")
+                            _v.ai_explanation               = analysis.get("explanation")
+                            _v.ai_fix_suggestion            = analysis.get("fix_suggestion")
+                            _v.ai_analyzed_at               = datetime.utcnow()
                             _db.commit()
                     finally:
                         _db.close()
@@ -326,6 +331,22 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
 # Scan Endpoints
 # ─────────────────────────────────────────────
 
+# Lock per-project để tránh race condition (TOCTOU) khi 2 request tạo scan
+# cho cùng 1 project chạy đồng thời: cả 2 có thể đọc cùng danh sách scans
+# trước khi commit, tính trùng next_number, hoặc xóa nhầm 2 lần "scan cũ nhất".
+# Lock này chỉ bảo vệ trong cùng 1 process (đủ cho local single-user tool;
+# không cần thiết phải chống concurrency multi-worker/multi-instance).
+_project_scan_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_project_lock(project_id: str) -> asyncio.Lock:
+    lock = _project_scan_locks.get(project_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _project_scan_locks[project_id] = lock
+    return lock
+
+
 @router.post("/{project_id}/scans", response_model=ScanOut, status_code=202)
 async def trigger_scan(
     project_id: str,
@@ -337,26 +358,27 @@ async def trigger_scan(
     if not project:
         raise HTTPException(status_code=404, detail="Project không tồn tại")
 
-    # Rolling scan (max 5)
-    scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.scan_number).all()
-    if len(scans) >= settings.max_scans_per_project:
-        oldest = scans[0]
-        db.delete(oldest)
+    async with _get_project_lock(project_id):
+        # Rolling scan (max 5)
+        scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.scan_number).all()
+        if len(scans) >= settings.max_scans_per_project:
+            oldest = scans[0]
+            db.delete(oldest)
+            db.commit()
+            scans = scans[1:]
+
+        next_number = (scans[-1].scan_number + 1) if scans else 1
+
+        scan = Scan(
+            project_id=project_id,
+            scan_number=next_number,
+            scan_path=payload.scan_path,
+            scan_types=[t.value for t in payload.scan_types],
+            status=ScanStatus.PENDING,
+        )
+        db.add(scan)
         db.commit()
-        scans = scans[1:]
-
-    next_number = (scans[-1].scan_number + 1) if scans else 1
-
-    scan = Scan(
-        project_id=project_id,
-        scan_number=next_number,
-        scan_path=payload.scan_path,
-        scan_types=[t.value for t in payload.scan_types],
-        status=ScanStatus.PENDING,
-    )
-    db.add(scan)
-    db.commit()
-    db.refresh(scan)
+        db.refresh(scan)
 
     background_tasks.add_task(
         _run_scan_background,
@@ -447,6 +469,22 @@ def get_scan_progress(scan_id: str, db: Session = Depends(get_db)):
     }
 
 
+def _validate_vuln_filters(severity: str = None, status: str = None, scan_type: str = None):
+    """Validate filter query params against các Enum hợp lệ.
+
+    Trước đây giá trị không hợp lệ (vd ?status=bogus) bị âm thầm filter ra
+    danh sách rỗng thay vì báo lỗi rõ ràng cho client — gây khó debug ở UI.
+    """
+    from api.models import Severity, VulnStatus, ScanType
+
+    if severity and severity.upper() not in {s.value for s in Severity}:
+        raise HTTPException(status_code=400, detail=f"severity không hợp lệ: '{severity}'")
+    if status and status.upper() not in {s.value for s in VulnStatus}:
+        raise HTTPException(status_code=400, detail=f"status không hợp lệ: '{status}'")
+    if scan_type and scan_type.upper() not in {s.value for s in ScanType}:
+        raise HTTPException(status_code=400, detail=f"scan_type không hợp lệ: '{scan_type}'")
+
+
 @router.get("/scans/{scan_id}/vulns", response_model=List[VulnOut], tags=["scans"])
 def get_scan_vulns(
     scan_id: str,
@@ -455,6 +493,8 @@ def get_scan_vulns(
     scan_type: str = None,
     db: Session = Depends(get_db)
 ):
+    _validate_vuln_filters(severity, status, scan_type)
+
     query = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id)
     if severity:
         query = query.filter(Vulnerability.severity == severity.upper())
@@ -462,14 +502,17 @@ def get_scan_vulns(
         query = query.filter(Vulnerability.status == status.upper())
     if scan_type:
         query = query.filter(Vulnerability.scan_type == scan_type.upper())
-    return query.order_by(Vulnerability.severity).all()
+    # Sort theo mức độ nghiêm trọng thật (CRITICAL → INFO), không phải theo
+    # thứ tự Enum trong DB — order_by(Vulnerability.severity) ở SQL không
+    # đảm bảo đúng thứ tự này.
+    vulns = query.all()
+    vulns.sort(key=lambda v: SEVERITY_ORDER.get(v.severity.value, 99))
+    return vulns
 
 
 # ─────────────────────────────────────────────
 # Export Endpoints
 # ─────────────────────────────────────────────
-
-SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
 
 @router.get("/scans/{scan_id}/export", tags=["scans"])
@@ -488,6 +531,8 @@ def export_scan(
     if scan.status != ScanStatus.COMPLETED:
         raise HTTPException(status_code=400, detail=f"Scan chưa hoàn thành (status: {scan.status.value})")
 
+    _validate_vuln_filters(severity, status, scan_type)
+
     query = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id)
     if severity:
         query = query.filter(Vulnerability.severity == severity.upper())
@@ -495,7 +540,9 @@ def export_scan(
         query = query.filter(Vulnerability.status == status.upper())
     if scan_type:
         query = query.filter(Vulnerability.scan_type == scan_type.upper())
-    vulns = query.order_by(Vulnerability.severity).all()
+    # Sort theo severity rank thật (CRITICAL → INFO) — giống _export_csv,
+    # tránh JSON export trả vulns theo thứ tự Enum DB không liên quan tới mức độ nghiêm trọng.
+    vulns = sorted(query.all(), key=lambda v: SEVERITY_ORDER.get(v.severity.value, 99))
 
     project = db.query(Project).filter(Project.id == scan.project_id).first()
     project_name = project.name if project else scan.project_id

@@ -10,7 +10,11 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "sqlite:////app/storage/db/vulnguard.db"
-    ollama_url: str = "http://ollama:11434"
+    # Default này chỉ dùng khi không có .env / env var OLLAMA_URL nào được set.
+    # docker-compose.yml luôn set OLLAMA_URL=http://host.docker.internal:11434
+    # (Ollama chạy trên host, không phải trong container) — khớp default ở đây
+    # để tránh 2 giá trị khác nhau cho cùng 1 cấu hình.
+    ollama_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "llama3.2"  # Phải khớp với OLLAMA_MODEL trong .env
     ollama_timeout: int = 120
     max_scans_per_project: int = 5
