@@ -65,6 +65,32 @@ Chú ý:
 """
 
 
+CRAWL_ANALYSIS_PROMPT_TEMPLATE = """Bạn là chuyên gia bảo mật ứng dụng (AppSec) đang giúp xây dựng baseline WAF
+theo positive security model (chỉ cho phép path/method/param đã biết, mặc định deny phần còn lại)
+cho domain: {domain_url}
+
+Dưới đây là danh sách endpoint thu được từ crawl (method, path, query/body params, có form hay không):
+{endpoint_list}
+
+Hãy trả lời bằng tiếng Việt, CHỈ trả về JSON (không thêm text ngoài JSON, không markdown wrapper), theo format:
+{{
+  "summary": "Tóm tắt 3-6 câu: site có những khu vực chức năng nào (vd: blog, auth, admin, thanh toán...), đặc điểm nổi bật, rủi ro sơ bộ cần lưu ý khi xây WAF",
+  "sensitive_endpoints": [
+    {{"path": "/admin/login", "method": "POST", "category": "admin", "reason": "Trang đăng nhập quản trị, cần giới hạn rate-limit và theo dõi brute-force"}}
+  ],
+  "waf_suggestions": [
+    {{"path": "/blog/{{slug}}", "param": "id", "suggested_regex": "^[0-9]+$", "suggested_action": "log", "reason": "Param id chỉ nên là số, nếu thấy ký tự lạ có thể là SQLi/path traversal probe"}}
+  ]
+}}
+
+Chú ý:
+- category trong sensitive_endpoints chỉ dùng 1 trong: auth, admin, payment, upload, api, pii, public, unknown
+- suggested_action trong waf_suggestions chỉ là GỢI Ý (log hoặc deny) — không phải rule sẽ tự áp dụng, con người vẫn phải review trước khi enforce deny
+- Chỉ liệt kê sensitive_endpoints/waf_suggestions cho path/param THỰC SỰ đáng chú ý, không cần liệt kê hết toàn bộ danh sách
+- Nếu danh sách endpoint chủ yếu là trang blog/content tĩnh, không có gì nhạy cảm, có thể để sensitive_endpoints và waf_suggestions là mảng rỗng
+"""
+
+
 class AIAnalyzer:
     def __init__(self):
         # Đọc fresh mỗi lần instantiate — không dùng module-level vars
@@ -194,6 +220,93 @@ class AIAnalyzer:
             "exploitability_private": "",
             "explanation": "",           # Để trống → report sẽ không hiển thị AI block
             "fix_suggestion": "",
+        }
+
+    async def analyze_crawl(self, domain_url: str, grouped_endpoints: list) -> Dict[str, Any]:
+        """Phân tích kết quả crawl 1 domain cho tính năng Sitemap/WAF Baseline.
+
+        grouped_endpoints: list dict đã gom theo path —
+            [{"path": "/admin/login", "methods": ["GET","POST"],
+              "query_params": [...], "body_params": [...], "has_form": bool}, ...]
+
+        Trả về: {"summary": str, "sensitive_endpoints": [...], "waf_suggestions": [...]}
+        Lưu ý an toàn: đây chỉ là GỢI Ý — suggested_action có thể là "deny" nhưng
+        không tự áp dụng vào rule thật, luôn cần con người review trước (giống
+        disclaimer ở waf_export.py).
+        """
+        self.model = self._get_active_model()
+
+        truncated_note = ""
+        max_paths = 150
+        if len(grouped_endpoints) > max_paths:
+            truncated_note = (
+                f"\n(Lưu ý: domain có {len(grouped_endpoints)} path, danh sách dưới đây "
+                f"đã cắt còn {max_paths} path đầu để vừa giới hạn ngữ cảnh AI.)"
+            )
+            grouped_endpoints = grouped_endpoints[:max_paths]
+
+        lines = []
+        for ep in grouped_endpoints:
+            params = sorted(set(ep.get("query_params", []) + ep.get("body_params", [])))
+            lines.append(
+                f"- {'/'.join(ep.get('methods', ['GET']))} {ep.get('path', '/')} "
+                f"params=[{', '.join(params) or 'none'}] "
+                f"form={'yes' if ep.get('has_form') else 'no'}"
+            )
+        endpoint_list_text = "\n".join(lines) if lines else "(không có endpoint nào)"
+
+        prompt = CRAWL_ANALYSIS_PROMPT_TEMPLATE.format(
+            domain_url=domain_url,
+            endpoint_list=endpoint_list_text + truncated_note,
+        )
+        try:
+            response_text = await self._call_ollama_crawl(prompt)
+            return self._parse_crawl_response(response_text)
+        except Exception as e:
+            logger.error(f"AI crawl analysis failed for {domain_url}: {e}")
+            return {
+                "summary": "",
+                "sensitive_endpoints": [],
+                "waf_suggestions": [],
+                "error": str(e)[:300],
+            }
+
+    async def _call_ollama_crawl(self, prompt: str) -> str:
+        """Giống _call_ollama nhưng cho phép output dài hơn (list endpoint có thể nhiều)."""
+        timeout = httpx.Timeout(connect=10.0, read=float(self.timeout), write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            response = await client.post(
+                f"{self.ollama_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 2048},
+                }
+            )
+            response.raise_for_status()
+            return response.json().get("response", "")
+
+    def _parse_crawl_response(self, text: str) -> Dict[str, Any]:
+        text = text.strip()
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start:end])
+                return {
+                    "summary": data.get("summary", "") or "",
+                    "sensitive_endpoints": data.get("sensitive_endpoints", []) or [],
+                    "waf_suggestions": data.get("waf_suggestions", []) or [],
+                    "error": None,
+                }
+            except json.JSONDecodeError:
+                pass
+        return {
+            "summary": text[:1000] if text else "",
+            "sensitive_endpoints": [],
+            "waf_suggestions": [],
+            "error": "AI không trả về JSON hợp lệ — xem summary thô.",
         }
 
     async def check_ollama_health(self) -> bool:

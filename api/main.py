@@ -6,7 +6,10 @@ import os
 
 from api.config import settings as app_settings
 from api.database import Base, engine
-from api.routes import projects, scans, vulns, compare, ollama, settings, report
+from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains
+# domain_models phải được import trước create_all() để SQLAlchemy đăng ký
+# bảng domains/domain_crawls/crawl_endpoints (module riêng, tách khỏi models.py)
+from api import domain_models  # noqa: F401
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -28,6 +31,20 @@ def _run_migrations():
             conn.commit()
         except Exception:
             pass  # Column đã tồn tại — bình thường
+
+        # Thêm các cột AI analysis cho domain_crawls nếu chưa có (feature mới)
+        for ddl in (
+            "ALTER TABLE domain_crawls ADD COLUMN ai_status TEXT DEFAULT 'NOT_REQUESTED'",
+            "ALTER TABLE domain_crawls ADD COLUMN ai_summary TEXT",
+            "ALTER TABLE domain_crawls ADD COLUMN ai_sensitive_endpoints TEXT",
+            "ALTER TABLE domain_crawls ADD COLUMN ai_waf_suggestions TEXT",
+            "ALTER TABLE domain_crawls ADD COLUMN ai_error TEXT",
+        ):
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+            except Exception:
+                pass  # Column đã tồn tại hoặc bảng chưa tồn tại lần đầu — bình thường
 
 _run_migrations()
 
@@ -98,6 +115,7 @@ app.include_router(compare.router)
 app.include_router(ollama.router)
 app.include_router(settings.router)
 app.include_router(report.router)
+app.include_router(domains.router)
 
 
 @app.get("/api/health")

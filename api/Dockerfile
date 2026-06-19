@@ -49,6 +49,18 @@ RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
     | sh -s -- -b /usr/local/bin \
     || echo "⚠ Grype install failed — skipping (non-critical)"
 
+# 5. Katana — web crawler dùng để build sitemap/endpoint inventory cho domain
+#    (feature "Domain Sitemap / WAF Baseline") — arch-aware (amd64 / arm64)
+RUN ARCH=${TARGETARCH:-amd64} \
+    && if [ "$ARCH" = "arm64" ]; then KT_ARCH="arm64"; else KT_ARCH="amd64"; fi \
+    && curl -sL \
+        "https://github.com/projectdiscovery/katana/releases/download/v1.5.0/katana_1.5.0_linux_${KT_ARCH}.zip" \
+        -o /tmp/katana.zip \
+    && unzip -p /tmp/katana.zip katana > /usr/local/bin/katana \
+    && rm -f /tmp/katana.zip \
+    && chmod +x /usr/local/bin/katana \
+    || echo "⚠ Katana install failed — skipping (chỉ ảnh hưởng tính năng Domain Sitemap)"
+
 # ─────────────────────────────────────────────
 # Python dependencies
 # ─────────────────────────────────────────────

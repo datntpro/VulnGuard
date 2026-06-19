@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2"  # Phải khớp với OLLAMA_MODEL trong .env
     ollama_timeout: int = 120
     max_scans_per_project: int = 5
+    max_crawls_per_domain: int = 5   # rolling — giống max_scans_per_project, cho domain sitemap crawl
     block_severity_threshold: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"] = "HIGH"
     app_env: str = "production"
     # "docker" (default) hoặc "native" — native install set qua .env (DEPLOY_MODE=native)

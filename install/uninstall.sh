@@ -30,7 +30,7 @@ systemctl disable vulnguard.service 2>/dev/null || true
 rm -f /etc/systemd/system/vulnguard.service
 systemctl daemon-reload
 
-log "Đã gỡ service. Scanner tools (trivy, gitleaks, hadolint, grype) được giữ lại"
+log "Đã gỡ service. Scanner tools (trivy, gitleaks, hadolint, grype, katana) được giữ lại"
 echo "  (chúng cài ở /usr/local/bin, không liên quan riêng VulnGuard — gỡ tay nếu cần)."
 
 if [ "$PURGE" = true ]; then

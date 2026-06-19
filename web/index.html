@@ -153,6 +153,7 @@
   <div class="nav-item" onclick="navigate('projects')" id="nav-projects">📁 Projects</div>
   <div class="nav-item" onclick="navigate('scans')" id="nav-scans">🔍 Scans</div>
   <div class="nav-item" onclick="navigate('compare')" id="nav-compare">🔀 Compare</div>
+  <div class="nav-item" onclick="navigate('domains')" id="nav-domains">🌐 Domains</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings">⚙️ Settings</div>
   <div class="sidebar-footer">
     Powered by <a href="https://1vision.work" target="_blank">1VISION</a>
@@ -260,6 +261,32 @@
       <button class="btn btn-primary" onclick="runCompare()">So sánh</button>
     </div>
     <div id="compare-result"></div>
+  </div>
+
+  <!-- DOMAINS PAGE -->
+  <div class="page" id="page-domains">
+    <div class="flex-between mb-16">
+      <h1>🌐 Domains — Sitemap &amp; WAF Baseline</h1>
+      <button class="btn btn-primary" onclick="openCreateDomain()">+ Khai báo Domain</button>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      Khai báo domain rồi chạy crawl để tự động build sitemap, danh sách endpoint/param/form —
+      dùng làm baseline cho positive security model khi cấu hình WAF (allowlist path/param đã biết).
+    </div>
+    <div id="domains-list">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- DOMAIN CRAWLS PAGE -->
+  <div class="page" id="page-domain-crawls">
+    <div class="flex mb-16">
+      <button class="btn btn-ghost btn-sm" onclick="navigate('domains')">← Về Domains</button>
+    </div>
+    <h1 id="domain-crawls-title">Crawls</h1>
+    <div id="domain-crawls-content">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
   </div>
 
   <!-- SETTINGS PAGE -->
@@ -535,21 +562,105 @@
   </div>
 </div>
 
+<!-- Create Domain Modal -->
+<div class="modal-overlay" id="create-domain-modal">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-header"><strong>Khai báo Domain mới</strong><button class="btn btn-ghost btn-sm" onclick="closeCreateDomain()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Tên gợi nhớ *</label><input id="new-domain-name" placeholder="Website chính"></div>
+      <div class="form-group"><label>URL domain *</label><input id="new-domain-url" placeholder="https://example.com"></div>
+      <div class="form-group"><label>Mô tả</label><input id="new-domain-desc" placeholder="Ghi chú thêm (tùy chọn)"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeCreateDomain()">Hủy</button>
+      <button class="btn btn-primary" onclick="createDomain()">Khai báo</button>
+    </div>
+  </div>
+</div>
+
+<!-- Crawl Options Modal -->
+<div class="modal-overlay" id="crawl-modal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header"><strong>Crawl mới — Build Sitemap</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('crawl-modal').classList.remove('open')">✕</button></div>
+    <div class="modal-body">
+      <div class="notice">Crawl toàn diện domain bằng Katana để liệt kê URL/param/form — dùng làm baseline WAF.</div>
+      <div class="grid2 mt-16">
+        <div class="form-group"><label>Độ sâu crawl (depth)</label><input id="crawl-depth" type="number" value="3" min="1" max="10"></div>
+        <div class="form-group"><label>Số URL tối đa</label><input id="crawl-max-urls" type="number" value="2000" min="10" max="20000"></div>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="crawl-js" checked style="width:auto;"> Bóc endpoint trong file JS (passive, không cần headless browser)
+        </label>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="crawl-subdomains" style="width:auto;"> Bao gồm cả subdomain
+        </label>
+      </div>
+      <div class="form-group"><label>Loại trừ pattern (regex, phân tách bởi dấu phẩy)</label><input id="crawl-exclude" placeholder="\.png$,\.jpg$,/logout"></div>
+      <div class="form-group"><label>Timeout (giây)</label><input id="crawl-timeout" type="number" value="600" min="30" max="3600"></div>
+      <label class="flex" style="gap:8px;align-items:center;">
+        <input type="checkbox" id="crawl-ai" style="width:auto;"> 🤖 Phân tích AI sau khi crawl xong (phân loại endpoint nhạy cảm, gợi ý WAF, tóm tắt)
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('crawl-modal').classList.remove('open')">Hủy</button>
+      <button class="btn btn-primary" onclick="triggerCrawl()">🕸️ Bắt đầu Crawl</button>
+    </div>
+  </div>
+</div>
+
+<!-- Endpoints Viewer Modal -->
+<div class="modal-overlay" id="endpoints-modal">
+  <div class="modal" style="max-width:900px;">
+    <div class="modal-header">
+      <strong>Endpoints phát hiện được</strong>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('endpoints-modal').classList.remove('open')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="flex mb-16" style="gap:8px;flex-wrap:wrap;">
+        <input id="endpoints-search" placeholder="Tìm theo URL..." style="flex:1;min-width:200px;" oninput="loadEndpoints()">
+        <select id="endpoints-method-filter" onchange="loadEndpoints()" style="width:auto;">
+          <option value="">Tất cả method</option>
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl(currentCrawlId,'sitemap_xml')">⬇ sitemap.xml</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl(currentCrawlId,'json')">⬇ JSON</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl(currentCrawlId,'waf_baseline')">⬇ WAF Baseline</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl(currentCrawlId,'modsecurity')">⬇ ModSecurity</button>
+      </div>
+      <div id="endpoints-list"><div class="loading"><div class="spinner"></div>Đang tải...</div></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('endpoints-modal').classList.remove('open')">Đóng</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = '';  // Same origin
 let currentProjectId = null;
 let currentScanId = null;
 let currentVulnId = null;
 let pollInterval = null;
+let currentDomainId = null;
+let currentCrawlId = null;
+let domainPollInterval = null;
 
 // ─── Navigation ───────────────────────────────────────────────
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
-  document.getElementById('nav-' + page).classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects };
+  // Sub-pages (vd. domain-crawls) không có nav item riêng — highlight nav cha thay vào đó
+  const navParent = { 'domain-crawls': 'domains' }[page] || page;
+  const navEl = document.getElementById('nav-' + navParent);
+  if (navEl) navEl.classList.add('active');
+
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains };
   if (loaders[page]) loaders[page]();
 }
 
@@ -684,6 +795,308 @@ async function deleteProject(id, name) {
   if (!confirm(`Xóa project "${name}"? Tất cả scans và vulns sẽ bị xóa.`)) return;
   await api(`/api/projects/${id}`, { method: 'DELETE' });
   loadProjects();
+}
+
+// ─── DOMAINS / SITEMAP ──────────────────────────────────────────
+async function loadDomains() {
+  const el = document.getElementById('domains-list');
+  try {
+    const domains = await api('/api/domains');
+    if (!domains.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">🌐</div><p>Chưa có domain nào</p><button class="btn btn-primary mt-16" onclick="openCreateDomain()">+ Khai báo Domain đầu tiên</button></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table>
+          <thead><tr><th>Tên</th><th>URL</th><th>Mô tả</th><th>Số lần crawl</th><th></th></tr></thead>
+          <tbody>
+            ${domains.map(d => `
+              <tr>
+                <td><strong>${escHtml(d.name)}</strong></td>
+                <td class="text-mono text-sm">${escHtml(d.url)}</td>
+                <td class="text-sm">${escHtml(d.description || '')}</td>
+                <td>${d.crawl_count}</td>
+                <td>
+                  <button class="btn btn-ghost btn-sm" onclick="openDomainCrawls('${d.id}','${escHtml(d.name)}')">Xem Crawls →</button>
+                  <button class="btn btn-ghost btn-sm" onclick="deleteDomain('${d.id}','${escHtml(d.name)}')">🗑</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+function openCreateDomain() {
+  document.getElementById('new-domain-name').value = '';
+  document.getElementById('new-domain-url').value = '';
+  document.getElementById('new-domain-desc').value = '';
+  document.getElementById('create-domain-modal').classList.add('open');
+}
+function closeCreateDomain() { document.getElementById('create-domain-modal').classList.remove('open'); }
+
+async function createDomain() {
+  const name = document.getElementById('new-domain-name').value.trim();
+  const url = document.getElementById('new-domain-url').value.trim();
+  if (!name || !url) return alert('Nhập tên và URL domain');
+  try {
+    await api('/api/domains', { method: 'POST', body: { name, url, description: document.getElementById('new-domain-desc').value }});
+    closeCreateDomain();
+    loadDomains();
+  } catch(e) { alert('Lỗi: ' + e.message); }
+}
+
+async function deleteDomain(id, name) {
+  if (!confirm(`Xóa domain "${name}"? Tất cả lịch sử crawl sẽ bị xóa.`)) return;
+  await api(`/api/domains/${id}`, { method: 'DELETE' });
+  loadDomains();
+}
+
+function openDomainCrawls(domainId, domainName) {
+  currentDomainId = domainId;
+  navigate('domain-crawls');
+  document.getElementById('domain-crawls-title').textContent = `Crawls — ${domainName}`;
+  loadDomainCrawls(domainId);
+}
+
+async function loadDomainCrawls(domainId) {
+  const el = document.getElementById('domain-crawls-content');
+  try {
+    const crawls = await api(`/api/domains/${domainId}/crawls`);
+    if (!crawls.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">🕸️</div><p>Chưa có crawl nào</p><button class="btn btn-primary mt-16" onclick="openCrawlModal()">🕸️ Bắt đầu Crawl</button></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="flex mb-16"><button class="btn btn-primary" onclick="openCrawlModal()">🕸️ Crawl mới</button></div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        ${crawls.map(c => renderCrawlCard(c)).join('')}
+      </div>`;
+
+    const running = crawls.find(c =>
+      c.status === 'RUNNING' || c.status === 'PENDING' ||
+      c.ai_status === 'RUNNING' || c.ai_status === 'PENDING'
+    );
+    if (running) {
+      clearInterval(domainPollInterval);
+      domainPollInterval = setInterval(() => loadDomainCrawls(domainId), 2500);
+    } else {
+      clearInterval(domainPollInterval);
+    }
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+function renderCrawlCard(c) {
+  const statusColor = { PENDING: 'var(--text2)', RUNNING: 'var(--medium)', COMPLETED: 'var(--low)', FAILED: 'var(--critical)' };
+  const statusIcon = { PENDING: '⏳', RUNNING: '⚡', COMPLETED: '✅', FAILED: '❌' };
+  const s = c.summary || {};
+
+  let body = '';
+  if (c.status === 'COMPLETED') {
+    const methodsHtml = Object.entries(s.methods || {}).map(([m,n]) => `<span class="tag">${m}: ${n}</span>`).join(' ');
+    body = `
+      <div class="grid4" style="margin-top:12px;gap:8px;">
+        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="stat-num" style="font-size:22px;">${s.total_urls||0}</div><div class="stat-label">URLs</div>
+        </div>
+        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="stat-num" style="font-size:22px;">${s.total_params_seen||0}</div><div class="stat-label">Params</div>
+        </div>
+        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="stat-num" style="font-size:22px;">${s.total_forms||0}</div><div class="stat-label">Forms</div>
+        </div>
+        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="stat-num" style="font-size:22px;">${c.depth}</div><div class="stat-label">Depth</div>
+        </div>
+      </div>
+      <div class="text-sm mt-16">${methodsHtml}</div>
+      ${s.warning ? `<div class="text-sm" style="color:var(--medium);margin-top:8px;">⚠️ ${escHtml(s.warning)}</div>` : ''}
+      ${s.truncated ? `<div class="text-sm" style="color:var(--text2);margin-top:4px;">Kết quả đã bị cắt theo giới hạn max_urls.</div>` : ''}
+      <div class="flex mt-16" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="openEndpoints('${c.id}')">Xem Endpoints →</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl('${c.id}','sitemap_xml')">⬇ sitemap.xml</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl('${c.id}','waf_baseline')">⬇ WAF Baseline</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportCrawl('${c.id}','modsecurity')">⬇ ModSecurity</button>
+      </div>
+      ${renderAISection(c)}`;
+  } else if (c.status === 'FAILED') {
+    body = `<div style="color:var(--critical);font-size:13px;margin-top:8px;background:#da363310;border-radius:6px;padding:10px;">❌ <strong>Thất bại:</strong> ${escHtml(c.error_message||'Crawl thất bại')}</div>`;
+  } else {
+    body = `<div class="loading" style="margin-top:8px;"><div class="spinner"></div>${escHtml((c.progress||{}).message || 'Đang crawl...')}</div>`;
+  }
+
+  return `
+    <div class="card">
+      <div class="flex-between">
+        <div class="flex">
+          <strong>Crawl #${c.crawl_number}</strong>
+          <span style="color:${statusColor[c.status]};font-size:13px;margin-left:8px;">${statusIcon[c.status]} ${c.status}</span>
+          ${c.status === 'RUNNING' ? '<div class="spinner" style="margin-left:4px;"></div>' : ''}
+        </div>
+        <span class="text-sm">${fmtDate(c.started_at)}</span>
+      </div>
+      ${body}
+    </div>`;
+}
+
+const AI_CATEGORY_LABEL = {
+  auth: '🔑 Auth', admin: '🛠 Admin', payment: '💳 Payment', upload: '📤 Upload',
+  api: '🔌 API', pii: '🪪 PII', public: '🌐 Public', unknown: '❓ Unknown',
+};
+
+function renderAISection(c) {
+  const st = c.ai_status || 'NOT_REQUESTED';
+  if (st === 'NOT_REQUESTED') {
+    return `
+      <div class="mt-16" style="border-top:1px solid var(--border);padding-top:12px;">
+        <button class="btn btn-ghost btn-sm" onclick="analyzeCrawlAI('${c.id}')">🤖 Phân tích AI</button>
+      </div>`;
+  }
+  if (st === 'PENDING' || st === 'RUNNING') {
+    return `
+      <div class="loading mt-16" style="border-top:1px solid var(--border);padding-top:12px;">
+        <div class="spinner"></div>🤖 AI đang phân tích...
+      </div>`;
+  }
+  if (st === 'FAILED') {
+    return `
+      <div class="mt-16" style="border-top:1px solid var(--border);padding-top:12px;">
+        <div style="color:var(--critical);font-size:13px;">🤖 ❌ AI phân tích lỗi: ${escHtml(c.ai_error || 'Không xác định')}</div>
+        <button class="btn btn-ghost btn-sm mt-8" onclick="analyzeCrawlAI('${c.id}')">Thử lại</button>
+      </div>`;
+  }
+  // DONE
+  const sensitive = c.ai_sensitive_endpoints || [];
+  const waf = c.ai_waf_suggestions || [];
+  const sensitiveHtml = sensitive.length ? `
+    <div class="mt-8">
+      <div class="text-sm" style="color:var(--text2);margin-bottom:4px;">⚠️ Endpoint nhạy cảm (${sensitive.length})</div>
+      ${sensitive.map(e => `
+        <div class="text-sm" style="background:var(--bg3);border-radius:6px;padding:8px;margin-bottom:6px;">
+          <span class="tag">${e.method||'GET'}</span> <code>${escHtml(e.path||'')}</code>
+          <span class="tag" style="margin-left:6px;">${AI_CATEGORY_LABEL[e.category] || e.category || 'unknown'}</span>
+          <div style="color:var(--text2);margin-top:4px;">${escHtml(e.reason||'')}</div>
+        </div>`).join('')}
+    </div>` : '';
+  const wafHtml = waf.length ? `
+    <div class="mt-8">
+      <div class="text-sm" style="color:var(--text2);margin-bottom:4px;">🛡 Gợi ý siết WAF (${waf.length}) — chỉ là gợi ý, cần review trước khi enforce</div>
+      ${waf.map(w => `
+        <div class="text-sm" style="background:var(--bg3);border-radius:6px;padding:8px;margin-bottom:6px;">
+          <code>${escHtml(w.path||'')}</code>${w.param ? ` · param <code>${escHtml(w.param)}</code>` : ''}
+          ${w.suggested_regex ? ` · regex <code>${escHtml(w.suggested_regex)}</code>` : ''}
+          <span class="tag" style="margin-left:6px;color:${w.suggested_action==='deny' ? 'var(--critical)' : 'var(--text2)'};">${(w.suggested_action||'log').toUpperCase()}</span>
+          <div style="color:var(--text2);margin-top:4px;">${escHtml(w.reason||'')}</div>
+        </div>`).join('')}
+    </div>` : '';
+  return `
+    <div class="mt-16" style="border-top:1px solid var(--border);padding-top:12px;">
+      <div class="flex-between">
+        <div class="text-sm" style="color:var(--text2);">🤖 Phân tích AI</div>
+        <button class="btn btn-ghost btn-sm" onclick="analyzeCrawlAI('${c.id}')">↻ Phân tích lại</button>
+      </div>
+      ${c.ai_summary ? `<div class="text-sm mt-8">${escHtml(c.ai_summary)}</div>` : ''}
+      ${sensitiveHtml}
+      ${wafHtml}
+    </div>`;
+}
+
+async function analyzeCrawlAI(crawlId) {
+  try {
+    await api(`/api/domains/crawls/${crawlId}/analyze`, { method: 'POST' });
+    if (currentDomainId) loadDomainCrawls(currentDomainId);
+  } catch(e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+function openCrawlModal() {
+  document.getElementById('crawl-depth').value = 3;
+  document.getElementById('crawl-max-urls').value = 2000;
+  document.getElementById('crawl-js').checked = true;
+  document.getElementById('crawl-subdomains').checked = false;
+  document.getElementById('crawl-exclude').value = '';
+  document.getElementById('crawl-timeout').value = 600;
+  document.getElementById('crawl-ai').checked = false;
+  document.getElementById('crawl-modal').classList.add('open');
+}
+
+async function triggerCrawl() {
+  const exclude = document.getElementById('crawl-exclude').value.trim();
+  const payload = {
+    depth: parseInt(document.getElementById('crawl-depth').value, 10) || 3,
+    max_urls: parseInt(document.getElementById('crawl-max-urls').value, 10) || 2000,
+    js_crawl: document.getElementById('crawl-js').checked,
+    include_subdomains: document.getElementById('crawl-subdomains').checked,
+    exclude_patterns: exclude ? exclude.split(',').map(s => s.trim()).filter(Boolean) : [],
+    timeout: parseInt(document.getElementById('crawl-timeout').value, 10) || 600,
+    run_ai_analysis: document.getElementById('crawl-ai').checked,
+  };
+  try {
+    await api(`/api/domains/${currentDomainId}/crawls`, { method: 'POST', body: payload });
+    document.getElementById('crawl-modal').classList.remove('open');
+    loadDomainCrawls(currentDomainId);
+  } catch(e) { alert('Lỗi: ' + e.message); }
+}
+
+async function openEndpoints(crawlId) {
+  currentCrawlId = crawlId;
+  document.getElementById('endpoints-search').value = '';
+  document.getElementById('endpoints-method-filter').value = '';
+  document.getElementById('endpoints-modal').classList.add('open');
+  loadEndpoints();
+}
+
+async function loadEndpoints() {
+  const el = document.getElementById('endpoints-list');
+  el.innerHTML = `<div class="loading"><div class="spinner"></div>Đang tải...</div>`;
+  const search = document.getElementById('endpoints-search').value.trim();
+  const method = document.getElementById('endpoints-method-filter').value;
+  const params = new URLSearchParams();
+  if (search) params.append('search', search);
+  if (method) params.append('method', method);
+  try {
+    const endpoints = await api(`/api/domains/crawls/${currentCrawlId}/endpoints?${params.toString()}`);
+    if (!endpoints.length) {
+      el.innerHTML = `<div class="empty-state"><p>Không tìm thấy endpoint nào</p></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div style="max-height:420px;overflow-y:auto;">
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Status</th><th>Query Params</th><th>Body Params</th></tr></thead>
+          <tbody>
+            ${endpoints.map(e => `
+              <tr>
+                <td><span class="tag">${e.method}</span></td>
+                <td class="text-mono text-sm" title="${escHtml(e.url)}">${escHtml(e.path || e.url)}</td>
+                <td class="text-sm">${e.status_code || '—'}</td>
+                <td class="text-sm">${(e.query_params||[]).join(', ') || '—'}</td>
+                <td class="text-sm">${(e.body_params||[]).join(', ') || '—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+function exportCrawl(crawlId, format) {
+  const url = `${API}/api/domains/crawls/${crawlId}/export?format=${format}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 // ─── SCANS ────────────────────────────────────────────────────

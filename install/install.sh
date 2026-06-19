@@ -105,6 +105,23 @@ else
     log "Grype đã có — bỏ qua"
 fi
 
+# 2.5 Katana — web crawler dùng để build sitemap/endpoint inventory cho domain
+#     (feature "Domain Sitemap / WAF Baseline")
+if ! command -v katana >/dev/null 2>&1; then
+    log "Cài Katana..."
+    KT_ARCH="amd64"; [ "$ARCH" = "arm64" ] && KT_ARCH="arm64"
+    KT_VERSION="1.5.0"
+    curl -sL \
+        "https://github.com/projectdiscovery/katana/releases/download/v${KT_VERSION}/katana_${KT_VERSION}_linux_${KT_ARCH}.zip" \
+        -o /tmp/katana.zip \
+    && unzip -p /tmp/katana.zip katana > /usr/local/bin/katana \
+    && rm -f /tmp/katana.zip \
+    && chmod +x /usr/local/bin/katana \
+    || warn "Katana install thất bại — bỏ qua (chỉ ảnh hưởng tính năng Domain Sitemap)"
+else
+    log "Katana đã có — bỏ qua"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # 3. Python virtualenv + dependencies
 # ─────────────────────────────────────────────────────────────
