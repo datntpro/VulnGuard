@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────
 # VulnGuard — Native Install Script (KHÔNG cần Docker)
-# Mục tiêu: chạy được trên Ubuntu/Debian không cài Docker được
-# (máy nội bộ bị hạn chế quyền, policy công ty, v.v.)
+# Mục tiêu: chạy được trên Oracle Linux (8/9, dnf/RHEL family)
+# (máy nội bộ bị hạn chế quyền, policy công ty, không cài Docker được)
+# Vẫn hỗ trợ Debian/Ubuntu (apt) nếu cần dùng lại trên môi trường khác.
 #
 # Cài: Python venv + FastAPI app + scanner tools (Semgrep, Bandit,
 # Trivy, pip-audit, Checkov, Hadolint, Grype, Gitleaks, detect-secrets)
@@ -44,14 +45,47 @@ case "$ARCH_RAW" in
 esac
 log "Kiến trúc: $ARCH_RAW ($ARCH)"
 
+# ── Phát hiện distro + package manager (Oracle Linux/RHEL = dnf, Debian/Ubuntu = apt) ──
+DISTRO_ID="unknown"
+DISTRO_VERSION_ID=""
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO_ID="${ID:-unknown}"
+    DISTRO_VERSION_ID="${VERSION_ID:-}"
+fi
+
+if command -v dnf >/dev/null 2>&1; then
+    PKG_MGR="dnf"
+elif command -v yum >/dev/null 2>&1; then
+    PKG_MGR="yum"
+elif command -v apt-get >/dev/null 2>&1; then
+    PKG_MGR="apt"
+else
+    err "Không tìm thấy dnf/yum/apt-get — distro không được hỗ trợ."
+    exit 1
+fi
+log "Distro: $DISTRO_ID $DISTRO_VERSION_ID — package manager: $PKG_MGR"
+
 # ─────────────────────────────────────────────────────────────
 # 1. System dependencies
 # ─────────────────────────────────────────────────────────────
-log "Cài system dependencies (apt)..."
-apt-get update -qq
-apt-get install -y --no-install-recommends \
-    python3 python3-venv python3-pip \
-    curl wget git unzip ca-certificates gnupg apt-transport-https >/dev/null
+log "Cài system dependencies ($PKG_MGR)..."
+if [ "$PKG_MGR" = "dnf" ] || [ "$PKG_MGR" = "yum" ]; then
+    # Oracle Linux/RHEL: python3-venv không tồn tại riêng, nằm trong python3
+    # (module venv built-in). EPEL không cần cho các package này.
+    "$PKG_MGR" install -y -q \
+        python3 python3-pip \
+        curl wget git unzip tar ca-certificates gnupg2 \
+        firewalld policycoreutils-python-utils >/dev/null 2>&1 \
+        || "$PKG_MGR" install -y -q \
+            python3 python3-pip \
+            curl wget git unzip tar ca-certificates gnupg2 >/dev/null
+else
+    apt-get update -qq
+    apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-pip \
+        curl wget git unzip ca-certificates gnupg apt-transport-https >/dev/null
+fi
 
 PY_VERSION="$(python3 --version 2>&1 | awk '{print $2}')"
 log "Python: $PY_VERSION"
@@ -60,15 +94,29 @@ log "Python: $PY_VERSION"
 # 2. Scanner tools — binaries (giống Dockerfile, nhưng cài trực tiếp host)
 # ─────────────────────────────────────────────────────────────
 
-# 2.1 Trivy — qua apt repo chính thức
+# 2.1 Trivy — qua repo chính thức (rpm cho Oracle Linux/RHEL, deb cho Debian/Ubuntu)
 if ! command -v trivy >/dev/null 2>&1; then
     log "Cài Trivy..."
-    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
-        | gpg --dearmor > /usr/share/keyrings/trivy.gpg
-    echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
-        > /etc/apt/sources.list.d/trivy.list
-    apt-get update -qq
-    apt-get install -y trivy >/dev/null
+    if [ "$PKG_MGR" = "dnf" ] || [ "$PKG_MGR" = "yum" ]; then
+        RELEASEVER="$(rpm -E %{rhel} 2>/dev/null || echo 9)"
+        cat > /etc/yum.repos.d/trivy.repo <<EOF
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/${RELEASEVER}/\$basearch/
+gpgcheck=true
+enabled=true
+gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
+EOF
+        "$PKG_MGR" install -y -q trivy >/dev/null \
+            || warn "Trivy install qua repo thất bại — kiểm tra lại $RELEASEVER có đúng version Oracle Linux không."
+    else
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | gpg --dearmor > /usr/share/keyrings/trivy.gpg
+        echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            > /etc/apt/sources.list.d/trivy.list
+        apt-get update -qq
+        apt-get install -y trivy >/dev/null
+    fi
 else
     log "Trivy đã có — bỏ qua ($(trivy --version | head -1))"
 fi
@@ -195,6 +243,27 @@ if systemctl is-active --quiet vulnguard.service; then
 else
     err "Service không start được — xem log: journalctl -u vulnguard -n 50"
     exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────
+# 5b. firewalld — Oracle Linux mặc định bật firewalld, cần mở port
+# ─────────────────────────────────────────────────────────────
+if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+    log "Mở port $VULNGUARD_PORT/tcp trên firewalld..."
+    firewall-cmd --permanent --add-port="${VULNGUARD_PORT}/tcp" >/dev/null 2>&1 || true
+    firewall-cmd --reload >/dev/null 2>&1 || true
+else
+    warn "firewalld không chạy — nếu có firewall khác, tự mở port $VULNGUARD_PORT/tcp."
+fi
+
+# ─────────────────────────────────────────────────────────────
+# 5c. SELinux — Oracle Linux thường enforcing, có thể chặn venv binary
+# ─────────────────────────────────────────────────────────────
+if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = "Enforcing" ]; then
+    warn "SELinux đang Enforcing. Nếu service không start hoặc lỗi quyền truy cập file,"
+    warn "  kiểm tra: ausearch -m avc -ts recent | audit2why"
+    warn "  hoặc gắn lại context cho thư mục project: restorecon -Rv \"$PROJECT_DIR\""
+    restorecon -Rv "$PROJECT_DIR" >/dev/null 2>&1 || true
 fi
 
 # ─────────────────────────────────────────────────────────────
