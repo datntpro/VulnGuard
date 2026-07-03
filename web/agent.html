@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VulnGuard — Co-work Agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2a3340;
+    --text: #e6edf3; --muted: #8b949e; --accent: #4f8cff; --green: #3fb950;
+    --red: #f85149; --yellow: #d29922; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .grow { flex: 1; }
+  select, button, input, textarea { font-family: inherit; }
+  select { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 6px 10px; font-size: 13px; }
+  .pill { font-size: 12px; color: var(--muted); }
+  .pill.ok { color: var(--green); } .pill.bad { color: var(--red); }
+  #log { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 820px; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff;
+    padding: 9px 13px; border-radius: 12px 12px 2px 12px; white-space: pre-wrap; }
+  .msg.answer { align-self: flex-start; background: var(--panel); border: 1px solid var(--border);
+    padding: 11px 14px; border-radius: 12px 12px 12px 2px; white-space: pre-wrap; line-height: 1.5; }
+  .step { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 8px 12px; font-size: 13px; max-width: 820px; }
+  .step .head { color: var(--muted); cursor: pointer; user-select: none; }
+  .step .tool { color: var(--accent); font-family: var(--mono); }
+  .step pre { margin: 8px 0 0; background: #0b0f14; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px; overflow-x: auto; font-size: 12px; max-height: 320px; }
+  .thought { color: var(--text); margin-top: 4px; }
+  .confirm { align-self: flex-start; background: var(--panel); border: 1px solid var(--yellow);
+    border-radius: 10px; padding: 12px 14px; max-width: 820px; width: 100%; }
+  .confirm h3 { margin: 0 0 8px; font-size: 14px; color: var(--yellow); }
+  .confirm .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-bottom: 8px; word-break: break-all; }
+  .confirm pre { background: #0b0f14; border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+    overflow-x: auto; font-size: 12px; max-height: 380px; margin: 0 0 10px; }
+  .confirm .actions { display: flex; gap: 10px; }
+  .diff-add { color: var(--green); } .diff-del { color: var(--red); } .diff-hdr { color: var(--accent); }
+  button.primary { background: var(--green); color: #04140a; border: none; border-radius: 7px;
+    padding: 8px 16px; font-weight: 600; cursor: pointer; }
+  button.danger { background: transparent; color: var(--red); border: 1px solid var(--red);
+    border-radius: 7px; padding: 8px 16px; cursor: pointer; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  footer { border-top: 1px solid var(--border); background: var(--panel); padding: 12px 16px;
+    display: flex; gap: 10px; }
+  #input { flex: 1; resize: none; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font-size: 14px; min-height: 44px; max-height: 160px; }
+  #send { background: var(--accent); color: #fff; border: none; border-radius: 9px; padding: 0 20px;
+    font-weight: 600; cursor: pointer; }
+  #send:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; text-align: center; padding: 6px; }
+  a { color: var(--accent); }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--muted);
+    border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #main { display: flex; flex: 1; min-height: 0; }
+  #sidebar { width: 240px; flex-shrink: 0; border-right: 1px solid var(--border); background: var(--panel);
+    display: flex; flex-direction: column; overflow: hidden; }
+  #chatCol { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #newChat { margin: 10px; padding: 9px; background: var(--accent); color: #fff; border: none;
+    border-radius: 8px; font-weight: 600; cursor: pointer; }
+  #convList { flex: 1; overflow-y: auto; padding: 0 8px 10px; }
+  .conv { display: flex; align-items: center; gap: 6px; padding: 8px 9px; border-radius: 7px;
+    cursor: pointer; font-size: 13px; color: var(--text); }
+  .conv:hover { background: var(--panel2); }
+  .conv.active { background: var(--panel2); border: 1px solid var(--border); }
+  .conv .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .del { color: var(--muted); opacity: 0; font-size: 14px; }
+  .conv:hover .del { opacity: 1; }
+  .conv .del:hover { color: var(--red); }
+  .sidebar-title { padding: 10px 12px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 Co-work Agent</h1>
+  <label class="pill">Folder:
+    <select id="folderSel"><option value="">— đang tải —</option></select>
+  </label>
+  <span class="grow"></span>
+  <label class="pill" title="Tự động duyệt mọi hành động ghi file / chạy lệnh — KHÔNG hỏi xác nhận">
+    <input type="checkbox" id="autoApprove" /> ⚡ Tự duyệt
+  </label>
+  <span id="status" class="pill">…</span>
+  <a href="/" class="pill">← Web UI</a>
+</header>
+
+<div id="main">
+  <aside id="sidebar">
+    <button id="newChat">+ Chat mới</button>
+    <div class="sidebar-title">Lịch sử</div>
+    <div id="convList"></div>
+  </aside>
+
+  <div id="chatCol">
+    <div id="skillBar" style="display:flex; align-items:center; gap:10px; padding:8px 18px; border-bottom:1px solid var(--border); background:var(--panel2); font-size:13px; flex-wrap:wrap;">
+      <span class="pill">🧩 Skill:</span>
+      <select id="skillSel">
+        <option value="auto">🤖 Tự động chọn theo ngữ cảnh</option>
+        <option value="">— Không dùng skill —</option>
+      </select>
+      <span id="skillBanner" class="pill"></span>
+    </div>
+
+    <div id="log">
+      <div class="hint">Chọn folder rồi nhắn yêu cầu. Agent sẽ tự đọc file, đề xuất sửa/chạy lệnh — bạn là người duyệt.</div>
+    </div>
+
+    <footer>
+      <textarea id="input" placeholder="Vd: Đọc README rồi tóm tắt kiến trúc project… (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
+      <button id="send">Gửi</button>
+    </footer>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const logEl = $("#log"), inputEl = $("#input"), sendBtn = $("#send"),
+      folderSel = $("#folderSel"), statusEl = $("#status"),
+      skillSel = $("#skillSel"), skillBanner = $("#skillBanner"),
+      convListEl = $("#convList"), newChatBtn = $("#newChat");
+
+let messages = [];       // LLM context (user/assistant/observation) — server tự thêm system
+let busy = false;
+let routedSkillId = null;   // skill được auto-route cho hội thoại hiện tại
+let skillCatalog = [];      // [{id,name,description}]
+let currentConvId = null;   // id hội thoại đang mở (null = chưa lưu)
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: { "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+// ── Folders ──────────────────────────────────────────────
+async function loadFolders() {
+  try {
+    const data = await api("/api/coworker/folders");
+    const folders = Array.isArray(data) ? data : (data.folders || []);
+    folderSel.innerHTML = "";
+    if (!folders.length) {
+      folderSel.innerHTML = '<option value="">(chưa có folder)</option>';
+      statusEl.innerHTML = '<span class="bad">Chưa có folder.</span> Thêm ở tab Co-work.';
+      return;
+    }
+    for (const f of folders) {
+      const opt = document.createElement("option");
+      opt.value = f.id; opt.textContent = f.label || f.path || f.id;
+      folderSel.appendChild(opt);
+    }
+    statusEl.innerHTML = '<span class="ok">● sẵn sàng</span>';
+  } catch (e) {
+    statusEl.innerHTML = '<span class="bad">Coworker host chưa chạy</span>';
+    folderSel.innerHTML = '<option value="">(không kết nối)</option>';
+  }
+}
+
+// ── Lịch sử hội thoại ────────────────────────────────────
+async function loadConversations() {
+  try {
+    const data = await api("/api/coworker/agent/conversations");
+    renderConvList(data.conversations || []);
+  } catch (_) { /* không chặn */ }
+}
+
+function renderConvList(list) {
+  convListEl.innerHTML = "";
+  if (!list.length) {
+    convListEl.innerHTML = '<div class="hint" style="padding:10px;">Chưa có hội thoại nào.</div>';
+    return;
+  }
+  for (const c of list) {
+    const row = document.createElement("div");
+    row.className = "conv" + (c.id === currentConvId ? " active" : "");
+    row.innerHTML = `<span class="t" title="${esc(c.title || "")}">${esc(c.title || "Hội thoại")}</span><span class="del" title="Xóa">🗑</span>`;
+    row.querySelector(".t").onclick = () => loadConversation(c.id);
+    row.querySelector(".del").onclick = (e) => { e.stopPropagation(); deleteConversation(c.id); };
+    convListEl.appendChild(row);
+  }
+}
+
+async function loadConversation(id) {
+  if (busy) return;
+  try {
+    const c = await api("/api/coworker/agent/conversations/" + id);
+    messages = c.messages || [];
+    currentConvId = c.id;
+    routedSkillId = c.skill_id || null;
+    if (c.skill_id) skillSel.value = "auto";      // hiển thị skill đã dùng qua banner
+    if (c.folder_id) {
+      const opt = [...folderSel.options].find(o => o.value === c.folder_id);
+      if (opt) folderSel.value = c.folder_id;
+    }
+    updateSkillBanner();
+    renderTranscript();
+    loadConversations();   // cập nhật highlight
+  } catch (e) { alert("Không mở được hội thoại: " + e.message); }
+}
+
+async function deleteConversation(id) {
+  if (!confirm("Xóa hội thoại này?")) return;
+  try {
+    await api("/api/coworker/agent/conversations/" + id, { method: "DELETE" });
+    if (id === currentConvId) newChat();
+    loadConversations();
+  } catch (e) { alert("Không xóa được: " + e.message); }
+}
+
+function newChat() {
+  if (busy) return;
+  messages = [];
+  currentConvId = null;
+  routedSkillId = null;
+  logEl.innerHTML = '<div class="hint">Chat mới. Nhắn yêu cầu để bắt đầu.</div>';
+  updateSkillBanner();
+  loadConversations();
+}
+
+// Lưu hội thoại sau mỗi lượt (upsert vào DB)
+async function autoSave() {
+  if (!messages.length) return;
+  try {
+    const r = await api("/api/coworker/agent/conversations", {
+      method: "POST",
+      body: { id: currentConvId, folder_id: folderSel.value || null,
+              skill_id: currentSkillId(), messages },
+    });
+    const isNew = !currentConvId;
+    currentConvId = r.id;
+    if (isNew) loadConversations();
+  } catch (_) { /* không chặn UX nếu lưu lỗi */ }
+}
+
+// ── Skills ───────────────────────────────────────────────
+async function loadSkills() {
+  try {
+    const data = await api("/api/coworker/agent/skills");
+    skillCatalog = data.skills || [];
+    for (const s of skillCatalog) {
+      const opt = document.createElement("option");
+      opt.value = s.id; opt.textContent = "🧩 " + s.name;
+      opt.title = s.description || "";
+      skillSel.appendChild(opt);
+    }
+  } catch (_) { /* không chặn nếu lỗi */ }
+}
+
+function skillNameById(id) {
+  const s = skillCatalog.find(x => x.id === id);
+  return s ? s.name : id;
+}
+
+// skill_id sẽ gửi kèm mỗi /step
+function currentSkillId() {
+  const v = skillSel.value;
+  if (v === "auto") return routedSkillId;
+  if (v === "") return null;
+  return v;
+}
+
+function updateSkillBanner() {
+  const v = skillSel.value;
+  if (v === "auto") {
+    skillBanner.innerHTML = routedSkillId
+      ? `→ <span class="ok">Đang dùng: ${esc(skillNameById(routedSkillId))}</span> (tự động)`
+      : '<span style="color:var(--muted)">sẽ tự chọn khi bạn nhắn</span>';
+  } else if (v === "") {
+    skillBanner.innerHTML = '<span style="color:var(--muted)">không áp dụng skill</span>';
+  } else {
+    skillBanner.innerHTML = `→ <span class="ok">Đang dùng: ${esc(skillNameById(v))}</span> (chọn tay)`;
+  }
+}
+
+// Auto-route ở tin nhắn đầu khi đang ở chế độ "auto"
+async function maybeRoute() {
+  if (skillSel.value !== "auto" || routedSkillId) return;
+  try {
+    const r = await api("/api/coworker/agent/route", { method: "POST", body: { messages } });
+    if (r.skill_id) {
+      routedSkillId = r.skill_id;
+      updateSkillBanner();
+    }
+  } catch (_) { /* bỏ qua, chạy không skill */ }
+}
+
+// ── Render ───────────────────────────────────────────────
+function el(cls, html) { const d = document.createElement("div"); d.className = cls; if (html != null) d.innerHTML = html; return d; }
+function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function scrollDown() { logEl.scrollTop = logEl.scrollHeight; }
+
+function renderDiff(diff) {
+  return esc(diff).split("\n").map(l => {
+    if (l.startsWith("+")) return `<span class="diff-add">${l}</span>`;
+    if (l.startsWith("-")) return `<span class="diff-del">${l}</span>`;
+    if (l.startsWith("@@") || l.startsWith("+++") || l.startsWith("---")) return `<span class="diff-hdr">${l}</span>`;
+    return l;
+  }).join("\n");
+}
+
+// Vẽ lại toàn bộ transcript từ `messages`
+function renderTranscript() {
+  logEl.innerHTML = "";
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (m.content.startsWith("OBSERVATION:")) {
+        const body = m.content.slice("OBSERVATION:".length).trim();
+        const s = el("step", `<div class="head">📄 Kết quả (bấm để xem)</div><pre style="display:none">${esc(body)}</pre>`);
+        s.querySelector(".head").onclick = () => { const p = s.querySelector("pre"); p.style.display = p.style.display === "none" ? "block" : "none"; };
+        logEl.appendChild(s);
+      } else if (m.content.startsWith("LỖI") || m.content.startsWith("[Người dùng từ chối")) {
+        logEl.appendChild(el("step", `<span class="head">${esc(m.content)}</span>`));
+      } else {
+        logEl.appendChild(el("msg user", esc(m.content)));
+      }
+    } else if (m.role === "assistant") {
+      let parsed = null; try { parsed = JSON.parse(m.content); } catch (_) {
+        const mt = m.content.match(/\{[\s\S]*\}/); if (mt) try { parsed = JSON.parse(mt[0]); } catch (__) {}
+      }
+      if (parsed && parsed.action === "final") {
+        logEl.appendChild(el("msg answer", esc(parsed.args?.answer || parsed.args?.message || "")));
+      } else if (parsed && parsed.action) {
+        const thought = parsed.thought ? `<div class="thought">${esc(parsed.thought)}</div>` : "";
+        logEl.appendChild(el("step", `${thought}<div><span class="tool">⚙ ${esc(parsed.action)}</span> <span style="color:var(--muted)">${esc(JSON.stringify(parsed.args || {}).slice(0, 200))}</span></div>`));
+      } else {
+        logEl.appendChild(el("msg answer", esc(m.content)));
+      }
+    }
+  }
+}
+
+function renderConfirm(pending) {
+  const p = pending.preview || {};
+  const card = el("confirm");
+  if (p.kind === "write_file") {
+    card.innerHTML = `<h3>✍️ Đề xuất ghi file ${p.is_new ? "(tạo mới)" : ""}</h3>
+      <div class="meta">${esc(p.path)}</div>
+      <pre>${p.diff ? renderDiff(p.diff) : esc(p.new_content || "")}</pre>`;
+  } else if (p.kind === "exec") {
+    card.innerHTML = `<h3>▶️ Đề xuất chạy lệnh</h3>
+      <div class="meta">$ ${esc(p.command)}${p.cwd ? "   (cwd: " + esc(p.cwd) + ")" : ""}</div>`;
+  } else {
+    card.innerHTML = `<h3>Xác nhận hành động</h3><div class="meta">${esc(JSON.stringify(pending.args))}</div>`;
+  }
+  const actions = el("actions");
+  const ok = document.createElement("button"); ok.className = "primary"; ok.textContent = "✓ Duyệt & chạy";
+  const no = document.createElement("button"); no.className = "danger"; no.textContent = "✕ Từ chối";
+  ok.onclick = () => { card.remove(); approve(pending); };
+  no.onclick = () => { card.remove(); reject(); };
+  actions.appendChild(ok); actions.appendChild(no);
+  card.appendChild(actions);
+  logEl.appendChild(card);
+  scrollDown();
+}
+
+// ── Agent flow (single-step loop, client tự lặp để thấy progress trực tiếp) ──
+const MAX_TURN_STEPS = 40;     // chặn lặp vô hạn mỗi lượt người dùng
+let stepCount = 0;
+
+function setBusy(b) {
+  busy = b; sendBtn.disabled = b; inputEl.disabled = b;
+  sendBtn.innerHTML = b ? '<span class="spin"></span>' : "Gửi";
+}
+
+function showThinking(on) {
+  let t = document.getElementById("thinking");
+  if (on && !t) {
+    t = el("step", '<span class="head"><span class="spin"></span> agent đang suy nghĩ…</span>');
+    t.id = "thinking"; logEl.appendChild(t); scrollDown();
+  } else if (!on && t) { t.remove(); }
+}
+
+function autoApprove() { return document.getElementById("autoApprove").checked; }
+
+// Bắt đầu một lượt: reset bộ đếm, set busy, rồi lặp
+function startTurn(extra) { stepCount = 0; setBusy(true); drive(extra); }
+
+async function drive(extra = {}) {
+  const folderId = folderSel.value;
+  if (!folderId) { alert("Hãy chọn folder trước."); setBusy(false); return; }
+  showThinking(true);
+  try {
+    const data = await api("/api/coworker/agent/step", {
+      method: "POST",
+      body: { folder_id: folderId, messages, skill_id: currentSkillId(), ...extra },
+    });
+    messages = data.messages || messages;
+    showThinking(false);
+    renderTranscript();
+    scrollDown();
+
+    if (data.status === "step") {
+      if (++stepCount < MAX_TURN_STEPS) return drive();      // còn việc → chạy tiếp
+      logEl.appendChild(el("step", '<span class="head">⚠ Đạt giới hạn số bước cho lượt này.</span>'));
+    } else if (data.status === "awaiting_confirmation") {
+      if (autoApprove()) {                                    // ⚡ tự duyệt
+        return drive({ approved: { action: data.pending.action, args: data.pending.args } });
+      }
+      renderConfirm(data.pending);                            // hỏi tay → dừng lặp
+    }
+    // status "done" → dừng
+  } catch (e) {
+    showThinking(false);
+    logEl.appendChild(el("step", `<span class="head" style="color:var(--red)">⚠ ${esc(e.message)}</span>`));
+    scrollDown();
+  }
+  await autoSave();   // lưu hội thoại vào DB sau mỗi lượt
+  setBusy(false);
+}
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text || busy) return;
+  messages.push({ role: "user", content: text });
+  inputEl.value = "";
+  renderTranscript();
+  setBusy(true);
+  await maybeRoute();          // tự chọn skill theo ngữ cảnh (chỉ lần đầu, chế độ auto)
+  startTurn();
+}
+
+function approve(pending) {
+  startTurn({ approved: { action: pending.action, args: pending.args } });
+}
+
+function reject() {
+  messages.push({ role: "user", content: "[Người dùng từ chối hành động vừa rồi] Hãy thử cách khác hoặc giải thích thay vì thực hiện." });
+  renderTranscript();
+  startTurn();
+}
+
+// ── Events ───────────────────────────────────────────────
+sendBtn.onclick = sendMessage;
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+skillSel.addEventListener("change", updateSkillBanner);
+newChatBtn.onclick = newChat;
+loadFolders();
+loadSkills().then(updateSkillBanner);
+loadConversations();
+</script>
+</body>
+</html>

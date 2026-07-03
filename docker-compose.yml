@@ -21,6 +21,10 @@ services:
       - OLLAMA_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
       - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT:-120}
+      # Coworker Host Service — chạy native trên host (bash coworker_host/run.sh),
+      # cho tính năng Co-work đọc/sửa file & chạy lệnh ngoài Docker
+      - COWORKER_URL=${COWORKER_URL:-http://host.docker.internal:8765}
+      - COWORKER_TIMEOUT=${COWORKER_TIMEOUT:-30}
       - MAX_SCANS_PER_PROJECT=${MAX_SCANS_PER_PROJECT:-5}
       - APP_ENV=${APP_ENV:-production}
     # Cần extra_hosts để container resolve host.docker.internal trên Linux

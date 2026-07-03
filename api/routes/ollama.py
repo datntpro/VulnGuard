@@ -28,6 +28,14 @@ def get_active_model() -> str:
     return _active_model or settings.ollama_model
 
 
+# Vision model (đọc ảnh trong tài liệu) — riêng với model text
+_active_vision_model: Optional[str] = None
+
+
+def get_active_vision_model() -> str:
+    return _active_vision_model or settings.ollama_vision_model
+
+
 class PullRequest(BaseModel):
     model: str
 
@@ -147,6 +155,38 @@ async def set_active_model(payload: SetModelRequest):
     os.environ["OLLAMA_MODEL"] = model
 
     return {"message": f"Đã đổi active model thành '{model}'", "active_model": model}
+
+
+@router.get("/vision-model")
+async def get_vision_model():
+    """Vision model hiện tại + danh sách model đã cài (để UI chọn)."""
+    installed = []
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            r = await client.get(f"{OLLAMA_URL}/api/tags")
+            installed = [m["name"] for m in r.json().get("models", [])]
+    except Exception:
+        pass
+    return {"vision_model": get_active_vision_model(), "installed": installed}
+
+
+@router.put("/vision-model")
+async def set_vision_model(payload: SetModelRequest):
+    """Đổi vision model dùng để đọc ảnh/sơ đồ trong tài liệu."""
+    global _active_vision_model
+    model = payload.model.strip()
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            r = await client.get(f"{OLLAMA_URL}/api/tags")
+            installed = [m["name"] for m in r.json().get("models", [])]
+            if model not in installed:
+                raise HTTPException(status_code=400, detail=f"Vision model '{model}' chưa được pull. Hãy pull trước.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Không kết nối được Ollama: {e}")
+    _active_vision_model = model
+    return {"message": f"Đã đổi vision model thành '{model}'", "vision_model": model}
 
 
 # Expose active model cho scanner dùng

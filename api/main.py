@@ -6,10 +6,13 @@ import os
 
 from api.config import settings as app_settings
 from api.database import Base, engine
-from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains
-# domain_models phải được import trước create_all() để SQLAlchemy đăng ký
-# bảng domains/domain_crawls/crawl_endpoints (module riêng, tách khỏi models.py)
+from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
+# domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
+# đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
 from api import domain_models  # noqa: F401
+from api import docreview_models  # noqa: F401
+from api import file_assistant_models  # noqa: F401
+from api import agent_conversation_models  # noqa: F401
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -88,6 +91,37 @@ def _cleanup_stale_scans():
 
 _cleanup_stale_scans()
 
+
+def _cleanup_stale_doc_reviews():
+    """Giống _cleanup_stale_scans — reset các Document Review đang RUNNING/PENDING
+    về FAILED khi app restart (background task bị kill đột ngột)."""
+    from api.database import SessionLocal
+    from api.docreview_models import DocumentVersion, ReviewStatus
+    from datetime import datetime
+
+    db = SessionLocal()
+    try:
+        stale = db.query(DocumentVersion).filter(
+            DocumentVersion.review_status.in_([ReviewStatus.RUNNING, ReviewStatus.PENDING])
+        ).all()
+        if stale:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"[Startup] Tìm thấy {len(stale)} document review bị treo — reset về FAILED")
+            for v in stale:
+                v.review_status = ReviewStatus.FAILED
+                v.review_error = "Review bị gián đoạn do container restart. Vui lòng review lại."
+                v.review_completed_at = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Startup] Cleanup doc review lỗi: {e}")
+    finally:
+        db.close()
+
+
+_cleanup_stale_doc_reviews()
+
 app = FastAPI(
     title="VulnGuard API",
     description="Local DevSecOps Security Scanner với AI Analysis",
@@ -116,6 +150,10 @@ app.include_router(ollama.router)
 app.include_router(settings.router)
 app.include_router(report.router)
 app.include_router(domains.router)
+app.include_router(coworker.router)
+app.include_router(coworker_agent.router)
+app.include_router(docreview.router)
+app.include_router(file_assistant.router)
 
 
 @app.get("/api/health")

@@ -80,6 +80,19 @@ Ollama chạy trực tiếp trên máy host — **không gửi data ra ngoài in
 
 ---
 
+## 🧑‍💻 Co-work (AI sửa code)
+
+Tính năng AI coding assistant — đọc/sửa file, sinh diff đề xuất bằng Ollama, chạy lệnh trong sandbox. Khác với Scan Engine (chỉ đọc SCAN_WORKSPACE đã mount vào Docker), Co-work cần đọc/sửa **bất kỳ folder nào trên máy host**, nên chạy qua 1 service riêng:
+
+```bash
+# Chạy 1 lần trên máy host (không phải trong Docker), giữ chạy nền:
+bash coworker_host/run.sh
+```
+
+Sau đó vào Web UI → **Co-work** → "+ Thêm Folder", nhập absolute path trên host. Mọi đọc/ghi/exec đều giới hạn trong các folder đã cấp quyền, có whitelist lệnh + bắt buộc xác nhận cho lệnh lạ, và backup `.vulnguard.bak` trước khi ghi đè. Production systemd template: `install/coworker_host.service.template`.
+
+---
+
 ## 🛠️ Scanner Tools tích hợp
 
 | Tool | Loại | Ngôn ngữ / Scope |
@@ -136,6 +149,14 @@ Ollama chạy trực tiếp trên máy host — **không gửi data ra ngoài in
 - **AI Model**: Quản lý Ollama models, đổi model active
 - Export: JSON, CSV, HTML report
 
+### 📑 Document Review
+- Review tài liệu **SRS/FRS/BRD**, **Architecture (HLD/LLD)**, **API/DB Schema** — chấm theo checklist dựa trên **OWASP ASVS/SAMM**
+- Upload file `.pdf` / `.docx` / `.md` / `.txt`, AI local (Ollama) đọc và đánh giá từng tiêu chí: **Đã đáp ứng / Một phần / Chưa đáp ứng / Không áp dụng**, kèm evidence trích từ tài liệu + gợi ý bổ sung
+- **Versioning**: mỗi lần upload bản mới tạo version tiếp theo, giữ lại toàn bộ lịch sử (không rolling)
+- **Gửi lại bên viết tài liệu**: đính kèm ghi chú yêu cầu sửa, track trạng thái `UPLOADED → SENT_FOR_REVISION → ACCEPTED`
+- **Compare 2 version**: xem tiêu chí nào cải thiện / regress / vẫn chưa đáp ứng
+- Xuất báo cáo HTML để gửi email cho author tài liệu
+
 ---
 
 ## 📁 Cấu trúc Project
@@ -160,10 +181,17 @@ VulnGuard/
 │       ├── compare.py          # Scan comparison, approve check
 │       ├── report.py           # AI HTML report generator
 │       ├── settings.py         # Scanner health check, enable/disable
-│       └── ollama.py           # Ollama model management
+│       ├── ollama.py           # Ollama model management
+│       └── docreview.py        # Document Review API (upload, review, versioning)
+│   ├── docreview_models.py     # DB models: Document, DocumentVersion, ReviewFinding
+│   └── docreview_schemas.py    # Pydantic schemas cho Document Review
 ├── scanner/
 │   ├── orchestrator.py         # Chạy song song, live callback, dedup
 │   ├── ai_analyzer.py          # Ollama integration, tiếng Việt
+│   ├── doc_checklist.py        # Checklist OWASP ASVS/SAMM theo loại tài liệu
+│   ├── doc_extractor.py        # Extract text từ PDF/DOCX/MD/TXT
+│   ├── doc_reviewer.py         # AI review tài liệu qua Ollama
+│   ├── doc_review_report.py    # HTML report cho Document Review
 │   └── scanners/
 │       ├── base.py             # BaseScanner abstract class
 │       ├── sast.py             # Semgrep (bundled rules + online), Bandit
@@ -177,7 +205,8 @@ VulnGuard/
 │   └── index.html              # Single-page Web Dashboard
 └── storage/                    # Persistent data (Docker volume)
     ├── db/                     # SQLite database
-    └── scanner_config.json     # Scanner enable/disable config
+    ├── scanner_config.json     # Scanner enable/disable config
+    └── documents/              # File tài liệu Document Review (không commit)
 ```
 
 ---
@@ -220,6 +249,22 @@ GET    /api/ollama/health                      Kiểm tra Ollama
 GET    /api/ollama/models                      Danh sách models
 POST   /api/ollama/pull                        Pull model mới
 PUT    /api/ollama/active-model                Đổi model active
+
+# Document Review
+GET    /api/docreview/doc-types                Danh sách loại tài liệu + checklist
+GET    /api/docreview/documents                Danh sách tài liệu
+POST   /api/docreview/documents                Tạo tài liệu mới (upload version 1)
+GET    /api/docreview/documents/{id}           Chi tiết tài liệu (kèm version mới nhất)
+DELETE /api/docreview/documents/{id}           Xóa tài liệu + toàn bộ version/file
+GET    /api/docreview/documents/{id}/versions  Lịch sử version
+GET    /api/docreview/documents/{id}/compare   So sánh 2 version (improved/regressed)
+POST   /api/docreview/documents/{id}/versions  Upload version mới
+GET    /api/docreview/versions/{id}            Chi tiết version + findings
+POST   /api/docreview/versions/{id}/review     (Re)trigger AI review
+GET    /api/docreview/versions/{id}/progress   Poll trạng thái review
+PATCH  /api/docreview/versions/{id}/send-back  Gửi lại bên viết tài liệu (kèm note)
+PATCH  /api/docreview/versions/{id}/accept     Chấp nhận tài liệu
+GET    /api/docreview/versions/{id}/export     Xuất báo cáo HTML
 
 # Swagger UI: http://localhost:8080/docs
 ```

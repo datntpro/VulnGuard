@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     ollama_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "llama3.2"  # Phải khớp với OLLAMA_MODEL trong .env
     ollama_timeout: int = 120
+    # Vision model — đọc/mô tả ảnh (sơ đồ) nhúng trong tài liệu .docx/.pdf.
+    # Cần model hỗ trợ ảnh: ollama pull llama3.2-vision (hoặc llava, qwen2.5vl).
+    ollama_vision_model: str = "llama3.2-vision"
+    doc_max_images: int = 10  # số ảnh tối đa phân tích mỗi tài liệu (tránh quá chậm)
+    # Coworker Host Service — service nhỏ chạy native trên host (giống Ollama),
+    # cho phép tính năng Co-work đọc/sửa file & chạy lệnh ở folder ngoài Docker.
+    # Xem coworker_host/app.py + coworker_host/run.sh
+    coworker_url: str = "http://host.docker.internal:8765"
+    coworker_timeout: int = 30
     max_scans_per_project: int = 5
     max_crawls_per_domain: int = 5   # rolling — giống max_scans_per_project, cho domain sitemap crawl
     block_severity_threshold: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"] = "HIGH"

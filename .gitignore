@@ -35,6 +35,9 @@ storage/reports/*.csv
 # Scanner config (generated at runtime)
 storage/scanner_config.json
 
+# Document Review — file tài liệu user upload (lưu local, không commit)
+storage/documents/
+
 # Archives
 *.zip
 *.tar.gz

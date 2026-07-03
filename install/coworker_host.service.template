@@ -1,0 +1,23 @@
+[Unit]
+Description=VulnGuard Coworker Host Service (native, for Co-work feature — reads/edits files outside Docker)
+After=network.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
+WorkingDirectory=__PROJECT_DIR__
+Environment=COWORKER_DATA_DIR=__SERVICE_HOME__/.vulnguard_coworker
+ExecStart=__PROJECT_DIR__/.coworker_venv/bin/uvicorn coworker_host.app:app --host 127.0.0.1 --port __COWORKER_HOST_PORT__
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:__PROJECT_DIR__/storage/coworker_host.log
+StandardError=append:__PROJECT_DIR__/storage/coworker_host.error.log
+
+# Hardening cơ bản — không quá chặt vì service cần exec subprocess trong
+# các folder người dùng tự cấp quyền
+NoNewPrivileges=false
+ProtectSystem=false
+
+[Install]
+WantedBy=multi-user.target

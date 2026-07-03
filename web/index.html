@@ -154,6 +154,8 @@
   <div class="nav-item" onclick="navigate('scans')" id="nav-scans">🔍 Scans</div>
   <div class="nav-item" onclick="navigate('compare')" id="nav-compare">🔀 Compare</div>
   <div class="nav-item" onclick="navigate('domains')" id="nav-domains">🌐 Domains</div>
+  <div class="nav-item" onclick="navigate('docreview')" id="nav-docreview">📑 Document Review</div>
+  <div class="nav-item" onclick="navigate('coworker')" id="nav-coworker">🧑‍💻 Co-work</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings">⚙️ Settings</div>
   <div class="sidebar-footer">
     Powered by <a href="https://1vision.work" target="_blank">1VISION</a>
@@ -289,7 +291,156 @@
     </div>
   </div>
 
+  <!-- DOCUMENT REVIEW — LIST PAGE -->
+  <div class="page" id="page-docreview">
+    <div class="flex-between mb-16">
+      <h1>📑 Document Review — An toàn thông tin</h1>
+      <button class="btn btn-primary" onclick="openCreateDocReview()">+ Tải tài liệu mới</button>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      Upload tài liệu phát triển hệ thống (SRS/FRS/BRD, thiết kế kiến trúc, đặc tả API/DB schema) —
+      AI local (Ollama) sẽ đối chiếu với checklist OWASP ASVS và chỉ ra điểm đã/chưa đáp ứng về an toàn
+      thông tin, để gửi lại bên viết tài liệu cập nhật. Hỗ trợ lưu nhiều version theo thời gian.
+    </div>
+    <div id="docreview-list">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- DOCUMENT REVIEW — DETAIL PAGE -->
+  <div class="page" id="page-docreview-detail">
+    <div class="flex mb-16">
+      <button class="btn btn-ghost btn-sm" onclick="navigate('docreview')">← Về Document Review</button>
+    </div>
+    <div class="flex-between mb-16">
+      <h1 id="docreview-detail-title">Tài liệu</h1>
+      <div class="flex">
+        <button class="btn btn-ghost btn-sm" onclick="openUploadVersion()">⬆ Upload version mới</button>
+      </div>
+    </div>
+    <div id="docreview-detail-content">
+      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    </div>
+  </div>
+
   <!-- SETTINGS PAGE -->
+  <!-- CO-WORK PAGE -->
+  <div class="page" id="page-coworker">
+    <div class="flex-between mb-16">
+      <h1>🧑‍💻 Co-work</h1>
+      <div class="flex">
+        <select id="cw-folder-select" onchange="cwSelectFolder(this.value)" style="width:260px;"></select>
+        <button class="btn btn-ghost btn-sm" onclick="cwOpenAddFolder()">+ Thêm Folder</button>
+        <button class="btn btn-ghost btn-sm" onclick="cwRefreshHealth()">🔄</button>
+        <a class="btn btn-sm" href="/static/agent.html" target="_blank" style="text-decoration:none;">🤖 Mở Agent</a>
+      </div>
+    </div>
+
+    <div id="cw-health-bar" class="notice" style="display:none;"></div>
+
+    <div id="cw-empty-state" class="empty-state" style="display:none;">
+      <div class="icon">📂</div>
+      <p>Chưa có folder nào được cấp quyền cho Co-work.</p>
+      <p class="text-sm" style="margin-top:6px;">
+        Service <span class="text-mono">coworker_host</span> chạy native trên máy host để có thể đọc/sửa
+        bất kỳ folder nào — không bị giới hạn trong SCAN_WORKSPACE của Docker.
+      </p>
+      <button class="btn btn-primary mt-16" onclick="cwOpenAddFolder()">+ Cấp quyền Folder đầu tiên</button>
+    </div>
+
+    <div id="cw-main" style="display:none;grid-template-columns:260px 1fr;gap:16px;" class="grid2">
+      <!-- File tree -->
+      <div class="card" style="padding:12px;">
+        <div class="flex-between" style="margin-bottom:8px;">
+          <h2 style="margin-bottom:0;">Files</h2>
+          <button class="btn btn-ghost btn-sm" onclick="cwLoadTree(cwState.currentPath)" title="Refresh">🔄</button>
+        </div>
+        <div id="cw-breadcrumb" class="text-sm" style="margin-bottom:8px;word-break:break-all;"></div>
+        <div id="cw-tree" style="max-height:60vh;overflow-y:auto;font-size:13px;"></div>
+      </div>
+
+      <!-- Editor + AI + Exec -->
+      <div>
+        <div class="card" id="cw-editor-card" style="display:none;">
+          <div class="flex-between" style="margin-bottom:8px;">
+            <h2 id="cw-file-title" style="margin-bottom:0;">—</h2>
+            <span class="text-sm" id="cw-file-meta"></span>
+          </div>
+          <textarea id="cw-file-content" rows="16" class="text-mono" readonly style="white-space:pre;overflow:auto;"></textarea>
+
+          <div class="separator"></div>
+          <label>Yêu cầu sửa file (AI sẽ dùng model Ollama đang active ở Settings)</label>
+          <textarea id="cw-instruction" rows="3" placeholder="Ví dụ: Thêm validate input cho hàm parse_url, tránh path traversal..."></textarea>
+          <div class="flex mt-16">
+            <button class="btn btn-primary" onclick="cwSuggest()" id="cw-suggest-btn">✨ Gợi ý sửa (AI)</button>
+            <span id="cw-suggest-status" class="text-sm"></span>
+          </div>
+
+          <div id="cw-diff-box" style="display:none;" class="mt-16">
+            <div class="separator"></div>
+            <h2>Diff đề xuất <span class="text-sm" id="cw-diff-model"></span></h2>
+            <div class="code-block" id="cw-diff-content" style="max-height:340px;"></div>
+            <div class="flex mt-16">
+              <button class="btn btn-primary" onclick="cwApplySuggestion()">✅ Áp dụng</button>
+              <button class="btn btn-ghost" onclick="cwRejectSuggestion()">✖ Hủy</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="cw-empty-file-hint">
+          <div class="empty-state" style="padding:30px 20px;">Chọn 1 file ở cây bên trái để xem nội dung và sửa với AI.</div>
+        </div>
+
+        <!-- Exec runner -->
+        <div class="card">
+          <h2>⚡ Chạy lệnh (sandbox trong folder đã chọn)</h2>
+          <div class="notice" style="margin-bottom:12px;">
+            Lệnh nằm trong whitelist (git, npm, python, pytest, make...) chạy trực tiếp. Lệnh khác sẽ hỏi xác nhận trước khi chạy.
+          </div>
+          <div class="flex">
+            <input id="cw-exec-cmd" placeholder="Ví dụ: pytest -q  hoặc  git status" style="flex:1;" onkeydown="if(event.key==='Enter')cwExec()">
+            <button class="btn btn-primary" onclick="cwExec()">Run</button>
+          </div>
+          <div id="cw-exec-confirm" style="display:none;margin-top:10px;" class="approve-blocked">
+            <span id="cw-exec-confirm-msg"></span>
+            <button class="btn btn-danger btn-sm" style="margin-left:10px;" onclick="cwExec(true)">Xác nhận chạy</button>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cw-exec-confirm').style.display='none'">Hủy</button>
+          </div>
+          <div id="cw-exec-output" class="code-block" style="display:none;margin-top:10px;max-height:260px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Folder Modal -->
+  <div class="modal-overlay" id="cw-add-folder-modal">
+    <div class="modal" style="width:520px;">
+      <div class="modal-header">
+        <strong>Cấp quyền Folder cho Co-work</strong>
+        <span style="cursor:pointer;" onclick="document.getElementById('cw-add-folder-modal').classList.remove('open')">✖</span>
+      </div>
+      <div class="modal-body">
+        <div class="notice">
+          Path tuyệt đối TRÊN MÁY HOST chạy coworker_host (không phải path trong container).
+          Ví dụ: <span class="text-mono">/Users/you/projects/my-app</span>
+        </div>
+        <div class="form-group">
+          <label>Folder path</label>
+          <input id="cw-add-folder-path" placeholder="/Users/you/projects/my-app">
+        </div>
+        <div class="form-group">
+          <label>Label (tùy chọn)</label>
+          <input id="cw-add-folder-label" placeholder="my-app">
+        </div>
+        <div id="cw-add-folder-error" class="text-sm" style="color:var(--critical);"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="document.getElementById('cw-add-folder-modal').classList.remove('open')">Hủy</button>
+        <button class="btn btn-primary" onclick="cwAddFolder()">Cấp quyền</button>
+      </div>
+    </div>
+  </div>
+
   <div class="page" id="page-settings">
     <h1>Settings</h1>
 
@@ -314,6 +465,25 @@
       <div id="active-model-msg" style="font-size:13px;margin-top:8px;"></div>
     </div>
 
+    <!-- Vision Model -->
+    <div class="card">
+      <h2>🖼️ Vision model (đọc ảnh/sơ đồ trong tài liệu)</h2>
+      <div class="notice" style="margin-bottom:12px;">
+        Khi Co-work Agent đọc tài liệu .docx/.pdf, ảnh & sơ đồ nhúng sẽ được mô tả bằng vision model này.
+        Cần model hỗ trợ ảnh — pull ở mục dưới, ví dụ: <span class="text-mono">llama3.2-vision</span>, <span class="text-mono">llava</span>, <span class="text-mono">qwen2.5vl</span>.
+      </div>
+      <div class="flex" style="gap:10px;align-items:flex-end;">
+        <div style="flex:1;">
+          <label>Vision model</label>
+          <select id="vision-model-select" onchange="setVisionModel()">
+            <option value="">— Chưa có model nào —</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="setVisionModel()">Áp dụng</button>
+      </div>
+      <div id="vision-model-msg" style="font-size:13px;margin-top:8px;"></div>
+    </div>
+
     <!-- Pull Model -->
     <div class="card">
       <h2>📥 Pull Model mới</h2>
@@ -331,6 +501,8 @@
         <button class="btn btn-ghost btn-sm" onclick="setPullModel('codellama:7b')">codellama:7b (~4GB)</button>
         <button class="btn btn-ghost btn-sm" onclick="setPullModel('mistral:7b-instruct')">mistral:7b-instruct (~4GB)</button>
         <button class="btn btn-ghost btn-sm" onclick="setPullModel('phi3:mini')">phi3:mini (~2GB) 🪶 Nhẹ</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('llama3.2-vision')">llama3.2-vision (~8GB) 🖼️ Ảnh</button>
+        <button class="btn btn-ghost btn-sm" onclick="setPullModel('llava')">llava (~4.5GB) 🖼️ Ảnh</button>
       </div>
 
       <div class="flex" style="gap:8px;">
@@ -578,6 +750,59 @@
   </div>
 </div>
 
+<!-- Document Review — Create Document Modal -->
+<div class="modal-overlay" id="create-docreview-modal">
+  <div class="modal" style="max-width:540px;">
+    <div class="modal-header"><strong>Tải tài liệu mới</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('create-docreview-modal').classList.remove('open')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Tên tài liệu *</label><input id="new-doc-name" placeholder="SRS - Hệ thống thanh toán"></div>
+      <div class="form-group">
+        <label>Loại tài liệu *</label>
+        <select id="new-doc-type"></select>
+      </div>
+      <div class="form-group"><label>Mô tả</label><input id="new-doc-desc" placeholder="Ghi chú thêm (tùy chọn)"></div>
+      <div class="form-group"><label>File tài liệu * (.pdf, .docx, .md, .txt — tối đa 25MB)</label><input type="file" id="new-doc-file" accept=".pdf,.docx,.md,.txt"></div>
+      <label style="display:flex;align-items:center;gap:6px;width:auto;"><input type="checkbox" id="new-doc-auto-review" checked style="width:auto;"> Tự động review bằng AI ngay sau khi upload</label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('create-docreview-modal').classList.remove('open')">Hủy</button>
+      <button class="btn btn-primary" id="create-doc-btn" onclick="createDocReview()">Tải lên</button>
+    </div>
+  </div>
+</div>
+
+<!-- Document Review — Upload New Version Modal -->
+<div class="modal-overlay" id="upload-version-modal">
+  <div class="modal" style="max-width:480px;">
+    <div class="modal-header"><strong>Upload version mới</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('upload-version-modal').classList.remove('open')">✕</button></div>
+    <div class="modal-body">
+      <div class="notice">Dùng khi bên viết tài liệu đã cập nhật sau khi nhận ghi chú review. Version mới sẽ được tự động AI review.</div>
+      <div class="form-group"><label>File tài liệu * (.pdf, .docx, .md, .txt)</label><input type="file" id="new-version-file" accept=".pdf,.docx,.md,.txt"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('upload-version-modal').classList.remove('open')">Hủy</button>
+      <button class="btn btn-primary" id="upload-version-btn" onclick="uploadNewVersion()">Tải lên</button>
+    </div>
+  </div>
+</div>
+
+<!-- Document Review — Send Back Modal -->
+<div class="modal-overlay" id="send-back-modal">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-header"><strong>Gửi lại bên viết tài liệu</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('send-back-modal').classList.remove('open')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Ghi chú yêu cầu cập nhật *</label>
+        <textarea id="send-back-note" rows="5" placeholder="Vd: Bổ sung mục mã hóa dữ liệu PII (V8.1), nêu rõ cơ chế MFA cho tài khoản admin (V2.1)..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('send-back-modal').classList.remove('open')">Hủy</button>
+      <button class="btn btn-primary" onclick="submitSendBack()">Gửi lại</button>
+    </div>
+  </div>
+</div>
+
 <!-- Crawl Options Modal -->
 <div class="modal-overlay" id="crawl-modal">
   <div class="modal" style="max-width:560px;">
@@ -648,6 +873,10 @@ let pollInterval = null;
 let currentDomainId = null;
 let currentCrawlId = null;
 let domainPollInterval = null;
+let currentDocId = null;
+let currentDocVersionId = null;
+let docReviewPollInterval = null;
+let docTypesCache = null;
 
 // ─── Navigation ───────────────────────────────────────────────
 function navigate(page) {
@@ -656,11 +885,11 @@ function navigate(page) {
   document.getElementById('page-' + page).classList.add('active');
 
   // Sub-pages (vd. domain-crawls) không có nav item riêng — highlight nav cha thay vào đó
-  const navParent = { 'domain-crawls': 'domains' }[page] || page;
+  const navParent = { 'domain-crawls': 'domains', 'docreview-detail': 'docreview' }[page] || page;
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail };
   if (loaders[page]) loaders[page]();
 }
 
@@ -2024,6 +2253,7 @@ async function loadInstalledModels() {
   } catch(e) {
     el.innerHTML = `<p class="text-sm" style="color:var(--critical)">Lỗi: ${e.message}</p>`;
   }
+  loadVisionModel();
 }
 
 async function setActiveModel() {
@@ -2037,6 +2267,39 @@ async function setActiveModel() {
     msg.textContent = `✅ Đã đổi active model thành "${model}"`;
     loadInstalledModels();
     loadOllamaStatus();
+  } catch(e) {
+    msg.style.color = 'var(--critical)';
+    msg.textContent = '❌ ' + e.message;
+  }
+}
+
+async function loadVisionModel() {
+  const sel = document.getElementById('vision-model-select');
+  if (!sel) return;
+  try {
+    const data = await api('/api/ollama/vision-model');
+    const installed = data.installed || [];
+    const cur = data.vision_model;
+    const opts = installed.length ? installed : (cur ? [cur] : []);
+    sel.innerHTML = opts.length
+      ? opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>${n}</option>`).join('')
+      : '<option value="">— Chưa có model nào —</option>';
+    // nếu vision model cấu hình chưa được pull, vẫn hiển thị để biết
+    if (cur && !installed.includes(cur)) {
+      sel.insertAdjacentHTML('afterbegin', `<option value="${cur}" selected>${cur} (chưa pull)</option>`);
+    }
+  } catch(e) { /* bỏ qua */ }
+}
+
+async function setVisionModel() {
+  const sel = document.getElementById('vision-model-select');
+  const model = sel.value;
+  const msg = document.getElementById('vision-model-msg');
+  if (!model) return;
+  try {
+    await api('/api/ollama/vision-model', { method: 'PUT', body: { model } });
+    msg.style.color = 'var(--low)';
+    msg.textContent = `✅ Đã đổi vision model thành "${model}"`;
   } catch(e) {
     msg.style.color = 'var(--critical)';
     msg.textContent = '❌ ' + e.message;
@@ -2130,6 +2393,553 @@ async function deleteModel(name) {
     await api(`/api/ollama/models/${name}`, { method: 'DELETE' });
     loadInstalledModels();
   } catch(e) { alert('Lỗi: ' + e.message); }
+}
+
+// ─── CO-WORK ───────────────────────────────────────────────────
+const cwState = { folders: [], folderId: null, currentPath: '', currentFile: null, suggestion: null };
+
+async function cwInit() {
+  await cwRefreshHealth();
+  await cwLoadFolders();
+}
+
+async function cwRefreshHealth() {
+  const bar = document.getElementById('cw-health-bar');
+  try {
+    const h = await api('/api/coworker/health');
+    bar.style.display = 'none';
+  } catch (e) {
+    bar.style.display = 'block';
+    bar.className = 'path-warning';
+    bar.innerHTML = `⚠️ Coworker Host Service chưa chạy hoặc không kết nối được.<br>
+      Chạy trên máy host: <span class="text-mono">bash coworker_host/run.sh</span><br>
+      <span class="text-sm">${e.message}</span>`;
+  }
+}
+
+async function cwLoadFolders() {
+  let data;
+  try { data = await api('/api/coworker/folders'); }
+  catch (e) { document.getElementById('cw-empty-state').style.display = 'block'; document.getElementById('cw-empty-state').querySelector('p').textContent = 'Lỗi: ' + e.message; return; }
+
+  cwState.folders = data.folders || [];
+  const sel = document.getElementById('cw-folder-select');
+  sel.innerHTML = cwState.folders.map(f => `<option value="${f.id}">${f.label} — ${f.path}</option>`).join('');
+
+  if (!cwState.folders.length) {
+    document.getElementById('cw-empty-state').style.display = 'block';
+    document.getElementById('cw-main').style.display = 'none';
+    return;
+  }
+  document.getElementById('cw-empty-state').style.display = 'none';
+  document.getElementById('cw-main').style.display = 'grid';
+
+  if (!cwState.folderId || !cwState.folders.some(f => f.id === cwState.folderId)) {
+    cwState.folderId = cwState.folders[0].id;
+  }
+  sel.value = cwState.folderId;
+  cwSelectFolder(cwState.folderId);
+}
+
+function cwSelectFolder(folderId) {
+  cwState.folderId = folderId;
+  cwState.currentPath = '';
+  cwState.currentFile = null;
+  document.getElementById('cw-editor-card').style.display = 'none';
+  document.getElementById('cw-empty-file-hint').style.display = 'block';
+  cwLoadTree('');
+}
+
+function cwOpenAddFolder() {
+  document.getElementById('cw-add-folder-path').value = '';
+  document.getElementById('cw-add-folder-label').value = '';
+  document.getElementById('cw-add-folder-error').textContent = '';
+  document.getElementById('cw-add-folder-modal').classList.add('open');
+}
+
+async function cwAddFolder() {
+  const path = document.getElementById('cw-add-folder-path').value.trim();
+  const label = document.getElementById('cw-add-folder-label').value.trim();
+  const errEl = document.getElementById('cw-add-folder-error');
+  if (!path) { errEl.textContent = 'Path không được để trống'; return; }
+  try {
+    const entry = await api('/api/coworker/folders', { method: 'POST', body: { path, label: label || undefined } });
+    document.getElementById('cw-add-folder-modal').classList.remove('open');
+    await cwLoadFolders();
+    cwState.folderId = entry.id;
+    document.getElementById('cw-folder-select').value = entry.id;
+    cwSelectFolder(entry.id);
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+async function cwRemoveCurrentFolder() {
+  if (!cwState.folderId) return;
+  if (!confirm('Thu hồi quyền truy cập folder này?')) return;
+  await api(`/api/coworker/folders/${cwState.folderId}`, { method: 'DELETE' });
+  cwState.folderId = null;
+  await cwLoadFolders();
+}
+
+async function cwLoadTree(path) {
+  if (!cwState.folderId) return;
+  cwState.currentPath = path || '';
+  const treeEl = document.getElementById('cw-tree');
+  treeEl.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  document.getElementById('cw-breadcrumb').innerHTML =
+    `📁 ${cwState.currentPath || '/'} ` +
+    (cwState.currentPath ? `<a href="#" onclick="cwLoadTree('');return false;" style="color:var(--accent2);">[root]</a>` : '');
+  try {
+    const data = await api(`/api/coworker/fs/tree?folder_id=${cwState.folderId}&path=${encodeURIComponent(cwState.currentPath)}`);
+    const parentBtn = cwState.currentPath
+      ? `<div style="cursor:pointer;padding:4px 0;color:var(--text2);" onclick="cwLoadTree('${cwState.currentPath.split('/').slice(0,-1).join('/')}')">⬅ ..</div>`
+      : '';
+    treeEl.innerHTML = parentBtn + data.entries.map(e => {
+      const fullPath = cwState.currentPath ? `${cwState.currentPath}/${e.name}` : e.name;
+      if (e.is_dir) {
+        return `<div style="cursor:pointer;padding:4px 0;" onclick="cwLoadTree('${fullPath.replace(/'/g, "\\'")}')">📁 ${e.name}</div>`;
+      }
+      return `<div style="cursor:pointer;padding:4px 0;" onclick="cwOpenFile('${fullPath.replace(/'/g, "\\'")}')">📄 ${e.name}</div>`;
+    }).join('') || '<div class="text-sm">(trống)</div>';
+  } catch (e) {
+    treeEl.innerHTML = `<div class="text-sm" style="color:var(--critical);">${e.message}</div>`;
+  }
+}
+
+async function cwOpenFile(path) {
+  try {
+    const data = await api(`/api/coworker/fs/file?folder_id=${cwState.folderId}&path=${encodeURIComponent(path)}`);
+    if (data.binary) { alert('File binary — không hiển thị/sửa được qua Co-work.'); return; }
+    cwState.currentFile = path;
+    cwState.suggestion = null;
+    document.getElementById('cw-editor-card').style.display = 'block';
+    document.getElementById('cw-empty-file-hint').style.display = 'none';
+    document.getElementById('cw-file-title').textContent = path;
+    document.getElementById('cw-file-meta').textContent = `${data.size} bytes`;
+    document.getElementById('cw-file-content').value = data.content;
+    document.getElementById('cw-diff-box').style.display = 'none';
+    document.getElementById('cw-instruction').value = '';
+    document.getElementById('cw-suggest-status').textContent = '';
+  } catch (e) { alert('Lỗi đọc file: ' + e.message); }
+}
+
+async function cwSuggest() {
+  const instruction = document.getElementById('cw-instruction').value.trim();
+  if (!instruction) { alert('Nhập yêu cầu sửa file trước.'); return; }
+  if (!cwState.currentFile) return;
+
+  const btn = document.getElementById('cw-suggest-btn');
+  const statusEl = document.getElementById('cw-suggest-status');
+  btn.disabled = true;
+  statusEl.innerHTML = '<span class="spinner" style="display:inline-block;vertical-align:middle;"></span> AI đang phân tích & sinh code...';
+  try {
+    const data = await api('/api/coworker/fs/suggest', {
+      method: 'POST',
+      body: { folder_id: cwState.folderId, path: cwState.currentFile, instruction },
+    });
+    cwState.suggestion = data;
+    statusEl.textContent = '';
+    document.getElementById('cw-diff-model').textContent = `(model: ${data.model})`;
+    const diffBox = document.getElementById('cw-diff-box');
+    const diffContent = document.getElementById('cw-diff-content');
+    if (data.unchanged) {
+      diffContent.textContent = 'AI không thay đổi gì so với file gốc (hoặc cho rằng yêu cầu không rõ ràng / không thực hiện được).';
+    } else {
+      diffContent.textContent = data.diff || '(không có diff)';
+    }
+    diffBox.style.display = 'block';
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--critical);">Lỗi: ${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function cwApplySuggestion() {
+  if (!cwState.suggestion) return;
+  if (cwState.suggestion.unchanged) { cwRejectSuggestion(); return; }
+  if (!confirm(`Ghi đè nội dung mới vào "${cwState.suggestion.path}"? (bản gốc được backup .vulnguard.bak trên host)`)) return;
+  try {
+    await api('/api/coworker/fs/apply', {
+      method: 'POST',
+      body: { folder_id: cwState.folderId, path: cwState.suggestion.path, content: cwState.suggestion.new_content },
+    });
+    document.getElementById('cw-diff-box').style.display = 'none';
+    await cwOpenFile(cwState.suggestion.path);
+    cwState.suggestion = null;
+  } catch (e) { alert('Lỗi áp dụng: ' + e.message); }
+}
+
+function cwRejectSuggestion() {
+  cwState.suggestion = null;
+  document.getElementById('cw-diff-box').style.display = 'none';
+}
+
+async function cwExec(confirmRun) {
+  const cmd = document.getElementById('cw-exec-cmd').value.trim();
+  if (!cmd || !cwState.folderId) return;
+  const outEl = document.getElementById('cw-exec-output');
+  const confirmEl = document.getElementById('cw-exec-confirm');
+  confirmEl.style.display = 'none';
+  outEl.style.display = 'block';
+  outEl.textContent = 'Đang chạy...';
+  try {
+    const data = await api('/api/coworker/fs/exec', {
+      method: 'POST',
+      body: { folder_id: cwState.folderId, command: cmd, cwd: cwState.currentPath, confirm: !!confirmRun },
+    });
+    if (data.needs_confirm) {
+      outEl.style.display = 'none';
+      confirmEl.style.display = 'block';
+      document.getElementById('cw-exec-confirm-msg').textContent = data.message;
+      return;
+    }
+    outEl.textContent = `$ ${cmd}\nexit code: ${data.exit_code}  (${data.duration_sec}s)\n\n${data.stdout}${data.stderr ? '\n--- stderr ---\n' + data.stderr : ''}`;
+  } catch (e) {
+    outEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+// ─── DOCUMENT REVIEW ────────────────────────────────────────────
+async function apiUpload(path, formData, method = 'POST') {
+  const r = await fetch(API + path, { method, body: formData });
+  if (!r.ok) { const t = await r.text(); throw new Error(t); }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+const FINDING_STATUS_META = {
+  MET: { label: 'Đã đáp ứng', cls: 'badge-fixed', icon: '✅' },
+  PARTIAL: { label: 'Một phần', cls: 'badge-medium', icon: '⚠️' },
+  NOT_MET: { label: 'Chưa đáp ứng', cls: 'badge-critical', icon: '❌' },
+  NOT_APPLICABLE: { label: 'Không áp dụng', cls: 'badge-open', icon: '➖' },
+};
+function findingBadge(status) {
+  const m = FINDING_STATUS_META[status] || { label: status, cls: 'badge-info', icon: '' };
+  return `<span class="badge ${m.cls}">${m.icon} ${m.label}</span>`;
+}
+
+const VERSION_STATUS_META = {
+  UPLOADED: 'Mới upload', UNDER_REVIEW: 'Đang review', SENT_FOR_REVISION: '🔁 Đã gửi lại sửa', ACCEPTED: '✅ Đã chấp nhận',
+};
+const REVIEW_STATUS_META = {
+  NOT_REVIEWED: 'Chưa review', PENDING: 'Đang chờ review...', RUNNING: 'AI đang phân tích...', DONE: 'Đã review', FAILED: 'Review lỗi',
+};
+
+async function ensureDocTypesLoaded() {
+  if (docTypesCache) return docTypesCache;
+  const data = await api('/api/docreview/doc-types');
+  docTypesCache = data.doc_types;
+  return docTypesCache;
+}
+
+async function loadDocReviews() {
+  const el = document.getElementById('docreview-list');
+  try {
+    const docs = await api('/api/docreview/documents');
+    if (!docs.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">📑</div><p>Chưa có tài liệu nào</p><button class="btn btn-primary mt-16" onclick="openCreateDocReview()">+ Tải tài liệu đầu tiên</button></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="card" style="padding:0;overflow:hidden;">
+        <table>
+          <thead><tr><th>Tên tài liệu</th><th>Loại</th><th>Version mới nhất</th><th>Trạng thái</th><th>Review</th><th>Điểm an toàn</th><th></th></tr></thead>
+          <tbody>
+            ${docs.map(d => {
+              const v = d.latest_version;
+              const score = v && v.summary && v.summary.score_pct != null ? v.summary.score_pct + '%' : '—';
+              return `
+              <tr style="cursor:pointer" onclick="openDocDetail('${d.id}')">
+                <td><strong>${escHtml(d.name)}</strong>${d.description ? `<br><span class="text-sm">${escHtml(d.description)}</span>` : ''}</td>
+                <td class="text-sm">${escHtml(d.doc_type)}</td>
+                <td class="text-sm">${v ? 'v' + v.version_number : '—'}</td>
+                <td class="text-sm">${v ? (VERSION_STATUS_META[v.status] || v.status) : '—'}</td>
+                <td class="text-sm">${v ? (REVIEW_STATUS_META[v.review_status] || v.review_status) : '—'}</td>
+                <td><strong>${score}</strong></td>
+                <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteDocument('${d.id}','${escHtml(d.name)}')">🗑</button></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+async function openCreateDocReview() {
+  document.getElementById('new-doc-name').value = '';
+  document.getElementById('new-doc-desc').value = '';
+  document.getElementById('new-doc-file').value = '';
+  document.getElementById('new-doc-auto-review').checked = true;
+  const types = await ensureDocTypesLoaded();
+  document.getElementById('new-doc-type').innerHTML = types.map(t => `<option value="${t.value}">${escHtml(t.label)} (${t.criteria_count} tiêu chí)</option>`).join('');
+  document.getElementById('create-docreview-modal').classList.add('open');
+}
+
+async function createDocReview() {
+  const name = document.getElementById('new-doc-name').value.trim();
+  const docType = document.getElementById('new-doc-type').value;
+  const fileInput = document.getElementById('new-doc-file');
+  if (!name) return alert('Nhập tên tài liệu');
+  if (!fileInput.files.length) return alert('Chọn file tài liệu');
+
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('doc_type', docType);
+  fd.append('description', document.getElementById('new-doc-desc').value || '');
+  fd.append('auto_review', document.getElementById('new-doc-auto-review').checked);
+  fd.append('file', fileInput.files[0]);
+
+  const btn = document.getElementById('create-doc-btn');
+  btn.disabled = true; btn.textContent = 'Đang tải lên...';
+  try {
+    const version = await apiUpload('/api/docreview/documents', fd);
+    document.getElementById('create-docreview-modal').classList.remove('open');
+    openDocDetail(version.document_id);
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Tải lên';
+  }
+}
+
+async function deleteDocument(id, name) {
+  if (!confirm(`Xóa tài liệu "${name}"? Tất cả version và kết quả review sẽ bị xóa.`)) return;
+  await api(`/api/docreview/documents/${id}`, { method: 'DELETE' });
+  loadDocReviews();
+}
+
+function openDocDetail(documentId) {
+  currentDocId = documentId;
+  currentDocVersionId = null;
+  navigate('docreview-detail');
+}
+
+async function loadDocDetail() {
+  if (docReviewPollInterval) { clearInterval(docReviewPollInterval); docReviewPollInterval = null; }
+  const el = document.getElementById('docreview-detail-content');
+  el.innerHTML = `<div class="loading"><div class="spinner"></div>Đang tải...</div>`;
+  try {
+    const doc = await api(`/api/docreview/documents/${currentDocId}`);
+    const versions = await api(`/api/docreview/documents/${currentDocId}/versions`);
+    document.getElementById('docreview-detail-title').textContent = `📑 ${doc.name} — ${doc.doc_type}`;
+
+    if (!currentDocVersionId && versions.length) currentDocVersionId = versions[0].id;
+
+    el.innerHTML = `
+      <div class="grid2">
+        <div>
+          <h2>Lịch sử Version</h2>
+          <div class="card" style="padding:0;overflow:hidden;">
+            <table>
+              <thead><tr><th>Version</th><th>File</th><th>Trạng thái</th><th>Điểm</th><th></th></tr></thead>
+              <tbody>
+                ${versions.map(v => `
+                  <tr style="cursor:pointer;${v.id === currentDocVersionId ? 'background:var(--bg3);' : ''}" onclick="selectDocVersion('${v.id}')">
+                    <td><strong>v${v.version_number}</strong></td>
+                    <td class="text-sm">${escHtml(v.original_filename)}</td>
+                    <td class="text-sm">${VERSION_STATUS_META[v.status] || v.status}</td>
+                    <td>${v.summary && v.summary.score_pct != null ? v.summary.score_pct + '%' : '—'}</td>
+                    <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();selectDocVersion('${v.id}')">Xem</button></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ${versions.length > 1 ? `
+          <div class="form-group mt-16">
+            <label>So sánh 2 version</label>
+            <div class="flex">
+              <select id="compare-old-version">${versions.map(v => `<option value="${v.version_number}">v${v.version_number}</option>`).join('')}</select>
+              <select id="compare-new-version">${versions.map(v => `<option value="${v.version_number}">v${v.version_number}</option>`).join('')}</select>
+              <button class="btn btn-ghost btn-sm" onclick="runCompareVersions()">So sánh</button>
+            </div>
+          </div>
+          <div id="compare-versions-result"></div>` : ''}
+        </div>
+        <div>
+          <h2>Kết quả Review</h2>
+          <div id="docreview-version-detail"><div class="loading"><div class="spinner"></div>Đang tải...</div></div>
+        </div>
+      </div>`;
+
+    if (versions.length > 1) {
+      document.getElementById('compare-new-version').value = versions[0].version_number;
+      document.getElementById('compare-old-version').value = versions[1].version_number;
+    }
+
+    await renderDocVersionDetail();
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+  }
+}
+
+function selectDocVersion(versionId) {
+  currentDocVersionId = versionId;
+  loadDocDetail();
+}
+
+async function renderDocVersionDetail() {
+  const el = document.getElementById('docreview-version-detail');
+  if (!el || !currentDocVersionId) return;
+  try {
+    const v = await api(`/api/docreview/versions/${currentDocVersionId}`);
+
+    if (v.review_status === 'PENDING' || v.review_status === 'RUNNING') {
+      if (!docReviewPollInterval) {
+        docReviewPollInterval = setInterval(() => renderDocVersionDetail(), 3000);
+      }
+    } else if (docReviewPollInterval) {
+      clearInterval(docReviewPollInterval); docReviewPollInterval = null;
+    }
+
+    const s = v.summary || {};
+    const byCategory = {};
+    (v.findings || []).forEach(f => { (byCategory[f.category] = byCategory[f.category] || []).push(f); });
+
+    let statusBlock = '';
+    if (v.review_status === 'NOT_REVIEWED') {
+      statusBlock = `<div class="notice">Chưa review. <button class="btn btn-primary btn-sm" onclick="triggerReview('${v.id}')">▶ Review ngay</button></div>`;
+    } else if (v.review_status === 'PENDING' || v.review_status === 'RUNNING') {
+      statusBlock = `<div class="loading"><div class="spinner"></div>${REVIEW_STATUS_META[v.review_status]}</div>`;
+    } else if (v.review_status === 'FAILED') {
+      statusBlock = `<div class="path-warning">Lỗi review: ${escHtml(v.review_error || '')} <button class="btn btn-ghost btn-sm" onclick="triggerReview('${v.id}')">Thử lại</button></div>`;
+    }
+
+    let findingsHtml = '';
+    if (v.review_status === 'DONE') {
+      findingsHtml = `
+        <div class="grid4" style="margin-bottom:16px;">
+          <div class="stat-card"><div class="stat-num l">${s.met || 0}</div><div class="stat-label">Đã đáp ứng</div></div>
+          <div class="stat-card"><div class="stat-num m">${s.partial || 0}</div><div class="stat-label">Một phần</div></div>
+          <div class="stat-card"><div class="stat-num c">${s.not_met || 0}</div><div class="stat-label">Chưa đáp ứng</div></div>
+          <div class="stat-card"><div class="stat-num">${s.score_pct != null ? s.score_pct + '%' : '—'}</div><div class="stat-label">Điểm tổng</div></div>
+        </div>
+        ${Object.keys(byCategory).map(cat => `
+          <div class="card">
+            <strong style="font-size:13px;">${escHtml(cat)}</strong>
+            <table class="mt-16">
+              ${byCategory[cat].map(f => `
+                <tr>
+                  <td style="width:90px;color:var(--text3);white-space:nowrap;">${escHtml(f.criteria_id)}</td>
+                  <td>
+                    <div>${escHtml(f.criteria_text)}</div>
+                    ${f.evidence ? `<div class="text-sm" style="margin-top:4px;"><b>AI:</b> ${escHtml(f.evidence)}</div>` : ''}
+                    ${f.recommendation ? `<div class="text-sm" style="margin-top:2px;color:var(--low);"><b>Gợi ý:</b> ${escHtml(f.recommendation)}</div>` : ''}
+                  </td>
+                  <td style="width:130px;text-align:right;">${findingBadge(f.status)}</td>
+                </tr>
+              `).join('')}
+            </table>
+          </div>
+        `).join('')}`;
+    }
+
+    const canActOn = v.review_status === 'DONE' && v.status !== 'ACCEPTED';
+
+    el.innerHTML = `
+      <div class="flex-between mb-16">
+        <div class="text-sm">v${v.version_number} — ${escHtml(v.original_filename)} — ${VERSION_STATUS_META[v.status] || v.status}</div>
+        <div class="flex">
+          ${v.review_status === 'DONE' ? `<button class="btn btn-ghost btn-sm" onclick="window.open('/api/docreview/versions/${v.id}/export?download=true','_blank')">⬇ Báo cáo HTML</button>` : ''}
+          ${v.review_status === 'DONE' ? `<button class="btn btn-ghost btn-sm" onclick="triggerReview('${v.id}')">↻ Review lại</button>` : ''}
+        </div>
+      </div>
+      ${v.extract_error ? `<div class="path-warning">⚠️ ${escHtml(v.extract_error)}</div>` : ''}
+      ${v.revision_note ? `<div class="notice">📝 Ghi chú gửi lại bên viết tài liệu: ${escHtml(v.revision_note)}</div>` : ''}
+      ${statusBlock}
+      ${findingsHtml}
+      ${canActOn ? `
+        <div class="flex mt-16">
+          <button class="btn btn-danger btn-sm" onclick="openSendBack('${v.id}')">🔁 Gửi lại bên viết tài liệu</button>
+          <button class="btn btn-primary btn-sm" onclick="acceptVersion('${v.id}')">✅ Chấp nhận tài liệu</button>
+        </div>` : ''}
+    `;
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+  }
+}
+
+async function triggerReview(versionId) {
+  try {
+    await api(`/api/docreview/versions/${versionId}/review`, { method: 'POST' });
+    await renderDocVersionDetail();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+function openSendBack(versionId) {
+  currentDocVersionId = versionId;
+  document.getElementById('send-back-note').value = '';
+  document.getElementById('send-back-modal').classList.add('open');
+}
+
+async function submitSendBack() {
+  const note = document.getElementById('send-back-note').value.trim();
+  if (note.length < 5) return alert('Nhập ghi chú (tối thiểu 5 ký tự)');
+  try {
+    await api(`/api/docreview/versions/${currentDocVersionId}/send-back`, { method: 'PATCH', body: { note } });
+    document.getElementById('send-back-modal').classList.remove('open');
+    loadDocDetail();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+async function acceptVersion(versionId) {
+  if (!confirm('Xác nhận tài liệu này đã đáp ứng đủ yêu cầu an toàn thông tin cần thiết?')) return;
+  try {
+    await api(`/api/docreview/versions/${versionId}/accept`, { method: 'PATCH', body: {} });
+    loadDocDetail();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+function openUploadVersion() {
+  document.getElementById('new-version-file').value = '';
+  document.getElementById('upload-version-modal').classList.add('open');
+}
+
+async function uploadNewVersion() {
+  const fileInput = document.getElementById('new-version-file');
+  if (!fileInput.files.length) return alert('Chọn file tài liệu');
+  const fd = new FormData();
+  fd.append('auto_review', true);
+  fd.append('file', fileInput.files[0]);
+
+  const btn = document.getElementById('upload-version-btn');
+  btn.disabled = true; btn.textContent = 'Đang tải lên...';
+  try {
+    const version = await apiUpload(`/api/docreview/documents/${currentDocId}/versions`, fd);
+    document.getElementById('upload-version-modal').classList.remove('open');
+    currentDocVersionId = version.id;
+    loadDocDetail();
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Tải lên';
+  }
+}
+
+async function runCompareVersions() {
+  const oldV = document.getElementById('compare-old-version').value;
+  const newV = document.getElementById('compare-new-version').value;
+  const el = document.getElementById('compare-versions-result');
+  if (oldV === newV) { el.innerHTML = `<p class="text-sm">Chọn 2 version khác nhau để so sánh</p>`; return; }
+  el.innerHTML = `<div class="loading"><div class="spinner"></div>Đang so sánh...</div>`;
+  try {
+    const r = await api(`/api/docreview/documents/${currentDocId}/compare?old_version=${oldV}&new_version=${newV}`);
+    const renderList = (items, label, cls) => !items.length ? '' : `
+      <div class="mt-16"><strong class="${cls}">${label} (${items.length})</strong>
+        ${items.map(i => `<div class="text-sm" style="margin-top:4px;">[${escHtml(i.criteria_id)}] ${escHtml(i.criteria_text)} — ${escHtml(i.old_status || '—')} → ${escHtml(i.new_status || '—')}</div>`).join('')}
+      </div>`;
+    el.innerHTML = `
+      <div class="card mt-16">
+        ${renderList(r.improved, '✅ Cải thiện', 'compare-fixed')}
+        ${renderList(r.regressed, '⚠️ Xấu đi', 'compare-new')}
+        ${renderList(r.unchanged_not_met, '❌ Vẫn chưa đáp ứng', 'compare-persisted')}
+        ${(!r.improved.length && !r.regressed.length && !r.unchanged_not_met.length) ? '<p class="text-sm">Không có khác biệt giữa 2 version (hoặc tất cả đều đã đáp ứng).</p>' : ''}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+  }
 }
 
 // ─── Init ──────────────────────────────────────────────────────
