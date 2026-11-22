@@ -1,6 +1,6 @@
-# Security self-scan (dogfood) — VulnGuard tự quét chính mình bằng đúng bộ công cụ
-# mà nó tích hợp. Báo cáo dạng artifact (không chặn), demo giá trị DevSecOps.
-# Teams có thể siết thành gate bằng cách bỏ "|| true" / continue-on-error.
+# Security self-scan (dogfood) — VulnGuard tự quét chính mình bằng đúng bộ công cụ tích hợp.
+# Báo cáo dạng artifact (KHÔNG chặn merge). Teams siết thành gate bằng cách bỏ "|| true".
+# Dùng cài CLI trực tiếp (không phụ thuộc third-party action dễ vỡ version).
 name: Security
 
 on:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  sast-deps-secrets:
+  self-scan:
     name: SAST / SCA / Secrets self-scan
     runs-on: ubuntu-latest
     steps:
@@ -27,9 +27,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install scanners
-        run: pip install -q bandit semgrep pip-audit
+        run: pip install -q bandit semgrep pip-audit || true
 
-      - name: Bandit (full report)
+      - name: Bandit (SAST, full report)
         run: bandit -r api scanner mcp_server scripts -f txt -o bandit-report.txt || true
 
       - name: Semgrep (OWASP + security-audit + secrets)
@@ -38,22 +38,21 @@ jobs:
       - name: pip-audit (dependencies)
         run: pip-audit -r api/requirements.txt -f columns -o pip-audit.txt || true
 
-      - name: Gitleaks (secrets in code + git history)
-        uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks + trivy
+        run: |
+          # gitleaks
+          GL=8.21.2
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GL}/gitleaks_${GL}_linux_x64.tar.gz" -o /tmp/gl.tgz || true
+          tar -xzf /tmp/gl.tgz -C /tmp gitleaks 2>/dev/null || true
+          sudo mv /tmp/gitleaks /usr/local/bin/ 2>/dev/null || true
+          # trivy (script chính thức)
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin || true
+
+      - name: Gitleaks (secrets)
+        run: gitleaks detect --source . --no-banner --redact -c .gitleaks.toml --report-format json --report-path gitleaks.json || true
 
       - name: Trivy filesystem (vuln + misconfig + secret)
-        uses: aquasecurity/trivy-action@0.28.0
-        continue-on-error: true
-        with:
-          scan-type: fs
-          scanners: vuln,misconfig,secret
-          severity: HIGH,CRITICAL
-          format: table
-          output: trivy.txt
-          exit-code: "0"
+        run: trivy fs --quiet --scanners vuln,misconfig,secret --severity HIGH,CRITICAL . > trivy.txt 2>&1 || true
 
       - name: Upload security reports
         if: always()
@@ -64,5 +63,6 @@ jobs:
             bandit-report.txt
             semgrep.sarif
             pip-audit.txt
+            gitleaks.json
             trivy.txt
           if-no-files-found: ignore
