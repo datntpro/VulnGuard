@@ -27,6 +27,20 @@ VulnGuard không còn chỉ quét code — nay là nền tảng bảo mật hợ
 
 ## 🚀 Quick Start
 
+### Cách nhanh nhất — trình cài đặt tương tác (chọn công cụ)
+
+```bash
+bash setup.sh      # chọn Docker hoặc Native; nếu Native: tự chọn nhóm công cụ cần cài
+```
+- Chạy production tại **http://localhost:8080**; lần đầu tạo tài khoản ADMIN trên trang đăng nhập.
+- `bash setup.sh --check` — xem công cụ nào đã cài.
+- `bash setup.sh --tools "sast sca web pentest" --no-run` — cài không tương tác.
+- Cài xong chạy lại: `bash run.sh` (production) · Demo có dữ liệu mẫu: `bash run_demo.sh`.
+
+<details><summary>Cách thủ công (Docker Compose)</summary>
+
+
+
 ### Yêu cầu hệ thống
 
 | | Tối thiểu | Khuyến nghị |
@@ -68,6 +82,7 @@ docker compose up -d
 # 4. Mở trình duyệt
 open http://localhost:8080
 ```
+</details>
 
 ### Scan source code
 
