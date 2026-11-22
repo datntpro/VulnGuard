@@ -99,7 +99,9 @@ def _cleanup_stale_scans():
         db.close()
 
 
-_cleanup_stale_scans()
+import os as _os
+if not _os.environ.get('VULNGUARD_DEMO'):
+    _cleanup_stale_scans()
 
 
 def _cleanup_stale_doc_reviews():
@@ -130,7 +132,8 @@ def _cleanup_stale_doc_reviews():
         db.close()
 
 
-_cleanup_stale_doc_reviews()
+if not _os.environ.get('VULNGUARD_DEMO'):
+    _cleanup_stale_doc_reviews()
 
 
 def _cleanup_stale_pentest_runs():
@@ -155,7 +158,8 @@ def _cleanup_stale_pentest_runs():
         db.close()
 
 
-_cleanup_stale_pentest_runs()
+if not _os.environ.get('VULNGUARD_DEMO'):
+    _cleanup_stale_pentest_runs()
 
 app = FastAPI(
     title="VulnGuard API",
