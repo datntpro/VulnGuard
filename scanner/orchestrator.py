@@ -23,6 +23,7 @@ def _load_enabled_tools() -> Dict[str, bool]:
     return {}
 
 from scanner.scanners.sast import SemgrepScanner, BanditScanner
+from scanner.scanners.sonarqube import SonarQubeScanner
 from scanner.scanners.sca import TrivySCAScanner, PipAuditScanner
 from scanner.scanners.container import TrivyContainerScanner, GrypeScanner
 from scanner.scanners.iac import CheckovScanner, TrivyIaCScanner, HadolintScanner
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Mapping scan_type → danh sách scanners (theo thứ tự ưu tiên)
 SCANNER_MAP = {
-    "SAST":      [BanditScanner, SemgrepScanner],
+    "SAST":      [BanditScanner, SemgrepScanner, SonarQubeScanner],
     "SCA":       [TrivySCAScanner, PipAuditScanner],
     "CONTAINER": [TrivyContainerScanner, GrypeScanner],
     "IAC":       [CheckovScanner, TrivyIaCScanner, HadolintScanner],
@@ -43,6 +44,7 @@ SCANNER_MAP = {
 TOOL_LABELS = {
     "bandit":           "Bandit (Python SAST)",
     "semgrep":          "Semgrep (Multi-lang SAST)",
+    "sonar-scanner":    "SonarQube (Community SAST)",
     "trivy":            "Trivy (SCA/Dependencies)",
     "pip-audit":        "pip-audit (Python Deps)",
     "trivy-container":  "Trivy (Container Images)",

@@ -71,6 +71,7 @@ Common flags: `--check` (list installed tools) · `--tools "sast sca web pentest
 | Grype | Container | CVEs in images & filesystems |
 | Gitleaks / detect-secrets | Secrets | keys, tokens, high-entropy strings |
 | Nuclei | DAST / Web | 10k+ templates (CVE, misconfig, exposure) |
+| **SonarQube** (Community) | SAST (deep) | data-flow analysis, fewer false positives — needs a Sonar server (bundled: `docker compose --profile sonar up -d`, or external via `SONARQUBE_URL`/`SONARQUBE_TOKEN`) |
 
 The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sqlmap**.
 
@@ -144,6 +145,7 @@ Cờ dùng chung: `--check` (liệt kê tool) · `--tools "sast sca web pentest"
 | Grype | Container | CVE trong image & filesystem |
 | Gitleaks / detect-secrets | Secrets | key, token, chuỗi entropy cao |
 | Nuclei | DAST / Web | 10k+ template (CVE, misconfig, exposure) |
+| **SonarQube** (Community) | SAST (sâu) | phân tích data-flow, ít false positive hơn — cần server Sonar (bundled: `docker compose --profile sonar up -d`, hoặc server ngoài qua `SONARQUBE_URL`/`SONARQUBE_TOKEN`) |
 
 Pentest Agent dùng thêm **katana** (crawl), **nmap**, **ffuf**, **sqlmap**.
 

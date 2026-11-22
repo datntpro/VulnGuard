@@ -53,9 +53,10 @@ GROUPS = [
     ("web", "Web/DAST — crawl + quét web (katana, nuclei)"),
     ("pentest", "Pentest Agent — tấn công (nmap, ffuf, sqlmap)"),
     ("ai", "AI local (tuỳ chọn) — Ollama"),
+    ("sonar", "SonarQube scanner CLI (SAST sâu — cần server Sonar)"),
 ]
 ALL_TOOLS = ["semgrep", "bandit", "trivy", "pip-audit", "gitleaks", "detect-secrets",
-             "checkov", "hadolint", "grype", "katana", "nuclei", "nmap", "ffuf", "sqlmap", "ollama"]
+             "checkov", "hadolint", "grype", "katana", "nuclei", "nmap", "ffuf", "sqlmap", "ollama", "sonar-scanner"]
 
 
 def venv_python() -> str:
@@ -164,6 +165,41 @@ def pd_url(tool):  # ProjectDiscovery (katana/nuclei) + ffuf
     return f"https://github.com/projectdiscovery/{tool}/releases/download/v{v}/{tool}_{v}_{OSID}_{ARCH}.zip"
 
 
+def _install_sonar_scanner(url, version, platform_tag):
+    """Giải nén toàn bộ SonarScanner CLI (kèm JRE) vào bin_dir/.. rồi link bin."""
+    try:
+        import tempfile as _t
+        dest_root = bin_dir().parent / "sonar-scanner"
+        dest_root.mkdir(parents=True, exist_ok=True)
+        with _t.TemporaryDirectory() as td:
+            arc = Path(td) / "s.zip"
+            urllib.request.urlretrieve(url, arc)  # noqa
+            with zipfile.ZipFile(arc) as z:
+                root_abs = str(dest_root.resolve())
+                for member in z.infolist():
+                    target = (dest_root / member.filename).resolve()
+                    # chống zip-slip: member phải nằm trong dest_root
+                    if str(target) != root_abs and not str(target).startswith(root_abs + os.sep):
+                        raise ValueError(f"Archive member thoát thư mục: {member.filename}")
+                    z.extract(member, dest_root)
+        inner = dest_root / f"sonar-scanner-{version}-{platform_tag}"
+        launcher = inner / "bin" / ("sonar-scanner.bat" if IS_WIN else "sonar-scanner")
+        if not launcher.exists():
+            return False
+        if not IS_WIN:
+            os.chmod(launcher, 0o755)
+            link = bin_dir() / "sonar-scanner"
+            if link.exists() or link.is_symlink():
+                link.unlink()
+            link.symlink_to(launcher)
+        else:
+            # Windows: thêm thư mục bin vào PATH người dùng là trách nhiệm user; báo đường dẫn
+            print(f"    (Windows: thêm vào PATH: {inner / 'bin'})")
+        return True
+    except Exception:
+        return False
+
+
 def install_group(key):
     if key == "sast":
         if IS_WIN:
@@ -217,6 +253,20 @@ def install_group(key):
         if not IS_WIN and not IS_MAC and not Path("/usr/share/seclists").exists():
             run(["bash", "-c", "sudo git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif key == "sonar":
+        if has("sonar-scanner"):
+            return
+        if IS_MAC and pkg_mgr() == "brew":
+            g("  ✓ sonar-scanner") if sys_install("sonar-scanner") else y("  ⚠ sonar-scanner — brew install sonar-scanner")
+        else:
+            v = "6.2.1.4610"
+            sc_os = "windows" if IS_WIN else ("macosx" if IS_MAC else "linux")
+            sc_arch = "aarch64" if ARCH == "arm64" else "x64"
+            url = f"https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-{v}-{sc_os}-{sc_arch}.zip"
+            if _install_sonar_scanner(url, v, f"{sc_os}-{sc_arch}"):
+                g("  ✓ sonar-scanner")
+            else:
+                y("  ⚠ sonar-scanner — tải tại docs.sonarsource.com/sonarqube/latest/analyzing-source-code/scanners/sonarscanner")
     elif key == "ai":
         if not has("ollama"):
             if IS_WIN or IS_MAC:
