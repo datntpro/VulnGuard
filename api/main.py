@@ -7,7 +7,7 @@ import os
 from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
-from api.routes import auth, ai, webscans, pentest, assets, intel, connectors
+from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard
 # domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
 # đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
 from api import domain_models  # noqa: F401
@@ -187,6 +187,7 @@ app.include_router(pentest.router)
 app.include_router(assets.router)
 app.include_router(intel.router)
 app.include_router(connectors.router)
+app.include_router(dashboard.router)
 app.include_router(projects.router)
 app.include_router(scans.router)
 app.include_router(vulns.router)
