@@ -9,6 +9,22 @@
 
 ---
 
+## ✨ Mới (bản này)
+
+VulnGuard không còn chỉ quét code — nay là nền tảng bảo mật hợp nhất, vẫn chạy local:
+
+- **🔐 Đăng nhập & phân quyền (RBAC)** — ADMIN / ANALYST / VIEWER, session cookie, tạo ADMIN đầu tiên khi mở app.
+- **🤖 AI đám mây giảm false positive** — ngoài Ollama local, tích hợp **Claude API** (API key / Workload Identity Federation / environment) và **Amazon Bedrock** (IAM — nền tảng Kiro dùng). 3 chế độ: local-only / hybrid / cloud-only. Xem Settings → AI Provider.
+- **🌐 Web scan (Nuclei)** — quét lỗ hổng web trên các URL Katana đã crawl.
+- **🎯 Pentest Agent (tự động, có kiểm soát)** — vòng lặp planner/worker do Claude lái, chạy công cụ thật (nmap/nuclei/ffuf/sqlmap), **scope gate + risk gate + approval + budget + audit**, chuỗi tấn công (todolist), chạy song song. Gắn **bằng chứng** request/response (recording **MITM proxy** có CA). → `docs/PENTEST_AGENT.md`
+- **🗂️ Asset inventory + risk scoring theo ngữ cảnh** — điểm rủi ro kiểu Tenable VPR/Nexpose: `CVSS × EPSS × KEV × độ quan trọng × mức phơi bày`, cộng khi có cảnh báo EDR đang hoạt động.
+- **🔌 Connector XDR/EDR/NAC + MCP** — Trellix XDR, Trend Micro Vision One, FortiNAC (secret mã hoá); MCP server expose dữ liệu cho agent/Claude Desktop. → `docs/CONNECTORS_MCP.md`
+- **📊 Dashboard rủi ro toàn hệ thống** — gom code/web/pentest/asset thành một điểm tư thế rủi ro + top rủi ro + độ phủ.
+
+> ⚠️ Pentest Agent chỉ dùng cho tài sản **bạn sở hữu hoặc được uỷ quyền bằng văn bản**. Mọi hành động phá huỷ đều qua người duyệt.
+
+---
+
 ## 🚀 Quick Start
 
 ### Yêu cầu hệ thống
