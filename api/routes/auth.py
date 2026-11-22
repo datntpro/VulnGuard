@@ -43,6 +43,8 @@ ADMIN_ONLY = [
     ("PUT", "/api/ollama"),
     ("DELETE", "/api/ollama"),
     ("*", "/api/coworker"),
+    ("*", "/api/connectors"),
+    ("POST", "/api/intel/refresh"),
 ]
 
 
@@ -141,6 +143,11 @@ def _set_session(response: Response, user: User) -> str:
 def current_user(request: Request) -> User:
     user = getattr(request.state, "user", None)
     if user is None:
+        if not settings.auth_enabled:
+            # Chế độ dev (auth tắt) — coi như ADMIN để không chặn các route admin.
+            u = User(email="dev@local", name="Dev (auth disabled)", role=UserRole.ADMIN, is_active=True)
+            u.id = "dev-local"
+            return u
         raise HTTPException(status_code=401, detail="Chưa đăng nhập")
     return user
 

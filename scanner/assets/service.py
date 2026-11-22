@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from api.asset_models import (
@@ -38,14 +39,42 @@ def _enum_val(enum_cls, v, default):
         return default
 
 
+def _find_existing(db: Session, mac, hostname, ip) -> Optional[Asset]:
+    """Match linh hoạt: mac → hostname → ip (nhiều nguồn cho định danh khác nhau về
+    cùng 1 máy vẫn gộp đúng, vd NAC cho mac+hostname còn alert chỉ có hostname)."""
+    if mac:
+        m = "mac:" + mac.lower().replace("-", ":")
+        a = db.query(Asset).filter((Asset.dedup_key == m) |
+                                   (Asset.mac.isnot(None) & (func.lower(Asset.mac) == mac.lower()))).first()
+        if a:
+            return a
+    if hostname:
+        a = db.query(Asset).filter((Asset.dedup_key == "host:" + hostname.lower()) |
+                                   (func.lower(Asset.hostname) == hostname.lower())).first()
+        if a:
+            return a
+    if ip:
+        a = db.query(Asset).filter((Asset.dedup_key == "ip:" + ip) | (Asset.ip == ip)).first()
+        if a:
+            return a
+    return None
+
+
 def upsert_asset(db: Session, norm: Dict, source: str) -> Asset:
     """norm: dict chuẩn hoá {hostname, ip, mac, asset_type, os, os_version, criticality,
     exposure, vlan, switch_port, nac_status, edr_agent_present, edr_health, owner, tags}."""
-    key = compute_dedup_key(norm.get("mac"), norm.get("hostname"), norm.get("ip"))
-    asset = db.query(Asset).filter(Asset.dedup_key == key).first()
+    asset = _find_existing(db, norm.get("mac"), norm.get("hostname"), norm.get("ip"))
     if not asset:
-        asset = Asset(dedup_key=key)
+        asset = Asset(dedup_key=compute_dedup_key(norm.get("mac"), norm.get("hostname"), norm.get("ip")))
         db.add(asset)
+    else:
+        # Nâng cấp dedup_key nếu nguồn mới cho định danh ổn định hơn (mac > hostname > ip)
+        best = compute_dedup_key(norm.get("mac") or asset.mac, norm.get("hostname") or asset.hostname,
+                                 norm.get("ip") or asset.ip)
+        if best.startswith("mac:") or (best.startswith("host:") and (asset.dedup_key or "").startswith("ip:")):
+            # tránh đụng unique nếu đã có asset khác giữ key này
+            if not db.query(Asset).filter(Asset.dedup_key == best, Asset.id != asset.id).first():
+                asset.dedup_key = best
     # Merge — chỉ ghi đè khi có giá trị mới (không xoá dữ liệu cũ bằng None)
     for f in ("hostname", "ip", "mac", "os", "os_version", "vlan", "switch_port", "nac_status",
               "edr_health", "owner"):
