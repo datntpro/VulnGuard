@@ -27,29 +27,36 @@ VulnGuard không còn chỉ quét code — nay là nền tảng bảo mật hợ
 
 ## 🚀 Quick Start
 
-### Cách nhanh nhất — trình cài đặt tương tác
+### Cài đặt — chạy được trên **macOS · Linux · Windows**
 
-```bash
-bash setup.sh
-```
-Trình cài đặt sẽ:
-1. Hỏi **Docker** hay **Native** (Python venv).
-2. Nếu Native: cho **chọn nhóm công cụ** cần cài — SAST · SCA · Secrets · IaC · Container · Web/DAST · Pentest · AI (Ollama). Tự phát hiện `apt/dnf/yum/brew`, tải binary theo kiến trúc.
-3. **Tự sinh mật khẩu ADMIN** và tạo tài khoản — mật khẩu hiện trên màn hình và lưu `storage/admin_credentials.txt` (chmod 600). *Đổi mật khẩu sau khi đăng nhập rồi xoá file này.*
-4. Chạy production tại **http://localhost:8080**.
+Trình cài đặt chung viết bằng Python (`scripts/setup.py`) — chọn Docker hoặc Native, tự chọn công cụ, **tự sinh mật khẩu ADMIN**, rồi chạy production tại **http://localhost:8080**.
+
+| OS | Lệnh |
+|---|---|
+| **macOS / Linux** | `bash setup.sh` |
+| **Windows** (PowerShell) | `powershell -ExecutionPolicy Bypass -File setup.ps1` |
+| **Mọi OS** (có Python) | `python3 scripts/setup.py` (Windows: `python scripts\setup.py`) |
+| **Mọi OS** (Docker) | `bash setup.sh --docker`  ·  hoặc trực tiếp `docker compose up -d --build` |
+
+Các cờ dùng chung (không tương tác):
 
 | Lệnh | Tác dụng |
 |---|---|
-| `bash setup.sh` | Cài tương tác + tạo ADMIN + chạy production |
-| `bash setup.sh --check` | Liệt kê công cụ đã/chưa cài |
-| `bash setup.sh --tools "sast sca web pentest" --no-run` | Cài không tương tác, không chạy |
-| `bash setup.sh --admin-email you@corp.vn` | Đặt email ADMIN (vẫn tự sinh mật khẩu) |
-| `bash run.sh` | Chạy lại **production** (đã cài rồi) |
-| `bash run_demo.sh` | Chạy **demo** có sẵn dữ liệu mẫu mọi trang |
+| `... --check` | Liệt kê công cụ đã/chưa cài |
+| `... --tools "sast sca web pentest" --no-run` | Cài không tương tác, không chạy |
+| `... --docker` | Dùng Docker Compose (image gồm sẵn mọi tool) |
+| `... --admin-email you@corp.vn` | Đặt email ADMIN (vẫn tự sinh mật khẩu) |
+| `bash run.sh` / `.\run.ps1` | Chạy lại **production** (đã cài) |
+| `bash run_demo.sh` | Chạy **demo** có sẵn dữ liệu mẫu |
 
-**Yêu cầu Native:** Python 3.11+. Công cụ quét (nmap/nuclei/…) chỉ cần khi quét thật — có thể bỏ qua nếu chỉ dùng Document Review/xem UI. AI local cần Ollama (tuỳ chọn); hoặc dùng Claude/Bedrock trong Settings → AI Provider.
+**Khuyến nghị theo OS:**
+- **Windows**: cách gọn & đủ nhất là **Docker Desktop** (`--docker`) — image Linux chạy đủ mọi scanner. Bản Native chạy tốt phần lõi + nuclei/katana/ffuf/trivy; riêng **semgrep (SAST) cần Docker/WSL** trên Windows.
+- **macOS**: nên cài **Homebrew** để `setup.sh` cài công cụ gọn hơn (nmap/sqlmap/ffuf…). Ollama tải tại ollama.com/download.
+- **Linux**: `setup.sh` tự dùng `apt/dnf/yum`.
 
-> Bản **demo**: đăng nhập `demo@vulnguard.local` / `VulnGuardDemo!` (dữ liệu mẫu, không chạy scan thật).
+**Yêu cầu:** Python 3.11+ (cho Native) hoặc Docker. Công cụ quét chỉ cần khi quét thật — có thể bỏ qua nếu chỉ dùng UI/Document Review.
+
+> Bản **demo**: `demo@vulnguard.local` / `VulnGuardDemo!` (dữ liệu mẫu, không quét thật).
 
 <details><summary>Cách thủ công (Docker Compose)</summary>
 
