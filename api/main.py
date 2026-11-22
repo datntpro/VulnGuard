@@ -7,12 +7,18 @@ import os
 from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
+from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard
 # domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
 # đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
 from api import domain_models  # noqa: F401
 from api import docreview_models  # noqa: F401
 from api import file_assistant_models  # noqa: F401
 from api import agent_conversation_models  # noqa: F401
+from api import auth_models  # noqa: F401
+from api import webscan_models  # noqa: F401
+from api import pentest_models  # noqa: F401
+from api import asset_models  # noqa: F401
+from api import connector_models  # noqa: F401
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -42,6 +48,10 @@ def _run_migrations():
             "ALTER TABLE domain_crawls ADD COLUMN ai_sensitive_endpoints TEXT",
             "ALTER TABLE domain_crawls ADD COLUMN ai_waf_suggestions TEXT",
             "ALTER TABLE domain_crawls ADD COLUMN ai_error TEXT",
+            "ALTER TABLE vulnerabilities ADD COLUMN ai_provider VARCHAR(120)",
+            "ALTER TABLE pentest_findings ADD COLUMN evidence_traffic_id VARCHAR",
+            "ALTER TABLE pentest_runs ADD COLUMN todolist TEXT",
+            "ALTER TABLE pentest_engagements ADD COLUMN max_parallel INTEGER DEFAULT 3",
         ):
             try:
                 conn.execute(text(ddl))
@@ -122,6 +132,31 @@ def _cleanup_stale_doc_reviews():
 
 _cleanup_stale_doc_reviews()
 
+
+def _cleanup_stale_pentest_runs():
+    from api.database import SessionLocal
+    from api.pentest_models import PentestRun, RunStatus, ApprovalRequest, ApprovalStatus
+    from datetime import datetime
+    db = SessionLocal()
+    try:
+        stale = db.query(PentestRun).filter(PentestRun.status.in_(
+            [RunStatus.RUNNING, RunStatus.PENDING, RunStatus.WAITING_APPROVAL, RunStatus.PAUSED])).all()
+        for r in stale:
+            r.status = RunStatus.FAILED
+            r.error_message = "Run gián đoạn do container restart. Chạy lại."
+            r.completed_at = datetime.utcnow()
+        for a in db.query(ApprovalRequest).filter(ApprovalRequest.status == ApprovalStatus.PENDING).all():
+            a.status = ApprovalStatus.EXPIRED
+        if stale:
+            db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+
+_cleanup_stale_pentest_runs()
+
 app = FastAPI(
     title="VulnGuard API",
     description="Local DevSecOps Security Scanner với AI Analysis",
@@ -141,7 +176,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Auth: gắn user vào request.state + chặn /api/* chưa đăng nhập (xem api/routes/auth.py)
+app.middleware("http")(auth.auth_middleware)
+
 # API Routes
+app.include_router(auth.router)
+app.include_router(ai.router)
+app.include_router(webscans.router)
+app.include_router(pentest.router)
+app.include_router(assets.router)
+app.include_router(intel.router)
+app.include_router(connectors.router)
+app.include_router(dashboard.router)
 app.include_router(projects.router)
 app.include_router(scans.router)
 app.include_router(vulns.router)
@@ -165,6 +211,10 @@ def health():
 web_dir = os.path.join(os.path.dirname(__file__), "..", "web")
 if os.path.exists(web_dir):
     app.mount("/static", StaticFiles(directory=web_dir), name="static")
+
+    @app.get("/login", include_in_schema=False)
+    def serve_login():
+        return FileResponse(os.path.join(web_dir, "login.html"))
 
     @app.get("/", include_in_schema=False)
     def serve_ui():

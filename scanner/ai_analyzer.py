@@ -100,7 +100,7 @@ class AIAnalyzer:
         # OLLAMA_TIMEOUT nếu có, nên không cần đọc os.environ riêng ở đây nữa.
         from api.config import settings as _settings
         self.ollama_url = _settings.ollama_url
-        self.timeout = _settings.ollama_timeout
+        self._ollama_timeout = _settings.ollama_timeout
 
         # Ưu tiên: active model đã set qua UI > env var > default
         self.model = self._get_active_model()
@@ -154,12 +154,74 @@ class AIAnalyzer:
             package_version=vuln_data.get("package_version", ""),
             fixed_version=vuln_data.get("fixed_version", ""),
         )
+        from api.services.ai_config import load_config
+        cfg = load_config()
+        mode = cfg.get("mode", "local_only")
+
+        if mode == "cloud_only":
+            return await self.analyze_cloud(vuln_data, cfg=cfg)
+
         try:
             response_text = await self._call_ollama(prompt)
-            return self._parse_response(response_text)
+            local = self._parse_response(response_text)
+            local["provider"] = f"ollama:{self.model}"
         except Exception as e:
             logger.error(f"AI analysis failed for {vuln_data.get('title', '?')[:50]}: {e}")
-            return self._fallback_analysis(str(e))
+            local = self._fallback_analysis(str(e))
+
+        if mode == "hybrid" and self._should_escalate(vuln_data, local, cfg):
+            cloud = await self.analyze_cloud(vuln_data, local_opinion=local, cfg=cfg)
+            # Cloud lỗi (mất mạng, hết quota…) → giữ kết quả local thay vì mất hết
+            if cloud.get("provider") and not cloud.get("error"):
+                return cloud
+        return local
+
+    @property
+    def timeout(self) -> int:
+        """Per-vuln timeout: local + (nếu có) cloud. scans.py dùng giá trị này cho wait_for."""
+        try:
+            from api.services.ai_config import load_config
+            if load_config().get("mode", "local_only") != "local_only":
+                return self._ollama_timeout + 200
+        except Exception:
+            pass
+        return self._ollama_timeout
+
+    @timeout.setter
+    def timeout(self, value: int):
+        self._ollama_timeout = value
+
+    @staticmethod
+    def _parse_pct(value) -> Optional[int]:
+        try:
+            return int(str(value).strip().rstrip("%").split(".")[0])
+        except (ValueError, TypeError):
+            return None
+
+    def _should_escalate(self, vuln_data: Dict[str, Any], local: Dict[str, Any], cfg: dict) -> bool:
+        """Hybrid: gửi lên cloud khi (a) local lỗi/không parse được, (b) severity ≥ ngưỡng,
+        hoặc (c) FP% của local nằm trong vùng không chắc chắn."""
+        order = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        h = cfg["hybrid"]
+        sev = str(vuln_data.get("severity", "INFO")).upper()
+        if sev in order and order.index(sev) >= order.index(h["escalate_min_severity"]):
+            return True
+        fp = self._parse_pct(local.get("false_positive_likelihood"))
+        if fp is None:
+            return True
+        return h["fp_band_low"] <= fp <= h["fp_band_high"]
+
+    async def analyze_cloud(self, vuln_data: Dict[str, Any], local_opinion: Optional[dict] = None,
+                            cfg: Optional[dict] = None) -> Dict[str, Any]:
+        """Phân tích bằng Claude (Anthropic API / Bedrock). Không raise — lỗi trả fallback có `error`."""
+        try:
+            from scanner.cloud_ai import CloudAnalyzer
+            return await CloudAnalyzer(cfg).analyze_finding(vuln_data, local_opinion=local_opinion)
+        except Exception as e:
+            logger.error(f"Cloud AI analysis failed for {str(vuln_data.get('title', '?'))[:50]}: {e}")
+            out = self._fallback_analysis(f"Cloud AI: {e}")
+            out["error"] = str(e)[:300]
+            return out
 
     async def _call_ollama(self, prompt: str) -> str:
         """Gọi Ollama API với timeout phân tách rõ: connect 10s, read = ollama_timeout."""
@@ -167,7 +229,7 @@ class AIAnalyzer:
         # vì LLM generate chậm, chỉ cần connect nhanh
         timeout = httpx.Timeout(
             connect=10.0,       # Kết nối tới Ollama: 10s
-            read=float(self.timeout),   # Đọc response (LLM generate): ollama_timeout
+            read=float(self._ollama_timeout),   # Đọc response (LLM generate): ollama_timeout
             write=10.0,
             pool=5.0,
         )
@@ -273,7 +335,7 @@ class AIAnalyzer:
 
     async def _call_ollama_crawl(self, prompt: str) -> str:
         """Giống _call_ollama nhưng cho phép output dài hơn (list endpoint có thể nhiều)."""
-        timeout = httpx.Timeout(connect=10.0, read=float(self.timeout), write=10.0, pool=5.0)
+        timeout = httpx.Timeout(connect=10.0, read=float(self._ollama_timeout), write=10.0, pool=5.0)
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(
                 f"{self.ollama_url}/api/generate",

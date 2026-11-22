@@ -1,0 +1,300 @@
+"""
+Auth API + middleware bảo vệ toàn bộ /api/*.
+
+Luồng:
+  1. Lần đầu (chưa có user): GET /api/auth/status → setup_required=true
+     → POST /api/auth/setup tạo ADMIN đầu tiên.
+  2. POST /api/auth/login → set cookie HttpOnly `vg_session` (+ trả token cho CLI/CI).
+  3. Mọi request /api/* phải có cookie hoặc header `Authorization: Bearer <token>`.
+
+Phân quyền (enforce ở middleware, theo prefix):
+  VIEWER  — chỉ GET
+  ANALYST — chạy scan, đổi trạng thái vuln, waiver…
+  ADMIN   — + quản lý user, cấu hình AI / scanner / Ollama, Co-work (chạy lệnh trên host)
+"""
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
+
+from api.auth_models import User, UserRole
+from api.config import settings
+from api.database import get_db, SessionLocal
+from api.security import (
+    COOKIE_NAME, create_token, decode_token, hash_password, verify_password,
+)
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+PUBLIC_API_PATHS = {
+    "/api/auth/status", "/api/auth/login", "/api/auth/setup", "/api/auth/logout",
+    "/api/health",
+}
+
+# (method or "*", path prefix) chỉ ADMIN được gọi
+ADMIN_ONLY = [
+    ("*", "/api/auth/users"),
+    ("PUT", "/api/ai/config"),
+    ("PUT", "/api/settings"),
+    ("POST", "/api/ollama"),
+    ("PUT", "/api/ollama"),
+    ("DELETE", "/api/ollama"),
+    ("*", "/api/coworker"),
+    ("*", "/api/connectors"),
+    ("POST", "/api/intel/refresh"),
+]
+
+
+# ─────────────────────────────────────────────
+# Schemas
+# ─────────────────────────────────────────────
+class UserOut(BaseModel):
+    id: str
+    email: str
+    name: str
+    role: UserRole
+    is_active: bool
+    last_login_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+def _norm_email(v: str) -> str:
+    v = (v or "").strip().lower()
+    if "@" not in v or len(v) > 255:
+        raise ValueError("Email không hợp lệ")
+    return v
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        return _norm_email(v)
+
+
+class SetupIn(BaseModel):
+    email: str
+    name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=10, max_length=200)
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        return _norm_email(v)
+
+
+class UserCreate(SetupIn):
+    role: UserRole = UserRole.ANALYST
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+    password: Optional[str] = Field(default=None, min_length=10, max_length=200)
+
+
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
+def _token_from_request(request: Request) -> Optional[str]:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.cookies.get(COOKIE_NAME)
+
+
+def resolve_user(request: Request) -> Optional[User]:
+    token = _token_from_request(request)
+    if not token:
+        return None
+    payload = decode_token(token)
+    if not payload:
+        return None
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == payload.get("sub")).first()
+        if not user or not user.is_active or user.token_version != payload.get("tv", 0):
+            return None
+        db.expunge(user)
+        return user
+    finally:
+        db.close()
+
+
+def _set_session(response: Response, user: User) -> str:
+    token = create_token(user.id, user.role.value, user.token_version)
+    response.set_cookie(
+        COOKIE_NAME, token,
+        max_age=settings.session_ttl_hours * 3600,
+        httponly=True, samesite="strict", secure=settings.cookie_secure, path="/",
+    )
+    return token
+
+
+def current_user(request: Request) -> User:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        if not settings.auth_enabled:
+            # Chế độ dev (auth tắt) — coi như ADMIN để không chặn các route admin.
+            u = User(email="dev@local", name="Dev (auth disabled)", role=UserRole.ADMIN, is_active=True)
+            u.id = "dev-local"
+            return u
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập")
+    return user
+
+
+def require_admin(user: User = Depends(current_user)) -> User:
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Chỉ ADMIN được thực hiện thao tác này")
+    return user
+
+
+def _is_admin_only(method: str, path: str) -> bool:
+    return any((m == "*" or m == method) and path.startswith(p) for m, p in ADMIN_ONLY)
+
+
+async def auth_middleware(request: Request, call_next):
+    """Gắn request.state.user và chặn request chưa đăng nhập / thiếu quyền."""
+    path = request.url.path
+    request.state.user = None
+
+    if not settings.auth_enabled:
+        return await call_next(request)
+
+    is_api = path.startswith("/api/")
+    is_app_shell = path in ("/", "/index.html", "/static/index.html", "/static/agent.html")
+    if not (is_api or is_app_shell) or path in PUBLIC_API_PATHS or request.method == "OPTIONS":
+        return await call_next(request)
+
+    user = resolve_user(request)
+    if user is None:
+        if is_app_shell:
+            return RedirectResponse("/login", status_code=303)
+        return JSONResponse({"detail": "Chưa đăng nhập hoặc phiên đã hết hạn"}, status_code=401)
+
+    if request.method not in ("GET", "HEAD") and user.role == UserRole.VIEWER:
+        return JSONResponse({"detail": "Tài khoản VIEWER chỉ có quyền xem"}, status_code=403)
+    if _is_admin_only(request.method, path) and user.role != UserRole.ADMIN:
+        return JSONResponse({"detail": "Chỉ ADMIN được thực hiện thao tác này"}, status_code=403)
+
+    request.state.user = user
+    return await call_next(request)
+
+
+# ─────────────────────────────────────────────
+# Endpoints
+# ─────────────────────────────────────────────
+@router.get("/status")
+def auth_status(db: Session = Depends(get_db)):
+    return {
+        "auth_enabled": settings.auth_enabled,
+        "setup_required": settings.auth_enabled and db.query(User).count() == 0,
+    }
+
+
+@router.post("/setup")
+def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depends(get_db)):
+    if db.query(User).count() > 0:
+        raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+    user = User(email=payload.email, name=payload.name.strip(),
+                password_hash=hash_password(payload.password), role=UserRole.ADMIN,
+                last_login_at=datetime.utcnow())
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = _set_session(response, user)
+    return {"user": UserOut.model_validate(user), "token": token}
+
+
+@router.post("/login")
+def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    # verify_password chạy cả khi user không tồn tại → không lộ timing "email có tồn tại"
+    ok = verify_password(payload.password, user.password_hash if user else hash_password("x" * 12))
+    if not user or not ok or not user.is_active:
+        raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không đúng")
+    user.last_login_at = datetime.utcnow()
+    db.commit()
+    token = _set_session(response, user)
+    return {"user": UserOut.model_validate(user), "token": token}
+
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@router.get("/me", response_model=UserOut)
+def me(user: User = Depends(current_user)):
+    return user
+
+
+# ── User management (ADMIN) ──
+@router.get("/users", response_model=List[UserOut])
+def list_users(_: User = Depends(require_admin), db: Session = Depends(get_db)):
+    return db.query(User).order_by(User.created_at).all()
+
+
+@router.post("/users", response_model=UserOut, status_code=201)
+def create_user(payload: UserCreate, _: User = Depends(require_admin), db: Session = Depends(get_db)):
+    if db.query(User).filter(User.email == payload.email).first():
+        raise HTTPException(status_code=400, detail="Email đã tồn tại")
+    user = User(email=payload.email, name=payload.name.strip(),
+                password_hash=hash_password(payload.password), role=payload.role)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _active_admin_count(db: Session) -> int:
+    return db.query(User).filter(User.role == UserRole.ADMIN, User.is_active.is_(True)).count()
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+def update_user(user_id: str, payload: UserUpdate, admin: User = Depends(require_admin),
+                db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User không tồn tại")
+    demoting = (payload.role is not None and payload.role != UserRole.ADMIN) or payload.is_active is False
+    if demoting and user.role == UserRole.ADMIN and _active_admin_count(db) <= 1:
+        raise HTTPException(status_code=400, detail="Phải còn ít nhất 1 ADMIN đang hoạt động")
+    if payload.name is not None:
+        user.name = payload.name.strip()
+    if payload.role is not None and payload.role != user.role:
+        user.role = payload.role
+        user.token_version += 1
+    if payload.is_active is not None and payload.is_active != user.is_active:
+        user.is_active = payload.is_active
+        user.token_version += 1
+    if payload.password:
+        user.password_hash = hash_password(payload.password)
+        user.token_version += 1
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def delete_user(user_id: str, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User không tồn tại")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="Không thể tự xoá tài khoản đang đăng nhập")
+    if user.role == UserRole.ADMIN and _active_admin_count(db) <= 1:
+        raise HTTPException(status_code=400, detail="Phải còn ít nhất 1 ADMIN đang hoạt động")
+    db.delete(user)
+    db.commit()
+    return None

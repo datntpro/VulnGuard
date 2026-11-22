@@ -2,7 +2,8 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 # DB — giữ nguyên để tránh migration issues
-sqlalchemy==2.0.30
+# >=2.0.36: bản 2.0.30 lỗi import trên Python 3.13 (native install distro mới)
+sqlalchemy>=2.0.36,<2.1
 alembic==1.13.1
 # Pydantic — dùng >= để pip tự resolve khi scanner tools upgrade
 pydantic>=2.7.1
@@ -17,3 +18,10 @@ typer>=0.12.3
 # Document Review — extract text từ tài liệu upload (SRS/HLD/API spec...)
 pypdf>=4.2.0
 python-docx>=1.1.2
+# Cloud AI — Claude API (Anthropic) + Amazon Bedrock (Mantle client)
+anthropic[bedrock]>=2.12.0
+# Auth — JWT session + mã hoá secret (API key cloud AI) khi lưu
+pyjwt>=2.8.0
+cryptography>=42.0.0
+# MCP server — expose asset/intel/connector cho agent (Claude Desktop / Pentest Agent)
+mcp>=2.0.0

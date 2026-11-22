@@ -114,6 +114,7 @@ class Vulnerability(Base):
     ai_explanation = Column(Text, nullable=True)           # Tiếng Việt
     ai_fix_suggestion = Column(Text, nullable=True)
     ai_analyzed_at = Column(DateTime, nullable=True)
+    ai_provider = Column(String(120), nullable=True)       # "ollama:llama3.2" | "claude-api:claude-opus-5-5" | "bedrock:…"
 
     # Fingerprint cho tracking across scans
     fingerprint = Column(String(64), nullable=True, index=True)

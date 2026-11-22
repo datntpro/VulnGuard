@@ -49,6 +49,8 @@ class Domain(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     crawls = relationship("DomainCrawl", back_populates="domain", cascade="all, delete-orphan")
+    # WebScan định nghĩa ở api/webscan_models.py (import trong main.py trước create_all)
+    webscans = relationship("WebScan", cascade="all, delete-orphan")
 
 
 # ─────────────────────────────────────────────

@@ -68,3 +68,4 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+storage/pentest_ca/

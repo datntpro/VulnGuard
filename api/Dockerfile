@@ -11,6 +11,7 @@ ARG TARGETARCH
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget git unzip ca-certificates gnupg apt-transport-https \
+    nmap dnsutils sqlmap \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -60,6 +61,33 @@ RUN ARCH=${TARGETARCH:-amd64} \
     && rm -f /tmp/katana.zip \
     && chmod +x /usr/local/bin/katana \
     || echo "⚠ Katana install failed — skipping (chỉ ảnh hưởng tính năng Domain Sitemap)"
+
+# 6. Nuclei — web vulnerability scanner (template-based, ~10k+ templates CVE/misconfig/exposure)
+#    Quét các URL mà Katana đã crawl. Template tải sẵn lúc build để chạy được offline.
+ARG NUCLEI_VERSION=3.4.7
+RUN ARCH=${TARGETARCH:-amd64} \
+    && if [ "$ARCH" = "arm64" ]; then NU_ARCH="arm64"; else NU_ARCH="amd64"; fi \
+    && curl -sL \
+        "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${NU_ARCH}.zip" \
+        -o /tmp/nuclei.zip \
+    && unzip -p /tmp/nuclei.zip nuclei > /usr/local/bin/nuclei \
+    && rm -f /tmp/nuclei.zip \
+    && chmod +x /usr/local/bin/nuclei \
+    && (nuclei -update-templates -silent || echo "⚠ Không tải được nuclei-templates lúc build — sẽ tải khi chạy lần đầu") \
+    || echo "⚠ Nuclei install failed — skipping (chỉ ảnh hưởng tính năng Web Scan)"
+
+# 7. ffuf — content discovery (Pentest Agent). Wordlist seclists cài kèm (tuỳ chọn).
+ARG FFUF_VERSION=2.1.0
+RUN ARCH=${TARGETARCH:-amd64} \
+    && if [ "$ARCH" = "arm64" ]; then FF_ARCH="arm64"; else FF_ARCH="amd64"; fi \
+    && curl -sL \
+        "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_${FF_ARCH}.tar.gz" \
+        -o /tmp/ffuf.tgz \
+    && tar -xzf /tmp/ffuf.tgz -C /usr/local/bin ffuf \
+    && rm -f /tmp/ffuf.tgz && chmod +x /usr/local/bin/ffuf \
+    || echo "⚠ ffuf install failed — skipping (chỉ ảnh hưởng content_discovery của Pentest Agent)"
+RUN git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists 2>/dev/null \
+    || echo "⚠ SecLists clone failed — content_discovery cần chỉ định wordlist thủ công"
 
 # ─────────────────────────────────────────────
 # Python dependencies
