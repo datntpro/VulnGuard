@@ -7,7 +7,7 @@ import os
 from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
-from api.routes import auth, ai, webscans
+from api.routes import auth, ai, webscans, pentest
 # domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
 # đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
 from api import domain_models  # noqa: F401
@@ -16,6 +16,7 @@ from api import file_assistant_models  # noqa: F401
 from api import agent_conversation_models  # noqa: F401
 from api import auth_models  # noqa: F401
 from api import webscan_models  # noqa: F401
+from api import pentest_models  # noqa: F401
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -126,6 +127,31 @@ def _cleanup_stale_doc_reviews():
 
 _cleanup_stale_doc_reviews()
 
+
+def _cleanup_stale_pentest_runs():
+    from api.database import SessionLocal
+    from api.pentest_models import PentestRun, RunStatus, ApprovalRequest, ApprovalStatus
+    from datetime import datetime
+    db = SessionLocal()
+    try:
+        stale = db.query(PentestRun).filter(PentestRun.status.in_(
+            [RunStatus.RUNNING, RunStatus.PENDING, RunStatus.WAITING_APPROVAL, RunStatus.PAUSED])).all()
+        for r in stale:
+            r.status = RunStatus.FAILED
+            r.error_message = "Run gián đoạn do container restart. Chạy lại."
+            r.completed_at = datetime.utcnow()
+        for a in db.query(ApprovalRequest).filter(ApprovalRequest.status == ApprovalStatus.PENDING).all():
+            a.status = ApprovalStatus.EXPIRED
+        if stale:
+            db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+
+_cleanup_stale_pentest_runs()
+
 app = FastAPI(
     title="VulnGuard API",
     description="Local DevSecOps Security Scanner với AI Analysis",
@@ -152,6 +178,7 @@ app.middleware("http")(auth.auth_middleware)
 app.include_router(auth.router)
 app.include_router(ai.router)
 app.include_router(webscans.router)
+app.include_router(pentest.router)
 app.include_router(projects.router)
 app.include_router(scans.router)
 app.include_router(vulns.router)

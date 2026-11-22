@@ -186,6 +186,17 @@ else
     log "Nuclei đã có — bỏ qua"
 fi
 
+# 2.7 nmap — port/service scan cho Pentest Agent (cài qua package manager của distro)
+if ! command -v nmap >/dev/null 2>&1; then
+    log "Cài nmap..."
+    if command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y nmap || warn "nmap install thất bại";
+    elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y nmap || warn "nmap install thất bại";
+    elif command -v yum >/dev/null 2>&1; then sudo yum install -y nmap || warn "nmap install thất bại";
+    else warn "Không rõ package manager — cài nmap thủ công cho Pentest Agent"; fi
+else
+    log "nmap đã có — bỏ qua"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # 3. Python virtualenv + dependencies
 # ─────────────────────────────────────────────────────────────
