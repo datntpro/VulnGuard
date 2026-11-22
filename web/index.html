@@ -4,161 +4,385 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VulnGuard — DevSecOps Scanner</title>
+<link rel="icon" type="image/svg+xml" href="/static/assets/logo.svg">
+<link rel="stylesheet" href="/static/brand.css">
+<script>
+  // Áp theme sớm để tránh nháy màu (dark / light / system)
+  (function () { var t = 'system'; try { t = localStorage.getItem('vg-theme') || 'system'; } catch (e) {} document.documentElement.dataset.theme = t; })();
+</script>
 <style>
-  :root {
-    --bg: #0f1117; --bg2: #161b22; --bg3: #1c2128; --border: #30363d;
-    --text: #e6edf3; --text2: #8b949e; --text3: #6e7681;
-    --critical: #da3633; --high: #e85d25; --medium: #d29922; --low: #3fb950; --info: #58a6ff;
-    --accent: #238636; --accent2: #1f6feb; --blocked: #da3633; --approved: #3fb950;
-  }
+  /* Tokens (màu, font, motion) đến từ /static/brand.css — không khai báo lại :root ở đây. */
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; height: 100vh; padding: 16px 0; display: flex; flex-direction: column; z-index: 100; }
-  .sidebar-footer { margin-top: auto; padding: 14px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); text-align: center; }
-  .sidebar-footer a { color: var(--accent2); text-decoration: none; font-weight: 600; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+    background: radial-gradient(900px 480px at 85% -10%, rgba(91,91,247,.10), transparent 60%),
+                radial-gradient(700px 400px at 10% 110%, rgba(45,212,232,.06), transparent 60%); }
+  ::selection { background: rgba(91,91,247,.35); }
+  a { color: var(--brand-400); }
+  code { font-family: var(--font-mono); font-size: .92em; background: var(--bg3); border: 1px solid var(--border); padding: 0 5px; border-radius: 5px; }
+  :focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: padding-box; border: 2px solid transparent; }
+
+  /* ── Sidebar ─────────────────────────────────────────── */
+  .sidebar { width: 248px; background: var(--bg-glass); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4);
+    border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; height: 100vh; padding: 18px 12px 12px; display: flex; flex-direction: column; z-index: 100; overflow-y: auto; }
+  .logo { padding: 2px 8px 22px; font-size: 18px; font-weight: 800; letter-spacing: -.02em; color: var(--text); display: flex; align-items: center; gap: 10px; }
+  .logo img { width: 32px; height: 32px; filter: drop-shadow(0 6px 14px rgba(91,91,247,.45)); }
+  .logo .wordmark { display: flex; flex-direction: column; line-height: 1.1; }
+  .logo .wordmark small { font-size: 10.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text3); margin-top: 3px; }
+  .nav-section { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text3); padding: 14px 12px 6px; }
+  .nav-item { position: relative; display: flex; align-items: center; gap: 11px; padding: 9px 12px; margin: 1px 0; cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--text2);
+    border-radius: var(--radius); transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); user-select: none; }
+  .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+  .nav-item:hover { background: var(--bg3); color: var(--text); }
+  .nav-item.active { background: var(--brand-soft); color: var(--text); }
+  .nav-item.active svg { stroke: var(--brand-400); opacity: 1; }
+  .nav-item::before { content: ""; position: absolute; left: -12px; top: 50%; width: 4px; height: 20px; border-radius: 0 4px 4px 0; background: var(--brand-gradient);
+    transform: translateY(-50%) scaleY(0); transition: transform var(--dur) var(--ease-out); }
+  .nav-item.active::before { transform: translateY(-50%) scaleY(1); }
+  .sidebar-footer { margin-top: auto; padding: 12px 4px 2px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text3); display: flex; flex-direction: column; gap: 10px; }
+  .sidebar-footer .powered { text-align: center; }
+  .sidebar-footer a { color: var(--brand-400); text-decoration: none; font-weight: 600; }
   .sidebar-footer a:hover { text-decoration: underline; }
-  .logo { padding: 8px 16px 20px; font-size: 18px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
-  .logo span { color: var(--accent2); }
-  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--text2); border-left: 3px solid transparent; transition: all .15s; }
-  .nav-item:hover, .nav-item.active { background: var(--bg3); color: var(--text); border-left-color: var(--accent2); }
-  .main { margin-left: 220px; padding: 24px; }
+  .user-chip { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: var(--radius); background: var(--bg3); border: 1px solid var(--border); }
+  .user-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--brand-gradient); color: #fff; font-weight: 700; font-size: 12px; display: grid; place-items: center; flex-shrink: 0; }
+  .user-meta { flex: 1; min-width: 0; }
+  .user-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .role-badge { display: inline-block; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border-radius: var(--radius-pill); background: var(--brand-soft); color: var(--brand-400); margin-top: 2px; }
+  .role-badge.ADMIN { background: color-mix(in srgb, var(--critical) 14%, transparent); color: color-mix(in srgb, var(--critical) 80%, var(--text)); }
+  .role-badge.VIEWER { background: var(--bg2); color: var(--text2); border: 1px solid var(--border); }
+  .logout-btn { background: transparent; border: 1px solid var(--border); color: var(--text2); border-radius: var(--radius-sm); font: inherit; font-size: 11.5px; padding: 4px 8px; cursor: pointer; white-space: nowrap; transition: all var(--dur-fast); }
+  .logout-btn:hover { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 50%, transparent); }
+  .theme-toggle { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 3px; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); position: relative; }
+  .theme-toggle button { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 5px; background: transparent; border: 0; color: var(--text3); font: inherit; font-size: 11.5px; font-weight: 500; padding: 6px 4px; border-radius: 7px; cursor: pointer; transition: color var(--dur-fast); }
+  .theme-toggle button svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .theme-toggle button:hover { color: var(--text); }
+  .theme-toggle button.active { color: var(--text); background: var(--bg2); box-shadow: var(--shadow-1); }
+
+  /* Mobile top bar + drawer */
+  .topbar { display: none; }
+  .sidebar-backdrop { display: none; }
+
+  .main { margin-left: 248px; padding: 28px 32px 48px; max-width: 1480px; }
   .page { display: none; }
   .page.active { display: block; }
-  h1 { font-size: 22px; font-weight: 600; margin-bottom: 20px; }
-  h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
-  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-bottom: 20px; line-height: 1.25; }
+  .flex-between > h1, .flex-between.mb-16 > h1 { margin-bottom: 0; }
+  h2 { font-size: 12px; font-weight: 600; margin-bottom: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: .07em; }
+  h3 { font-weight: 600; }
+
+  /* ── Cards ────────────────────────────────────────────── */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-1); }
+  .card[onclick], .card[style*="cursor:pointer"] { transition: transform var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out), border-color var(--dur); }
+  .card[onclick]:hover, .card[style*="cursor:pointer"]:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-  .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
-  .stat-num { font-size: 32px; font-weight: 700; }
-  .stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
-  .c { color: var(--critical); } .h { color: var(--high); } .m { color: var(--medium); } .l { color: var(--low); } .i { color: var(--info); }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-  .badge-critical { background: #da363320; color: var(--critical); border: 1px solid var(--critical); }
-  .badge-high { background: #e85d2520; color: var(--high); border: 1px solid var(--high); }
-  .badge-medium { background: #d2992220; color: var(--medium); border: 1px solid var(--medium); }
-  .badge-low { background: #3fb95020; color: var(--low); border: 1px solid var(--low); }
-  .badge-info { background: #58a6ff20; color: var(--info); border: 1px solid var(--info); }
-  .badge-open { background: #8b949e20; color: var(--text2); }
-  .badge-accepted { background: #1f6feb20; color: var(--accent2); }
-  .badge-fp { background: #3fb95020; color: var(--low); }
-  .badge-fixed { background: #3fb95020; color: var(--low); }
-  .badge-blocked { background: #da363320; color: var(--critical); }
-  .badge-approved { background: #3fb95020; color: var(--low); }
-  .btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: 500; transition: all .15s; }
-  .btn-primary { background: var(--accent2); color: white; }
-  .btn-primary:hover { background: #388bfd; }
-  .btn-danger { background: var(--critical); color: white; }
-  .btn-danger:hover { background: #f85149; }
-  .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
-  .btn-ghost:hover { color: var(--text); border-color: var(--text2); }
-  .btn-sm { padding: 4px 12px; font-size: 12px; }
-  input, select, textarea { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 8px 12px; font-size: 14px; width: 100%; outline: none; font-family: inherit; }
-  input:focus, select:focus, textarea:focus { border-color: var(--accent2); }
-  label { font-size: 13px; color: var(--text2); margin-bottom: 6px; display: block; }
-  .form-group { margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); color: var(--text2); font-weight: 500; font-size: 12px; text-transform: uppercase; }
-  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  tr:hover td { background: var(--bg3); }
-  .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--bg3); border: 1px solid var(--border); margin: 1px; }
+  .stat-card { --tone: var(--brand-500); position: relative; overflow: hidden; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 18px 16px; text-align: left; box-shadow: var(--shadow-1);
+    transition: transform var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out), border-color var(--dur); }
+  .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
+  .stat-card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--tone); opacity: .9; }
+  .stat-card::after { content: ""; position: absolute; right: -30px; top: -30px; width: 110px; height: 110px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--tone) 22%, transparent), transparent 70%); pointer-events: none; }
+  .stat-card:has(.c) { --tone: var(--critical); } .stat-card:has(.h) { --tone: var(--high); } .stat-card:has(.m) { --tone: var(--medium); } .stat-card:has(.l) { --tone: var(--low); }
+  .stat-card:has(.compare-new) { --tone: var(--critical); } .stat-card:has(.compare-fixed) { --tone: var(--low); } .stat-card:has(.compare-persisted) { --tone: var(--medium); }
+  .stat-num { font-size: 32px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text2); margin-top: 6px; }
+  .mini-stat { text-align: center; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+  .c { color: var(--critical); } .h { color: var(--high); } .m { color: color-mix(in srgb, var(--medium) 85%, var(--text)); } .l { color: var(--low); } .i { color: var(--info); }
+
+  /* ── Badges / tags ────────────────────────────────────── */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 600; line-height: 1.6; white-space: nowrap; letter-spacing: .02em;
+    --b: var(--text2); background: color-mix(in srgb, var(--b) 14%, transparent); color: color-mix(in srgb, var(--b) 82%, var(--text)); border: 1px solid color-mix(in srgb, var(--b) 28%, transparent); }
+  .badge-critical { --b: var(--critical); } .badge-high { --b: var(--high); } .badge-medium { --b: var(--medium); } .badge-low { --b: var(--low); } .badge-info { --b: var(--info); }
+  .badge-open { --b: var(--text3); color: var(--text2); }
+  .badge-accepted { --b: var(--brand-500); }
+  .badge-fp, .badge-fixed, .badge-approved { --b: var(--low); }
+  .badge-blocked { --b: var(--critical); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: var(--radius-sm); font-size: 11px; background: var(--bg3); border: 1px solid var(--border); margin: 1px; color: var(--text2); font-weight: 500; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 600; background: var(--brand-soft); color: var(--brand-400); border: 1px solid color-mix(in srgb, var(--brand-500) 30%, transparent); }
+  .chip.cloud { background: color-mix(in srgb, var(--signal-400) 12%, transparent); color: color-mix(in srgb, var(--signal-400) 80%, var(--text)); border-color: color-mix(in srgb, var(--signal-400) 30%, transparent); }
   .text-sm { font-size: 12px; color: var(--text2); }
-  .text-mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 12px; }
+  .text-mono { font-family: var(--font-mono); font-size: 12px; }
   .vuln-row { cursor: pointer; }
-  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200; align-items: center; justify-content: center; }
-  .modal-overlay.open { display: flex; }
-  .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; width: 800px; max-width: 95vw; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; }
-  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+
+  /* ── Buttons ──────────────────────────────────────────── */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 600; line-height: 1.4; white-space: nowrap; text-decoration: none;
+    transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur) var(--ease-out), background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), filter var(--dur-fast); }
+  .btn:hover { border-color: var(--border-strong); }
+  .btn:active { transform: scale(.98); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+  .btn-primary { background: var(--brand-gradient); color: #fff; border-color: transparent; box-shadow: 0 1px 0 rgba(255,255,255,.18) inset, 0 4px 14px -6px rgba(91,91,247,.6); }
+  .btn-primary:hover:not(:disabled) { box-shadow: var(--brand-glow); filter: brightness(1.06); border-color: transparent; }
+  .btn-danger { background: var(--critical); color: #fff; border-color: transparent; }
+  .btn-danger:hover:not(:disabled) { filter: brightness(1.08); box-shadow: 0 8px 24px -10px var(--critical); border-color: transparent; }
+  .btn-ghost { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  .btn-ghost:hover:not(:disabled) { color: var(--text); background: var(--bg3); border-color: var(--border-strong); }
+  .btn-ai { background: linear-gradient(135deg, #7C3AED, #5B5BF7); color: #fff; border-color: transparent; }
+  .btn-ai:hover:not(:disabled) { box-shadow: 0 8px 26px -10px #7C3AED; filter: brightness(1.06); border-color: transparent; }
+  .btn-sm { padding: 5px 11px; font-size: 12px; border-radius: var(--radius-sm); }
+  .icon-btn { width: 34px; height: 34px; padding: 0; }
+
+  /* ── Forms ────────────────────────────────────────────── */
+  input, select, textarea { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 9px 12px; font-size: 13.5px; width: 100%; outline: none; font-family: inherit;
+    transition: border-color var(--dur-fast), box-shadow var(--dur-fast), background var(--dur-fast); }
+  input:hover, select:hover, textarea:hover { border-color: var(--border-strong); }
+  input:focus, select:focus, textarea:focus { border-color: var(--brand-500); box-shadow: var(--ring); }
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--brand-500); width: auto; padding: 0; box-shadow: none; }
+  input[type="file"] { padding: 7px; }
+  input::placeholder, textarea::placeholder { color: var(--text3); }
+  textarea.text-mono { font-family: var(--font-mono); }
+  label { font-size: 12.5px; font-weight: 500; color: var(--text2); margin-bottom: 6px; display: block; }
+  .form-group { margin-bottom: 16px; }
+  .field-hint { font-size: 11.5px; color: var(--text3); margin-top: 5px; }
+
+  /* ── Tables ───────────────────────────────────────────── */
+  table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+  th { position: sticky; top: 0; z-index: 1; padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); background: var(--bg2); color: var(--text3); font-weight: 600; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; transition: background var(--dur-fast); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: color-mix(in srgb, var(--bg3) 75%, transparent); }
+  .card > table thead th:first-child { border-top-left-radius: var(--radius-lg); }
+  .card > table thead th:last-child { border-top-right-radius: var(--radius-lg); }
+  .table-wrap { overflow-x: auto; }
+
+  /* ── Code ─────────────────────────────────────────────── */
+  .code-block { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-x: auto; margin: 8px 0; color: var(--code-text); }
+  .code-wrap { position: relative; }
+  .code-wrap .copy-btn { position: absolute; top: 8px; right: 8px; }
+
+  /* ── Modals ───────────────────────────────────────────── */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: var(--overlay); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); z-index: 200; align-items: center; justify-content: center; padding: 16px; }
+  .modal-overlay.open { display: flex; animation: vg-fade-in var(--dur) var(--ease-out) both; }
+  .modal-overlay.open > .modal, .modal-overlay.open > .progress-modal { animation: vg-scale-in var(--dur) var(--ease-out) both; }
+  .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 800px; max-width: 100%; max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 30px 80px -20px rgba(0,0,0,.55); }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .modal-header strong { font-size: 15px; font-weight: 700; }
   .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
-  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
-  .ai-box { background: var(--bg3); border: 1px solid #1f6feb40; border-radius: 6px; padding: 14px; margin-top: 12px; }
-  .ai-label { font-size: 11px; color: var(--accent2); font-weight: 600; text-transform: uppercase; margin-bottom: 6px; }
-  .code-block { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; white-space: pre-wrap; overflow-x: auto; margin: 8px 0; color: #e2c08d; }
+  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; background: color-mix(in srgb, var(--bg3) 45%, transparent); }
+
+  .ai-box { background: var(--bg3); border: 1px solid color-mix(in srgb, var(--brand-500) 22%, var(--border)); border-radius: var(--radius); padding: 14px; margin-top: 12px; }
+  .ai-label { font-size: 11px; color: var(--brand-400); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .ai-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
   .flex { display: flex; gap: 8px; align-items: center; }
-  .flex-between { display: flex; justify-content: space-between; align-items: center; }
+  .flex-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
   .ml-auto { margin-left: auto; }
+  .mt-8 { margin-top: 8px; }
   .mt-16 { margin-top: 16px; }
   .mb-16 { margin-bottom: 16px; }
   .separator { height: 1px; background: var(--border); margin: 16px 0; }
-  .empty-state { text-align: center; padding: 60px 20px; color: var(--text2); }
-  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
-  .loading { display: flex; align-items: center; gap: 8px; color: var(--text2); padding: 20px; }
-  .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .8s linear infinite; }
+
+  /* ── Empty / loading ──────────────────────────────────── */
+  .empty-state { text-align: center; padding: 56px 20px; color: var(--text2); }
+  .empty-state .icon { font-size: 30px; width: 68px; height: 68px; margin: 0 auto 14px; display: grid; place-items: center; border-radius: 20px; background: var(--brand-soft); border: 1px solid color-mix(in srgb, var(--brand-500) 25%, transparent); }
+  .empty-state p:first-of-type { color: var(--text); font-weight: 600; font-size: 15px; }
+  .loading { display: flex; align-items: center; gap: 10px; color: var(--text2); padding: 20px; }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--brand-500); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .progress-bar { height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; margin-top: 8px; }
-  .progress-fill { height: 100%; border-radius: 2px; transition: width .3s; }
+  .sk-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+  .sk-row { height: 48px; border-radius: var(--radius); }
+  .sk-row:nth-child(2) { opacity: .8; } .sk-row:nth-child(3) { opacity: .6; } .sk-row:nth-child(4) { opacity: .4; }
+
+  /* ── Progress ─────────────────────────────────────────── */
+  .progress-bar { height: 6px; background: var(--bg3); border-radius: var(--radius-pill); overflow: hidden; margin-top: 8px; }
+  .progress-fill { position: relative; height: 100%; border-radius: inherit; background: var(--brand-gradient); transition: width var(--dur-slow) var(--ease-out); overflow: hidden; }
+  .progress-fill::after, .progress-fill-lg:not(.done):not(.failed)::after { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.38), transparent); background-size: 200px 100%; background-repeat: no-repeat; animation: vg-bar-shimmer 1.3s linear infinite; }
+  @keyframes vg-bar-shimmer { from { background-position: -200px 0; } to { background-position: calc(100% + 200px) 0; } }
+  .progress-fill.indeterminate { width: 40% !important; animation: vg-indeterminate 1.5s cubic-bezier(.45,0,.55,1) infinite; }
+  @keyframes vg-indeterminate { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
   .scan-status-pending { color: var(--text2); } .scan-status-running { color: var(--medium); } .scan-status-completed { color: var(--low); } .scan-status-failed { color: var(--critical); }
-  .approve-blocked { background: #da363315; border: 1px solid var(--critical); border-radius: 6px; padding: 12px 16px; color: var(--critical); }
-  .approve-ok { background: #3fb95015; border: 1px solid var(--low); border-radius: 6px; padding: 12px 16px; color: var(--low); }
+  .status-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: var(--radius-pill); background: color-mix(in srgb, currentColor 12%, transparent); }
+  .approve-blocked { background: color-mix(in srgb, var(--critical) 9%, transparent); border: 1px solid color-mix(in srgb, var(--critical) 45%, transparent); border-radius: var(--radius); padding: 12px 16px; color: color-mix(in srgb, var(--critical) 85%, var(--text)); }
+  .approve-ok { background: color-mix(in srgb, var(--low) 9%, transparent); border: 1px solid color-mix(in srgb, var(--low) 45%, transparent); border-radius: var(--radius); padding: 12px 16px; color: color-mix(in srgb, var(--low) 85%, var(--text)); }
   .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-  .filter-bar select { width: auto; min-width: 120px; }
+  .filter-bar select { width: auto; min-width: 130px; }
   .compare-col { flex: 1; }
-  .compare-new { color: var(--critical); } .compare-fixed { color: var(--low); } .compare-persisted { color: var(--medium); }
-  .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-  .tab { padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--text2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  .tab.active { color: var(--text); border-bottom-color: var(--accent2); }
+  .compare-new { color: var(--critical); } .compare-fixed { color: var(--low); } .compare-persisted { color: color-mix(in srgb, var(--medium) 85%, var(--text)); }
+
+  /* ── Tabs (animated underline) ────────────────────────── */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { position: relative; padding: 10px 14px; cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--text2); white-space: nowrap; transition: color var(--dur-fast); user-select: none; }
+  .tab::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--brand-gradient); transform: scaleX(0); transition: transform var(--dur) var(--ease-out); }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--text); font-weight: 600; }
+  .tab.active::after { transform: scaleX(1); }
   .tab-content { display: none; }
-  .tab-content.active { display: block; }
-  .notice { background: #1f6feb15; border: 1px solid #1f6feb40; border-radius: 6px; padding: 10px 14px; font-size: 13px; color: var(--info); margin-bottom: 12px; }
-  .waiver-form { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-top: 12px; }
+  .tab-content.active { display: block; animation: vg-fade-up var(--dur) var(--ease-out) both; }
+  .notice { background: color-mix(in srgb, var(--brand-500) 8%, transparent); border: 1px solid color-mix(in srgb, var(--brand-500) 25%, transparent); border-radius: var(--radius); padding: 11px 14px; font-size: 13px; color: var(--text2); margin-bottom: 12px; line-height: 1.6; }
+  .notice.warn { background: color-mix(in srgb, var(--medium) 9%, transparent); border-color: color-mix(in srgb, var(--medium) 38%, transparent); color: var(--text); }
+  .waiver-form { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 12px; }
 
   /* ── Scan Progress Panel ─────────────────────────────── */
-  .progress-modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; width: 640px; max-width: 95vw; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; }
-  .progress-bar-lg { height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; margin: 12px 0; }
-  .progress-fill-lg { height: 100%; border-radius: 4px; transition: width .5s ease; background: linear-gradient(90deg, var(--accent2), #388bfd); }
+  .progress-modal { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 640px; max-width: 100%; max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 30px 80px -20px rgba(0,0,0,.55); }
+  .progress-bar-lg { height: 10px; background: var(--bg3); border-radius: var(--radius-pill); overflow: hidden; margin: 12px 0; }
+  .progress-fill-lg { position: relative; overflow: hidden; height: 100%; border-radius: inherit; transition: width var(--dur-slow) var(--ease-out); background: var(--brand-gradient); }
   .progress-fill-lg.done { background: var(--low); }
   .progress-fill-lg.failed { background: var(--critical); }
-  .tool-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .tool-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
   .tool-row:last-child { border-bottom: none; }
-  .tool-icon { font-size: 16px; width: 22px; text-align: center; flex-shrink: 0; }
+  .tool-icon { font-size: 15px; width: 22px; text-align: center; flex-shrink: 0; }
   .tool-name { flex: 1; color: var(--text); }
   .tool-name.pending { color: var(--text3); }
-  .tool-count { font-size: 12px; color: var(--text2); min-width: 60px; text-align: right; }
-  .tool-dur { font-size: 11px; color: var(--text3); min-width: 44px; text-align: right; }
-  .tool-spinner { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent2); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
-  .path-warning { background: #da363315; border: 1px solid var(--critical); border-radius: 6px; padding: 10px 14px; font-size: 13px; color: var(--critical); margin-bottom: 12px; }
+  .tool-count { font-size: 12px; color: var(--text2); min-width: 60px; text-align: right; font-variant-numeric: tabular-nums; }
+  .tool-dur { font-size: 11px; color: var(--text3); min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+  .tool-spinner { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--signal-400); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
+  .path-warning { background: color-mix(in srgb, var(--critical) 9%, transparent); border: 1px solid color-mix(in srgb, var(--critical) 40%, transparent); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; color: color-mix(in srgb, var(--critical) 85%, var(--text)); margin-bottom: 12px; }
   .scan-type-group { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-  .scan-type-tag { padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #1f6feb20; color: var(--accent2); border: 1px solid #1f6feb40; }
+  .scan-type-tag { padding: 2px 9px; border-radius: var(--radius-pill); font-size: 11px; font-weight: 600; background: var(--brand-soft); color: var(--brand-400); border: 1px solid color-mix(in srgb, var(--brand-500) 30%, transparent); }
 
   /* ── Scanner Tool Row ────────────────────────────────── */
-  .scanner-tool-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .scanner-tool-row { display: flex; align-items: center; gap: 12px; padding: 12px 8px; margin: 0 -8px; border-bottom: 1px solid var(--border); border-radius: var(--radius-sm); transition: background var(--dur-fast); }
+  .scanner-tool-row:hover { background: var(--bg3); }
   .scanner-tool-row:last-child { border-bottom: none; }
   .scanner-icon { font-size: 20px; width: 28px; text-align: center; flex-shrink: 0; }
   .scanner-info { flex: 1; min-width: 0; }
-  .scanner-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .scanner-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .scanner-desc { font-size: 12px; color: var(--text2); margin-top: 2px; }
-  .scanner-version { font-size: 11px; font-family: monospace; color: var(--text3); margin-top: 2px; }
-  .scanner-type-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); border: 1px solid var(--border); color: var(--text3); }
-  .install-hint { font-size: 11px; color: var(--critical); margin-top: 3px; font-family: monospace; }
+  .scanner-version { font-size: 11px; font-family: var(--font-mono); color: var(--text3); margin-top: 2px; }
+  .scanner-type-badge { font-size: 10px; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--bg3); border: 1px solid var(--border); color: var(--text3); }
+  .install-hint { font-size: 11px; color: var(--critical); margin-top: 3px; font-family: var(--font-mono); }
   .toggle-wrap { flex-shrink: 0; }
-  .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
+  .toggle { position: relative; display: inline-block; width: 40px; height: 22px; margin: 0; flex-shrink: 0; }
   .toggle input { opacity: 0; width: 0; height: 0; }
-  .toggle-slider { position: absolute; cursor: pointer; inset: 0; background: var(--bg3); border: 1px solid var(--border); border-radius: 22px; transition: .2s; }
-  .toggle-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background: var(--text3); border-radius: 50%; transition: .2s; }
-  .toggle input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+  .toggle-slider { position: absolute; cursor: pointer; inset: 0; background: var(--bg3); border: 1px solid var(--border-strong); border-radius: 22px; transition: background var(--dur) var(--ease-out), border-color var(--dur); }
+  .toggle-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; top: 2px; background: var(--text3); border-radius: 50%; transition: transform var(--dur) var(--ease-out), background var(--dur); box-shadow: var(--shadow-1); }
+  .toggle input:checked + .toggle-slider { background: var(--brand-gradient); border-color: transparent; }
   .toggle input:checked + .toggle-slider:before { transform: translateX(18px); background: white; }
+  .toggle input:focus-visible + .toggle-slider { box-shadow: var(--ring); }
   .toggle input:disabled + .toggle-slider { opacity: 0.4; cursor: not-allowed; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-  .status-dot.ok { background: var(--low); }
-  .status-dot.missing { background: var(--critical); }
+  .status-dot.ok { background: var(--low); box-shadow: 0 0 0 3px color-mix(in srgb, var(--low) 20%, transparent); }
+  .status-dot.missing { background: var(--critical); box-shadow: 0 0 0 3px color-mix(in srgb, var(--critical) 20%, transparent); }
   .status-dot.disabled { background: var(--text3); }
+
+  /* ── Option cards (AI provider / mode) ───────────────── */
+  .opt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .opt-card { position: relative; display: block; margin: 0; padding: 14px 14px 13px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); cursor: pointer; color: var(--text);
+    transition: border-color var(--dur-fast), box-shadow var(--dur) var(--ease-out), transform var(--dur) var(--ease-out), background var(--dur-fast); }
+  .opt-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .opt-card input { position: absolute; opacity: 0; pointer-events: none; }
+  .opt-card .opt-title { font-size: 13.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .opt-card .opt-desc { font-size: 12px; color: var(--text2); margin-top: 5px; font-weight: 400; line-height: 1.55; }
+  .opt-card:has(input:checked) { border-color: var(--brand-500); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand-500); }
+  .opt-card:has(input:checked) .opt-title::after { content: "✓"; margin-left: auto; width: 18px; height: 18px; border-radius: 50%; background: var(--brand-gradient); color: #fff; font-size: 11px; display: grid; place-items: center; }
+  .opt-card:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+  .settings-section { margin-top: 18px; }
+  .settings-section > h3 { font-size: 13px; margin-bottom: 10px; color: var(--text); }
+  .band-bar { position: relative; height: 10px; border-radius: var(--radius-pill); background: linear-gradient(90deg, color-mix(in srgb, var(--critical) 50%, transparent), color-mix(in srgb, var(--low) 50%, transparent)); margin: 10px 0 4px; }
+  .band-bar .band { position: absolute; top: -3px; bottom: -3px; border-radius: var(--radius-pill); border: 2px solid var(--brand-400); background: color-mix(in srgb, var(--brand-500) 30%, transparent); transition: left var(--dur) var(--ease-out), width var(--dur) var(--ease-out); }
+  .row-inline { display: flex; align-items: center; gap: 10px; }
+  .row-inline label { margin: 0; }
+  .check-row { display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 10px 0; color: var(--text); font-size: 13px; cursor: pointer; }
+  .check-row input { margin-top: 3px; }
+  .test-result { margin-top: 12px; }
+
+  /* ── Drawer (finding detail) ─────────────────────────── */
+  .drawer-overlay { position: fixed; inset: 0; background: var(--overlay); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); z-index: 210; opacity: 0; pointer-events: none; transition: opacity var(--dur) var(--ease-out); }
+  .drawer-overlay.open { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 600px; max-width: 100%; background: var(--bg2); border-left: 1px solid var(--border); z-index: 211; display: flex; flex-direction: column;
+    transform: translateX(100%); visibility: hidden; transition: transform var(--dur-slow) var(--ease-out), visibility 0s linear var(--dur-slow); }
+  .drawer.open { transform: none; visibility: visible; transition: transform var(--dur-slow) var(--ease-out); box-shadow: -30px 0 80px -30px rgba(0,0,0,.5); }
+  .drawer-header { padding: 18px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  .drawer-body { padding: 20px; overflow-y: auto; flex: 1; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 14px; font-size: 13px; }
+  .kv dt { color: var(--text3); font-size: 12px; }
+  .kv dd { word-break: break-word; }
+  .sev-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sev-chip { border: 1px solid var(--border); background: var(--bg2); color: var(--text2); border-radius: var(--radius-pill); padding: 4px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; transition: all var(--dur-fast); }
+  .sev-chip:hover { border-color: var(--border-strong); color: var(--text); }
+  .sev-chip.active { background: var(--brand-soft); border-color: var(--brand-500); color: var(--text); }
+  .sev-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+  label.sev-chip { position: relative; margin: 0; }
+  .sev-chip input { position: absolute; opacity: 0; pointer-events: none; }
+  .sev-chip:has(input:checked) { background: var(--brand-soft); border-color: var(--brand-500); color: var(--text); }
+  .sev-chip:has(input:focus-visible) { box-shadow: var(--ring); }
+  .ws-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .ws-card.selected { border-color: var(--brand-500); box-shadow: 0 0 0 1px var(--brand-500), var(--shadow-2); }
+
+  /* ── Toasts ───────────────────────────────────────────── */
+  .toast-stack { position: fixed; right: 20px; bottom: 20px; z-index: 400; display: flex; flex-direction: column; gap: 8px; pointer-events: none; max-width: calc(100vw - 32px); }
+  .toast { pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; min-width: 260px; max-width: 420px; padding: 12px 14px; border-radius: var(--radius); background: var(--bg2); border: 1px solid var(--border); box-shadow: var(--shadow-2); font-size: 13px; color: var(--text);
+    animation: vg-toast-in var(--dur) var(--ease-out) both; border-left: 3px solid var(--brand-500); white-space: pre-wrap; word-break: break-word; }
+  .toast.error { border-left-color: var(--critical); } .toast.success { border-left-color: var(--low); } .toast.warn { border-left-color: var(--medium); }
+  .toast.leaving { animation: vg-toast-out var(--dur) var(--ease-out) both; }
+  @keyframes vg-toast-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+  @keyframes vg-toast-out { to { opacity: 0; transform: translateX(16px); } }
+
+  /* ── Responsive ───────────────────────────────────────── */
+  @media (max-width: 1100px) { .grid4 { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 900px) {
+    .topbar { display: flex; position: sticky; top: 0; z-index: 90; align-items: center; gap: 10px; height: 56px; padding: 0 16px; background: var(--bg-glass); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); border-bottom: 1px solid var(--border); }
+    .topbar img { width: 26px; height: 26px; }
+    .topbar .wordmark { font-weight: 800; font-size: 16px; letter-spacing: -.02em; }
+    .topbar .menu-btn { margin-left: auto; }
+    .sidebar { transform: translateX(-100%); transition: transform var(--dur-slow) var(--ease-out); width: 280px; max-width: 86vw; box-shadow: none; background: var(--bg2); }
+    .sidebar.open { transform: none; box-shadow: 30px 0 80px -20px rgba(0,0,0,.5); }
+    .sidebar-backdrop { display: block; position: fixed; inset: 0; background: var(--overlay); z-index: 99; opacity: 0; pointer-events: none; transition: opacity var(--dur) var(--ease-out); }
+    .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
+    .main { margin-left: 0; padding: 20px 16px 40px; }
+    h1 { font-size: 20px; }
+    .grid2 { grid-template-columns: 1fr; }
+    #cw-main { grid-template-columns: 1fr !important; }
+    .card:has(table) { overflow-x: auto !important; }
+    .card > table { min-width: 560px; }
+    .table-wrap > table { min-width: 640px; }
+    .ws-sev-grid { grid-template-columns: repeat(3, minmax(0,1fr)) !important; }
+    .modal-overlay { padding: 0; align-items: flex-end; }
+    .modal, .progress-modal { max-height: 92vh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; width: 100% !important; max-width: 100% !important; }
+    .flex-between > .flex { flex-wrap: wrap; }
+    .kv { grid-template-columns: 1fr; gap: 2px; }
+    .kv dd { margin-bottom: 8px; }
+    .toast-stack { left: 16px; right: 16px; bottom: 16px; }
+    .toast { max-width: none; min-width: 0; }
+  }
+  @media (max-width: 520px) { .stat-num { font-size: 26px; } .card { padding: 16px; } #cw-folder-select { width: 100% !important; } }
 </style>
 </head>
 <body>
 
+<!-- Mobile top bar (< 900px) -->
+<div class="topbar">
+  <img src="/static/assets/logo.svg" alt="">
+  <span class="wordmark"><span class="vg-gradient-text">Vuln</span>Guard</span>
+  <button class="btn btn-ghost icon-btn menu-btn" onclick="toggleSidebar()" aria-label="Mở menu"><span style="display:flex;width:18px;height:18px;"><svg style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span></button>
+</div>
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar(false)"></div>
+
 <!-- Sidebar -->
-<div class="sidebar">
-  <div class="logo">🛡️ <span>Vuln</span>Guard</div>
-  <div class="nav-item active" onclick="navigate('dashboard')" id="nav-dashboard">📊 Dashboard</div>
-  <div class="nav-item" onclick="navigate('projects')" id="nav-projects">📁 Projects</div>
-  <div class="nav-item" onclick="navigate('scans')" id="nav-scans">🔍 Scans</div>
-  <div class="nav-item" onclick="navigate('compare')" id="nav-compare">🔀 Compare</div>
-  <div class="nav-item" onclick="navigate('domains')" id="nav-domains">🌐 Domains</div>
-  <div class="nav-item" onclick="navigate('docreview')" id="nav-docreview">📑 Document Review</div>
-  <div class="nav-item" onclick="navigate('coworker')" id="nav-coworker">🧑‍💻 Co-work</div>
-  <div class="nav-item" onclick="navigate('settings')" id="nav-settings">⚙️ Settings</div>
+<div class="sidebar" id="sidebar">
+  <div class="logo">
+    <img src="/static/assets/logo.svg" alt="VulnGuard">
+    <div class="wordmark"><span><span class="vg-gradient-text">Vuln</span>Guard</span><small>DevSecOps Scanner</small></div>
+  </div>
+  <div class="nav-section">Bảo mật code</div>
+  <div class="nav-item active" onclick="navigate('dashboard')" id="nav-dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></div>
+  <div class="nav-item" onclick="navigate('projects')" id="nav-projects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2.2h7.5A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg><span>Projects</span></div>
+  <div class="nav-item" onclick="navigate('scans')" id="nav-scans"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/><path d="M8 11h6"/></svg><span>Scans</span></div>
+  <div class="nav-item" onclick="navigate('compare')" id="nav-compare"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h5.5"/><path d="M18 15.5V10a4 4 0 0 0-4-4H8.5"/></svg><span>Compare</span></div>
+  <div class="nav-section">Hạ tầng & tài liệu</div>
+  <div class="nav-item" onclick="navigate('domains')" id="nav-domains"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>Domains</span></div>
+  <div class="nav-item" onclick="navigate('docreview')" id="nav-docreview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/></svg><span>Document Review</span></div>
+  <div class="nav-item" onclick="navigate('coworker')" id="nav-coworker"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5"/><path d="M13 15h4"/></svg><span>Co-work</span></div>
+  <div class="nav-section">Hệ thống</div>
+  <div class="nav-item" onclick="navigate('settings')" id="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Settings</span></div>
   <div class="sidebar-footer">
-    Powered by <a href="https://1vision.work" target="_blank">1VISION</a>
+    <div class="user-chip" id="user-chip" style="display:none;">
+      <div class="user-avatar" id="user-avatar">?</div>
+      <div class="user-meta">
+        <div class="user-name" id="user-name">—</div>
+        <span class="role-badge" id="user-role">—</span>
+      </div>
+      <button class="logout-btn" onclick="logout()" title="Đăng xuất">Đăng xuất</button>
+    </div>
+    <div class="theme-toggle" role="radiogroup" aria-label="Giao diện">
+      <button data-theme-opt="dark" onclick="setTheme('dark')" title="Giao diện tối"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>Tối</button>
+      <button data-theme-opt="light" onclick="setTheme('light')" title="Giao diện sáng"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Sáng</button>
+      <button data-theme-opt="system" onclick="setTheme('system')" title="Theo hệ thống"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Auto</button>
+    </div>
+    <div class="powered">Powered by <a href="https://1vision.work" target="_blank">1VISION</a></div>
   </div>
 </div>
 
@@ -216,7 +440,7 @@
       <button class="btn btn-primary" onclick="navigate('projects')">+ New Scan</button>
     </div>
     <div id="dashboard-content">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -227,7 +451,7 @@
       <button class="btn btn-primary" onclick="openCreateProject()">+ Tạo Project</button>
     </div>
     <div id="projects-list">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -235,7 +459,7 @@
   <div class="page" id="page-scans">
     <h1 id="scans-title">Scans</h1>
     <div id="scans-content">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -276,7 +500,7 @@
       dùng làm baseline cho positive security model khi cấu hình WAF (allowlist path/param đã biết).
     </div>
     <div id="domains-list">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -286,8 +510,26 @@
       <button class="btn btn-ghost btn-sm" onclick="navigate('domains')">← Về Domains</button>
     </div>
     <h1 id="domain-crawls-title">Crawls</h1>
-    <div id="domain-crawls-content">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+    <div class="tabs" id="domain-tabs">
+      <div class="tab active" id="dc-tab-crawls" onclick="switchTab(this,'dc-crawls')">🕸️ Crawls &amp; Sitemap</div>
+      <div class="tab" id="dc-tab-webscan" onclick="switchTab(this,'dc-webscan');loadWebScans()">🎯 Web Scan (Nuclei)</div>
+    </div>
+    <div class="tab-content active" id="dc-crawls">
+      <div id="domain-crawls-content">
+        <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+      </div>
+    </div>
+    <div class="tab-content" id="dc-webscan">
+      <div class="notice">
+        Quét lỗ hổng web bằng <strong>Nuclei</strong> trên các URL đã crawl (hoặc chỉ root URL): CVE, misconfiguration, exposure, default login...
+        Chỉ quét domain bạn <strong>sở hữu hoặc được ủy quyền bằng văn bản</strong>.
+      </div>
+      <div class="flex-between mb-16">
+        <div class="text-sm" id="webscan-count"></div>
+        <button class="btn btn-primary" onclick="openWebScanModal()">🎯 Web Scan mới</button>
+      </div>
+      <div id="webscan-list"><div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div></div>
+      <div id="webscan-findings" class="mt-16"></div>
     </div>
   </div>
 
@@ -303,7 +545,7 @@
       thông tin, để gửi lại bên viết tài liệu cập nhật. Hỗ trợ lưu nhiều version theo thời gian.
     </div>
     <div id="docreview-list">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -319,7 +561,7 @@
       </div>
     </div>
     <div id="docreview-detail-content">
-      <div class="loading"><div class="spinner"></div>Đang tải...</div>
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -443,6 +685,13 @@
 
   <div class="page" id="page-settings">
     <h1>Settings</h1>
+    <div class="tabs" id="settings-tabs">
+      <div class="tab active" id="st-tab-ollama" onclick="switchTab(this,'st-ollama')">🤖 Ollama &amp; Model</div>
+      <div class="tab" id="st-tab-scanners" onclick="switchTab(this,'st-scanners')">🛠️ Scanner Tools</div>
+      <div class="tab" id="st-tab-ai" onclick="switchTab(this,'st-ai');loadAIConfig()">☁️ AI Provider</div>
+      <div class="tab" id="st-tab-users" onclick="switchTab(this,'st-users');loadUsers()" style="display:none;">👥 Người dùng</div>
+    </div>
+    <div class="tab-content active" id="st-ollama">
 
     <!-- Ollama Status -->
     <div class="card">
@@ -516,7 +765,7 @@
           <span id="pull-status-text" class="text-sm">Đang pull...</span>
           <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="cancelPull()">Hủy</button>
         </div>
-        <div class="progress-bar"><div id="pull-progress-fill" class="progress-fill" style="background:var(--accent2);width:0%;"></div></div>
+        <div class="progress-bar"><div id="pull-progress-fill" class="progress-fill" style="width:0%;"></div></div>
         <div id="pull-log" class="code-block" style="margin-top:8px;max-height:120px;overflow-y:auto;font-size:11px;color:var(--text2);"></div>
       </div>
     </div>
@@ -525,10 +774,13 @@
     <div class="card">
       <h2>📦 Models đã cài</h2>
       <div id="installed-models-list">
-        <div class="loading"><div class="spinner"></div>Đang tải...</div>
+        <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
       </div>
     </div>
 
+    </div><!-- /st-ollama -->
+
+    <div class="tab-content" id="st-scanners">
     <!-- Scanner Tools Health -->
     <div class="card">
       <div class="flex-between" style="margin-bottom:14px;">
@@ -544,7 +796,7 @@
         Tool bị disable sẽ không chạy trong các lần scan tiếp theo.
       </div>
       <div id="scanner-tools-list">
-        <div class="loading"><div class="spinner"></div>Đang kiểm tra...</div>
+        <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
       </div>
     </div>
 
@@ -554,6 +806,165 @@
       <p class="text-sm" style="margin-bottom:10px;">Cấu hình trong file <span class="text-mono">.env</span> → <span class="text-mono">BLOCK_SEVERITY_THRESHOLD</span></p>
       <div id="threshold-info" class="notice">Đang tải...</div>
     </div>
+    </div><!-- /st-scanners -->
+
+    <!-- ── AI PROVIDER ─────────────────────────────────────── -->
+    <div class="tab-content" id="st-ai">
+      <div id="ai-config-readonly" class="notice warn" style="display:none;">🔒 Chỉ ADMIN mới được thay đổi cấu hình AI Provider. Bạn đang xem ở chế độ chỉ đọc.</div>
+
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:6px;">
+          <h2 style="margin-bottom:0;">🧭 Chế độ phân tích AI</h2>
+          <span id="ai-config-status" class="text-sm"></span>
+        </div>
+        <p class="text-sm" style="margin-bottom:14px;">Chọn nơi xử lý AI cho việc chấm False Positive, giải thích và gợi ý fix.</p>
+        <div class="opt-grid" id="ai-mode-group">
+          <label class="opt-card"><input type="radio" name="ai-mode" value="local_only" onchange="onAIModeChange()">
+            <div class="opt-title">🏠 Chỉ local (Ollama)</div>
+            <div class="opt-desc">Chỉ dùng Ollama — dữ liệu không rời máy.</div></label>
+          <label class="opt-card"><input type="radio" name="ai-mode" value="hybrid" onchange="onAIModeChange()">
+            <div class="opt-title">⚖️ Hybrid</div>
+            <div class="opt-desc">Ollama chấm trước; finding mức ≥ ngưỡng hoặc FP% nằm trong vùng không chắc chắn (fp_band) sẽ được gửi lên Claude để xác minh.</div></label>
+          <label class="opt-card"><input type="radio" name="ai-mode" value="cloud_only" onchange="onAIModeChange()">
+            <div class="opt-title">☁️ Chỉ cloud</div>
+            <div class="opt-desc">Mọi finding đều được phân tích bằng Claude (cloud provider bên dưới).</div></label>
+        </div>
+
+        <!-- Hybrid options -->
+        <div class="settings-section" id="ai-hybrid-section">
+          <div class="separator"></div>
+          <h3>⚖️ Ngưỡng escalate lên cloud (Hybrid)</h3>
+          <div class="grid2">
+            <div class="form-group">
+              <label>Mức severity tối thiểu gửi lên Claude</label>
+              <select id="ai-escalate-sev">
+                <option value="CRITICAL">CRITICAL</option>
+                <option value="HIGH">HIGH trở lên</option>
+                <option value="MEDIUM">MEDIUM trở lên</option>
+                <option value="LOW">LOW trở lên</option>
+              </select>
+              <div class="field-hint">Finding có severity ≥ mức này luôn được Claude xác minh lại.</div>
+            </div>
+            <div class="form-group">
+              <label>Vùng không chắc chắn của FP% (Ollama)</label>
+              <div class="row-inline">
+                <input id="ai-fp-low" type="number" min="0" max="100" style="width:90px;" oninput="renderFpBand()">
+                <span class="text-sm">đến</span>
+                <input id="ai-fp-high" type="number" min="0" max="100" style="width:90px;" oninput="renderFpBand()">
+                <span class="text-sm">%</span>
+              </div>
+              <div class="band-bar"><div class="band" id="ai-fp-band"></div></div>
+              <div class="field-hint" id="ai-fp-band-hint">FP% nằm trong khoảng này → gửi Claude xác minh.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cloud provider -->
+      <div class="card" id="ai-cloud-card">
+        <h2>☁️ Cloud provider</h2>
+        <div class="opt-grid" id="ai-provider-group">
+          <label class="opt-card"><input type="radio" name="ai-provider" value="anthropic" onchange="onAIProviderChange()">
+            <div class="opt-title">✳️ Anthropic Claude API</div>
+            <div class="opt-desc">Gọi trực tiếp Claude API của Anthropic (API key, Workload Identity Federation hoặc credential trên máy chủ).</div></label>
+          <label class="opt-card"><input type="radio" name="ai-provider" value="bedrock" onchange="onAIProviderChange()">
+            <div class="opt-title">🟧 Amazon Bedrock</div>
+            <div class="opt-desc">Amazon Bedrock (dùng AWS IAM / IAM Identity Center — cùng hạ tầng AI mà Kiro dùng).</div></label>
+        </div>
+
+        <!-- Anthropic -->
+        <div class="settings-section" id="ai-anthropic-section">
+          <div class="separator"></div>
+          <div class="grid2">
+            <div class="form-group">
+              <label>Phương thức xác thực</label>
+              <select id="ai-anth-auth" onchange="onAIAuthModeChange()">
+                <option value="api_key">API key (cá nhân / workspace doanh nghiệp từ Claude Console)</option>
+                <option value="wif">Workload Identity Federation (doanh nghiệp — đổi token IdP của tổ chức lấy token Anthropic, không lưu API key)</option>
+                <option value="environment">Environment / “ant auth login” trên máy chủ</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Model</label>
+              <input id="ai-anth-model" class="text-mono" placeholder="claude-opus-5-5">
+            </div>
+          </div>
+          <div id="ai-auth-apikey">
+            <div class="form-group">
+              <label>API key</label>
+              <input id="ai-anth-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-ant-...">
+              <div class="field-hint"><span id="ai-anth-key-hint">Chưa có API key nào được lưu.</span>
+                <a href="#" id="ai-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey();return false;">Xóa key đã lưu</a></div>
+            </div>
+          </div>
+          <div id="ai-auth-wif" style="display:none;">
+            <div class="notice">Máy chủ VulnGuard đọc identity token của tổ chức (OIDC từ IdP / Kubernetes / CI) và đổi lấy access token ngắn hạn của Anthropic — không cần lưu API key lâu dài.</div>
+            <div class="grid2">
+              <div class="form-group"><label>Federation rule ID</label><input id="ai-wif-rule" class="text-mono"></div>
+              <div class="form-group"><label>Organization ID</label><input id="ai-wif-org" class="text-mono"></div>
+              <div class="form-group"><label>Đường dẫn identity token file</label><input id="ai-wif-token" class="text-mono" placeholder="/var/run/secrets/tokens/anthropic"></div>
+              <div class="form-group"><label>Workspace ID (tùy chọn)</label><input id="ai-wif-ws" class="text-mono"></div>
+              <div class="form-group"><label>Service account ID (tùy chọn)</label><input id="ai-wif-sa" class="text-mono"></div>
+            </div>
+          </div>
+          <div id="ai-auth-env" style="display:none;">
+            <div class="notice">Dùng credential sẵn có trên máy chủ chạy VulnGuard: biến môi trường (ví dụ <span class="text-mono">ANTHROPIC_API_KEY</span>) hoặc phiên đăng nhập tạo bởi <span class="text-mono">ant auth login</span>. Không lưu bí mật nào trong VulnGuard.</div>
+          </div>
+        </div>
+
+        <!-- Bedrock -->
+        <div class="settings-section" id="ai-bedrock-section" style="display:none;">
+          <div class="separator"></div>
+          <div class="notice">Xác thực qua AWS SDK credential chain trên máy chủ (IAM role, <span class="text-mono">aws sso login</span> / IAM Identity Center, hoặc profile trong <span class="text-mono">~/.aws/config</span>).</div>
+          <div class="grid2">
+            <div class="form-group"><label>Region</label><input id="ai-br-region" class="text-mono" placeholder="us-east-1"></div>
+            <div class="form-group"><label>AWS profile (tùy chọn)</label><input id="ai-br-profile" class="text-mono" placeholder="default"></div>
+            <div class="form-group"><label>Model ID</label><input id="ai-br-model" class="text-mono" placeholder="anthropic.claude-opus-5-5"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Privacy -->
+      <div class="card" id="ai-privacy-card">
+        <h2>🔐 Quyền riêng tư dữ liệu</h2>
+        <div id="ai-privacy-warning" class="notice warn" style="display:none;">
+          ⚠️ <strong>Lưu ý:</strong> khi bật "Gửi code context", đoạn mã nguồn quanh vị trí finding sẽ được <strong>gửi lên cloud provider</strong> (<span id="ai-privacy-provider">Anthropic</span>) để phân tích. Hãy chắc chắn chính sách dữ liệu của tổ chức cho phép.
+        </div>
+        <label class="check-row">
+          <span class="toggle"><input type="checkbox" id="ai-priv-send" onchange="renderPrivacyWarning()"><span class="toggle-slider"></span></span>
+          <span><strong>Gửi code context lên cloud</strong><br><span class="text-sm">Tăng độ chính xác khi chấm FP / gợi ý fix. Tắt = chỉ gửi metadata (rule, file, severity, mô tả).</span></span>
+        </label>
+        <div class="form-group" style="margin:4px 0 8px 50px;max-width:240px;">
+          <label>Số dòng context quanh finding</label>
+          <input id="ai-priv-lines" type="number" min="0" max="200">
+        </div>
+        <label class="check-row">
+          <span class="toggle"><input type="checkbox" id="ai-priv-redact"><span class="toggle-slider"></span></span>
+          <span><strong>Che secrets trước khi gửi</strong><br><span class="text-sm">Tự động mask API key, token, mật khẩu phát hiện được trong code context.</span></span>
+        </label>
+      </div>
+
+      <div class="flex" style="flex-wrap:wrap;">
+        <button class="btn btn-primary" id="ai-save-btn" onclick="saveAIConfig()">💾 Lưu cấu hình</button>
+        <button class="btn btn-ghost" id="ai-test-btn" onclick="testAIConfig()">🔌 Kiểm tra kết nối</button>
+        <span class="text-sm">Lưu trước khi kiểm tra nếu vừa thay đổi.</span>
+      </div>
+      <div id="ai-test-result" class="test-result"></div>
+    </div><!-- /st-ai -->
+
+    <!-- ── USERS (ADMIN) ───────────────────────────────────── -->
+    <div class="tab-content" id="st-users">
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:14px;">
+          <h2 style="margin-bottom:0;">👥 Người dùng</h2>
+          <button class="btn btn-primary btn-sm" onclick="openUserModal()">+ Thêm người dùng</button>
+        </div>
+        <div class="notice">
+          <strong>ADMIN</strong>: toàn quyền, quản lý người dùng & cấu hình AI · <strong>ANALYST</strong>: chạy scan, đánh dấu FP, tạo waiver · <strong>VIEWER</strong>: chỉ xem.
+        </div>
+        <div id="users-list"></div>
+      </div>
+    </div><!-- /st-users -->
   </div>
 
 </div><!-- /main -->
@@ -604,6 +1015,10 @@
       </div>
       <div class="tab-content" id="tab-ai">
         <div id="ai-loading" class="loading"><div class="spinner"></div>AI đang phân tích...</div>
+        <div class="ai-toolbar">
+          <div class="flex"><span class="text-sm">Nguồn phân tích:</span><span id="ai-provider-chip" class="chip">—</span></div>
+          <button class="btn btn-ghost btn-sm" id="ai-reanalyze-btn" onclick="reanalyzeVuln()">🔁 Phân tích lại bằng Claude</button>
+        </div>
         <div id="ai-content" style="display:none">
           <div class="ai-box">
             <div class="ai-label">False Positive Likelihood</div>
@@ -632,7 +1047,7 @@
         <div id="ai-unavailable" style="display:none" class="empty-state">
           <div class="icon">🤖</div>
           <p>AI chưa phân tích vulnerability này</p>
-          <button class="btn btn-primary mt-16" onclick="requestAI()">Phân tích ngay</button>
+          <button class="btn btn-primary mt-16" onclick="requestAI()">🔁 Phân tích ngay bằng Claude</button>
         </div>
       </div>
       <div class="tab-content" id="tab-waiver">
@@ -856,13 +1271,113 @@
         <button class="btn btn-ghost btn-sm" onclick="exportCrawl(currentCrawlId,'waf_baseline')">⬇ WAF Baseline</button>
         <button class="btn btn-ghost btn-sm" onclick="exportCrawl(currentCrawlId,'modsecurity')">⬇ ModSecurity</button>
       </div>
-      <div id="endpoints-list"><div class="loading"><div class="spinner"></div>Đang tải...</div></div>
+      <div id="endpoints-list"><div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="document.getElementById('endpoints-modal').classList.remove('open')">Đóng</button>
     </div>
   </div>
 </div>
+
+<!-- Web Scan (Nuclei) Modal -->
+<div class="modal-overlay" id="webscan-modal">
+  <div class="modal" style="max-width:600px;">
+    <div class="modal-header"><strong>🎯 Web Scan mới — Nuclei</strong><button class="btn btn-ghost btn-sm" onclick="closeWebScanModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Phạm vi URL</label>
+        <select id="ws-crawl"></select>
+        <div class="field-hint">Chọn crawl đã hoàn thành → quét toàn bộ URL đã crawl. "Chỉ root URL" → chỉ quét URL gốc của domain.</div>
+      </div>
+      <div class="form-group">
+        <label>Mức severity của template</label>
+        <div class="sev-chips" id="ws-sev-group">
+          <label class="sev-chip"><input type="checkbox" class="ws-sev" value="critical" checked> <span class="dot" style="background:var(--critical)"></span>Critical</label>
+          <label class="sev-chip"><input type="checkbox" class="ws-sev" value="high" checked> <span class="dot" style="background:var(--high)"></span>High</label>
+          <label class="sev-chip"><input type="checkbox" class="ws-sev" value="medium" checked> <span class="dot" style="background:var(--medium)"></span>Medium</label>
+          <label class="sev-chip"><input type="checkbox" class="ws-sev" value="low" checked> <span class="dot" style="background:var(--low)"></span>Low</label>
+          <label class="sev-chip"><input type="checkbox" class="ws-sev" value="info"> <span class="dot" style="background:var(--info)"></span>Info</label>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="form-group">
+          <label>Tags (phân tách bởi dấu phẩy, tùy chọn)</label>
+          <input id="ws-tags" placeholder="cve,misconfig,exposure">
+        </div>
+        <div class="form-group">
+          <label>Rate limit (request/giây)</label>
+          <input id="ws-rate" type="number" value="50" min="1" max="500">
+        </div>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="ws-fuzz">
+        <span><strong>DAST fuzzing tham số (xâm lấn hơn)</strong><br><span class="text-sm">Gửi payload thử nghiệm vào query/body param (SQLi, XSS, SSRF...). Có thể tạo dữ liệu rác hoặc kích hoạt WAF — chỉ nên chạy trên môi trường test/staging.</span></span>
+      </label>
+      <div class="separator"></div>
+      <label class="check-row" style="padding-top:0;">
+        <input type="checkbox" id="ws-authorized" onchange="document.getElementById('ws-start-btn').disabled=!this.checked">
+        <span><strong>Tôi xác nhận có quyền quét domain này</strong> <span style="color:var(--critical)">*</span><br><span class="text-sm">Quét hệ thống không được ủy quyền có thể vi phạm pháp luật.</span></span>
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeWebScanModal()">Hủy</button>
+      <button class="btn btn-primary" id="ws-start-btn" onclick="triggerWebScan()" disabled>🎯 Bắt đầu quét</button>
+    </div>
+  </div>
+</div>
+
+<!-- Web finding detail drawer -->
+<div class="drawer-overlay" id="wf-drawer-overlay" onclick="closeFindingDrawer()"></div>
+<aside class="drawer" id="wf-drawer" aria-hidden="true">
+  <div class="drawer-header">
+    <div style="min-width:0;">
+      <div id="wf-sev"></div>
+      <div id="wf-title" style="font-size:16px;font-weight:700;margin-top:6px;word-break:break-word;"></div>
+      <div id="wf-template" class="text-mono text-sm" style="margin-top:2px;"></div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="closeFindingDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="wf-body"></div>
+</aside>
+
+<!-- User Modal (add) -->
+<div class="modal-overlay" id="user-modal">
+  <div class="modal" style="max-width:480px;">
+    <div class="modal-header"><strong>Thêm người dùng</strong><button class="btn btn-ghost btn-sm" onclick="closeUserModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Họ tên *</label><input id="nu-name" placeholder="Nguyễn Văn A"></div>
+      <div class="form-group"><label>Email *</label><input id="nu-email" type="email" placeholder="a.nguyen@company.com"></div>
+      <div class="form-group"><label>Mật khẩu tạm *</label><input id="nu-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự"></div>
+      <div class="form-group"><label>Vai trò</label>
+        <select id="nu-role"><option value="VIEWER">VIEWER — chỉ xem</option><option value="ANALYST" selected>ANALYST — chạy scan, xử lý finding</option><option value="ADMIN">ADMIN — toàn quyền</option></select>
+      </div>
+      <div id="nu-error" class="text-sm" style="color:var(--critical);"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeUserModal()">Hủy</button>
+      <button class="btn btn-primary" onclick="createUser()">Tạo người dùng</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset Password Modal -->
+<div class="modal-overlay" id="reset-pw-modal">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-header"><strong>Đặt lại mật khẩu</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('reset-pw-modal').classList.remove('open')">✕</button></div>
+    <div class="modal-body">
+      <p class="text-sm" style="margin-bottom:12px;">Người dùng: <strong id="rp-user" style="color:var(--text)"></strong></p>
+      <div class="form-group"><label>Mật khẩu mới *</label><input id="rp-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự"></div>
+      <div class="form-group"><label>Nhập lại mật khẩu *</label><input id="rp-password2" type="password" autocomplete="new-password"></div>
+      <div id="rp-error" class="text-sm" style="color:var(--critical);"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="document.getElementById('reset-pw-modal').classList.remove('open')">Hủy</button>
+      <button class="btn btn-primary" onclick="submitResetPassword()">Đặt lại</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
 <script>
 const API = '';  // Same origin
@@ -880,9 +1395,14 @@ let docTypesCache = null;
 
 // ─── Navigation ───────────────────────────────────────────────
 function navigate(page) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active', 'vg-enter'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + page).classList.add('active');
+  const pageEl = document.getElementById('page-' + page);
+  pageEl.classList.add('active');
+  void pageEl.offsetWidth;            // restart animation
+  pageEl.classList.add('vg-enter');
+  toggleSidebar(false);
+  if (page !== 'domain-crawls') stopWebScanPoll();
 
   // Sub-pages (vd. domain-crawls) không có nav item riêng — highlight nav cha thay vào đó
   const navParent = { 'domain-crawls': 'domains', 'docreview-detail': 'docreview' }[page] || page;
@@ -894,13 +1414,33 @@ function navigate(page) {
 }
 
 // ─── API helpers ──────────────────────────────────────────────
+// 401 → phiên hết hạn / chưa đăng nhập → chuyển sang trang login
+function redirectToLogin() {
+  if (location.pathname.startsWith('/login')) return;
+  const next = location.pathname + location.search + location.hash;
+  location.href = '/login' + (next && next !== '/' ? '?next=' + encodeURIComponent(next) : '');
+}
+function check401(r) {
+  if (r.status === 401) { redirectToLogin(); throw new Error('Phiên đăng nhập đã hết hạn — đang chuyển tới trang đăng nhập...'); }
+}
+// Lấy thông điệp lỗi gọn từ body FastAPI ({detail: "..."} hoặc {detail: [{msg}]})
+function errText(t) {
+  try {
+    const j = JSON.parse(t);
+    if (typeof j.detail === 'string') return j.detail;
+    if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+  } catch {}
+  return t;
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(API + path, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (!r.ok) { const t = await r.text(); throw new Error(t); }
+  check401(r);
+  if (!r.ok) { const t = await r.text(); throw new Error(errText(t)); }
   if (r.status === 204) return null;
   return r.json();
 }
@@ -938,7 +1478,7 @@ async function loadDashboard() {
     }));
 
     el.innerHTML = `
-      <div class="grid4 mb-16">
+      <div class="grid4 mb-16 vg-stagger">
         <div class="stat-card"><div class="stat-num c">${totalC}</div><div class="stat-label">CRITICAL</div></div>
         <div class="stat-card"><div class="stat-num h">${totalH}</div><div class="stat-label">HIGH</div></div>
         <div class="stat-card"><div class="stat-num m">${totalM}</div><div class="stat-label">MEDIUM</div></div>
@@ -1087,7 +1627,11 @@ async function deleteDomain(id, name) {
 
 function openDomainCrawls(domainId, domainName) {
   currentDomainId = domainId;
+  domainCrawlsCache = [];
+  webScanState.scans = []; webScanState.selectedId = null; webScanState.findings = []; webScanState.animatedFor = null;
+  document.getElementById('webscan-findings').innerHTML = '';
   navigate('domain-crawls');
+  switchTab(document.getElementById('dc-tab-crawls'), 'dc-crawls');
   document.getElementById('domain-crawls-title').textContent = `Crawls — ${domainName}`;
   loadDomainCrawls(domainId);
 }
@@ -1096,6 +1640,7 @@ async function loadDomainCrawls(domainId) {
   const el = document.getElementById('domain-crawls-content');
   try {
     const crawls = await api(`/api/domains/${domainId}/crawls`);
+    domainCrawlsCache = crawls;
     if (!crawls.length) {
       el.innerHTML = `<div class="empty-state"><div class="icon">🕸️</div><p>Chưa có crawl nào</p><button class="btn btn-primary mt-16" onclick="openCrawlModal()">🕸️ Bắt đầu Crawl</button></div>`;
       return;
@@ -1131,16 +1676,16 @@ function renderCrawlCard(c) {
     const methodsHtml = Object.entries(s.methods || {}).map(([m,n]) => `<span class="tag">${m}: ${n}</span>`).join(' ');
     body = `
       <div class="grid4" style="margin-top:12px;gap:8px;">
-        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+        <div class="mini-stat">
           <div class="stat-num" style="font-size:22px;">${s.total_urls||0}</div><div class="stat-label">URLs</div>
         </div>
-        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+        <div class="mini-stat">
           <div class="stat-num" style="font-size:22px;">${s.total_params_seen||0}</div><div class="stat-label">Params</div>
         </div>
-        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+        <div class="mini-stat">
           <div class="stat-num" style="font-size:22px;">${s.total_forms||0}</div><div class="stat-label">Forms</div>
         </div>
-        <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+        <div class="mini-stat">
           <div class="stat-num" style="font-size:22px;">${c.depth}</div><div class="stat-label">Depth</div>
         </div>
       </div>
@@ -1155,7 +1700,7 @@ function renderCrawlCard(c) {
       </div>
       ${renderAISection(c)}`;
   } else if (c.status === 'FAILED') {
-    body = `<div style="color:var(--critical);font-size:13px;margin-top:8px;background:#da363310;border-radius:6px;padding:10px;">❌ <strong>Thất bại:</strong> ${escHtml(c.error_message||'Crawl thất bại')}</div>`;
+    body = `<div style="color:var(--critical);font-size:13px;margin-top:8px;background:color-mix(in srgb, var(--critical) 8%, transparent);border-radius:6px;padding:10px;">❌ <strong>Thất bại:</strong> ${escHtml(c.error_message||'Crawl thất bại')}</div>`;
   } else {
     body = `<div class="loading" style="margin-top:8px;"><div class="spinner"></div>${escHtml((c.progress||{}).message || 'Đang crawl...')}</div>`;
   }
@@ -1284,7 +1829,7 @@ async function openEndpoints(crawlId) {
 
 async function loadEndpoints() {
   const el = document.getElementById('endpoints-list');
-  el.innerHTML = `<div class="loading"><div class="spinner"></div>Đang tải...</div>`;
+  el.innerHTML = `<div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>`;
   const search = document.getElementById('endpoints-search').value.trim();
   const method = document.getElementById('endpoints-method-filter').value;
   const params = new URLSearchParams();
@@ -1390,7 +1935,7 @@ function renderScanCard(sc, projectId) {
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px;">
           <span>Tiến độ: ${done}/${total} tools</span><span>${pct}%</span>
         </div>
-        <div class="progress-bar"><div class="progress-fill" style="background:var(--accent2);width:${pct}%;"></div></div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;"></div></div>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px;">${toolsHtml}</div>
         <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openProgressModal('${sc.id}','${sc.scan_path}',${JSON.stringify(sc.scan_types||[])});pollScanProgress('${sc.id}')">Xem tiến độ chi tiết →</button>
       </div>`;
@@ -1432,28 +1977,28 @@ function renderScanCard(sc, projectId) {
       </div>
       ${sc.status === 'COMPLETED' ? `
         <div class="grid4" style="margin-top:12px;gap:8px;">
-          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="mini-stat">
             <div class="stat-num c" style="font-size:22px;">${s.CRITICAL||0}</div><div class="stat-label">Critical</div>
           </div>
-          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="mini-stat">
             <div class="stat-num h" style="font-size:22px;">${s.HIGH||0}</div><div class="stat-label">High</div>
           </div>
-          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="mini-stat">
             <div class="stat-num m" style="font-size:22px;">${s.MEDIUM||0}</div><div class="stat-label">Medium</div>
           </div>
-          <div style="text-align:center;background:var(--bg3);border-radius:6px;padding:10px;">
+          <div class="mini-stat">
             <div class="stat-num l" style="font-size:22px;">${s.LOW||0}</div><div class="stat-label">Low</div>
           </div>
         </div>
         ${scannerLogsHtml}
         <div class="flex" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="openVulns('${sc.id}')">Xem ${s.total||0} Vulnerabilities →</button>
-          <button class="btn btn-sm" style="background:#7c3aed;color:#fff;" onclick="openAIReport('${sc.id}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
+          <button class="btn btn-sm btn-ai" onclick="openAIReport('${sc.id}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
           <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${sc.id}')" title="Tải xuống báo cáo AI dạng file .html để gửi email hoặc lưu trữ">⬇ Tải .html</button>
           <button class="btn btn-ghost btn-sm" onclick="checkApprove('${projectId}','${sc.id}')">✅ Approve Check</button>
         </div>
       ` : sc.status === 'FAILED' ? `
-        <div style="color:var(--critical);font-size:13px;margin-top:8px;background:#da363310;border-radius:6px;padding:10px;">
+        <div style="color:var(--critical);font-size:13px;margin-top:8px;background:color-mix(in srgb, var(--critical) 8%, transparent);border-radius:6px;padding:10px;">
           ❌ <strong>Thất bại:</strong> ${escHtml(sc.error_message||'Scan thất bại')}
         </div>
       ` : runningProgressHtml}
@@ -1497,7 +2042,7 @@ function renderVulnTable() {
         <span style="margin-left:12px;font-size:14px;">${filtered.length}/${allVulns.length} vulnerabilities</span>
       </div>
       <div class="flex" style="gap:6px;">
-        <button class="btn btn-sm" style="background:#7c3aed;color:#fff;" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
+        <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo AI dạng file .html">⬇ Tải .html</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export toàn bộ kết quả scan ra CSV (mở được bằng Excel)">⬇ CSV</button>
@@ -1631,6 +2176,8 @@ function openVulnDetail(vulnId) {
     aiLoading.style.display = 'none'; aiContent.style.display = 'none'; aiNA.style.display = 'block';
   }
 
+  renderAIProviderChip(v);
+
   // Waiver tab
   const waiverExisting = document.getElementById('waiver-existing');
   const waiverForm = document.getElementById('waiver-form-section');
@@ -1650,7 +2197,7 @@ function openVulnDetail(vulnId) {
     document.getElementById('waiver-is-fp').checked = false;
   }
 
-  switchTab(document.querySelector('.tab'), 'tab-detail');
+  switchTab(document.querySelector('#vuln-modal .tab'), 'tab-detail');
   document.getElementById('vuln-modal').classList.add('open');
 }
 
@@ -1879,16 +2426,16 @@ function updateProgressUI(data) {
     const s = data.final_summary;
     const grid = document.getElementById('sp-final-grid');
     grid.innerHTML = `
-      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+      <div class="mini-stat">
         <div class="stat-num c" style="font-size:24px;">${s.CRITICAL||0}</div><div class="stat-label">Critical</div>
       </div>
-      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+      <div class="mini-stat">
         <div class="stat-num h" style="font-size:24px;">${s.HIGH||0}</div><div class="stat-label">High</div>
       </div>
-      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+      <div class="mini-stat">
         <div class="stat-num m" style="font-size:24px;">${s.MEDIUM||0}</div><div class="stat-label">Medium</div>
       </div>
-      <div style="text-align:center;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;">
+      <div class="mini-stat">
         <div class="stat-num l" style="font-size:24px;">${s.LOW||0}</div><div class="stat-label">Low</div>
       </div>`;
 
@@ -1900,12 +2447,12 @@ function updateProgressUI(data) {
     if (aiStatus === 'analyzing') {
       const aiPct = aiTotal > 0 ? Math.round(aiDone / aiTotal * 100) : 0;
       aiHtml = `
-        <div id="sp-ai-banner" style="background:#1f6feb15;border:1px solid #1f6feb40;border-radius:6px;padding:10px 14px;margin-top:10px;">
+        <div id="sp-ai-banner" style="background:color-mix(in srgb, var(--brand-500) 9%, transparent);border:1px solid color-mix(in srgb, var(--brand-500) 28%, transparent);border-radius:6px;padding:10px 14px;margin-top:10px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <span style="font-size:12px;font-weight:600;color:var(--accent2);">🤖 AI đang phân tích vulnerabilities...</span>
             <span style="font-size:12px;color:var(--text2);">${aiDone}/${aiTotal} (${aiPct}%)</span>
           </div>
-          <div class="progress-bar"><div class="progress-fill" style="background:var(--accent2);width:${aiPct}%;transition:width .5s;"></div></div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${aiPct}%;transition:width .5s;"></div></div>
           <div style="font-size:11px;color:var(--text3);margin-top:4px;">Bạn có thể xem vulns ngay — AI sẽ cập nhật phân tích nền</div>
         </div>`;
       // Tiếp tục poll mỗi 3s để cập nhật AI progress
@@ -1914,19 +2461,19 @@ function updateProgressUI(data) {
       }
     } else if (aiStatus === 'done') {
       aiHtml = `
-        <div style="background:#3fb95015;border:1px solid #3fb95040;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--low);">
+        <div style="background:color-mix(in srgb, var(--low) 10%, transparent);border:1px solid color-mix(in srgb, var(--low) 30%, transparent);border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--low);">
           🤖 AI đã phân tích xong ${aiTotal} vulnerabilities
         </div>`;
       clearInterval(progressPollTimer);
       progressPollTimer = null;
     } else if (aiStatus === 'error') {
       aiHtml = `
-        <div style="background:#da363315;border:1px solid #da363340;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--critical);">
+        <div style="background:color-mix(in srgb, var(--critical) 10%, transparent);border:1px solid color-mix(in srgb, var(--critical) 30%, transparent);border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--critical);">
           ⚠️ AI analysis gặp lỗi — ${escHtml(s.ai_error || 'Kiểm tra Ollama service')}
         </div>`;
     } else if (aiStatus === 'pending') {
       aiHtml = `
-        <div style="background:#d2992215;border:1px solid #d2992240;border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--medium);">
+        <div style="background:color-mix(in srgb, var(--medium) 10%, transparent);border:1px solid color-mix(in srgb, var(--medium) 30%, transparent);border-radius:6px;padding:8px 14px;margin-top:10px;font-size:12px;color:var(--medium);">
           🤖 Đang khởi động AI analysis...
         </div>`;
     }
@@ -2048,7 +2595,7 @@ async function runCompare() {
       <div class="${summary.approve_status === 'BLOCKED' ? 'approve-blocked' : 'approve-ok'}" style="margin-bottom:16px;font-weight:600;">
         ${summary.approve_message}
       </div>
-      <div class="grid4 mb-16">
+      <div class="grid4 mb-16 vg-stagger">
         <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 New</div></div>
         <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Fixed</div></div>
         <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">⏳ Persisted</div></div>
@@ -2088,10 +2635,10 @@ async function loadOllamaStatus() {
   const bar = document.getElementById('ollama-status-bar');
   try {
     const r = await api('/api/ollama/health');
-    bar.style.background = '#3fb95015'; bar.style.borderColor = '#3fb95040'; bar.style.color = 'var(--low)';
+    bar.style.background = 'color-mix(in srgb, var(--low) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--low) 30%, transparent)'; bar.style.color = 'var(--low)';
     bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
   } catch(e) {
-    bar.style.background = '#da363315'; bar.style.borderColor = '#da363340'; bar.style.color = 'var(--critical)';
+    bar.style.background = 'color-mix(in srgb, var(--critical) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--critical) 30%, transparent)'; bar.style.color = 'var(--critical)';
     bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Có 2 cách xử lý:<br>
       <span style="font-size:12px;">
         1. Chạy Ollama service: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">docker compose up -d ollama</code><br>
@@ -2106,7 +2653,7 @@ let scannerEnabledState = {};  // { tool_name: bool }
 async function loadScannerHealth() {
   const el = document.getElementById('scanner-tools-list');
   const summaryEl = document.getElementById('scanner-summary');
-  el.innerHTML = '<div class="loading"><div class="spinner"></div>Đang kiểm tra tools...</div>';
+  el.innerHTML = '<div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>';
   try {
     const data = await api('/api/settings/scanners');
     const tools = data.tools || [];
@@ -2332,6 +2879,7 @@ async function pullModel() {
       body: JSON.stringify({ model: name }),
       signal: pullAbortController.signal,
     });
+    check401(response);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -2602,7 +3150,8 @@ async function cwExec(confirmRun) {
 // ─── DOCUMENT REVIEW ────────────────────────────────────────────
 async function apiUpload(path, formData, method = 'POST') {
   const r = await fetch(API + path, { method, body: formData });
-  if (!r.ok) { const t = await r.text(); throw new Error(t); }
+  check401(r);
+  if (!r.ok) { const t = await r.text(); throw new Error(errText(t)); }
   if (r.status === 204) return null;
   return r.json();
 }
@@ -2719,7 +3268,7 @@ function openDocDetail(documentId) {
 async function loadDocDetail() {
   if (docReviewPollInterval) { clearInterval(docReviewPollInterval); docReviewPollInterval = null; }
   const el = document.getElementById('docreview-detail-content');
-  el.innerHTML = `<div class="loading"><div class="spinner"></div>Đang tải...</div>`;
+  el.innerHTML = `<div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>`;
   try {
     const doc = await api(`/api/docreview/documents/${currentDocId}`);
     const versions = await api(`/api/docreview/documents/${currentDocId}/versions`);
@@ -2760,7 +3309,7 @@ async function loadDocDetail() {
         </div>
         <div>
           <h2>Kết quả Review</h2>
-          <div id="docreview-version-detail"><div class="loading"><div class="spinner"></div>Đang tải...</div></div>
+          <div id="docreview-version-detail"><div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div></div>
         </div>
       </div>`;
 
@@ -2810,7 +3359,7 @@ async function renderDocVersionDetail() {
     let findingsHtml = '';
     if (v.review_status === 'DONE') {
       findingsHtml = `
-        <div class="grid4" style="margin-bottom:16px;">
+        <div class="grid4 vg-stagger" style="margin-bottom:16px;">
           <div class="stat-card"><div class="stat-num l">${s.met || 0}</div><div class="stat-label">Đã đáp ứng</div></div>
           <div class="stat-card"><div class="stat-num m">${s.partial || 0}</div><div class="stat-label">Một phần</div></div>
           <div class="stat-card"><div class="stat-num c">${s.not_met || 0}</div><div class="stat-label">Chưa đáp ứng</div></div>
@@ -2942,7 +3491,708 @@ async function runCompareVersions() {
   }
 }
 
+// ─── UI SHELL: theme, sidebar (mobile), toast ─────────────────
+const SKELETON_HTML = '<div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>';
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('vg-theme', t); } catch (e) { /* storage bị chặn — vẫn đổi theme cho phiên này */ }
+  applyThemeButtons();
+}
+function applyThemeButtons() {
+  const t = document.documentElement.dataset.theme || 'system';
+  document.querySelectorAll('[data-theme-opt]').forEach(b => {
+    const on = b.dataset.themeOpt === t;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function toggleSidebar(force) {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  if (!sb || !bd) return;
+  const open = force === undefined ? !sb.classList.contains('open') : !!force;
+  sb.classList.toggle('open', open);
+  bd.classList.toggle('open', open);
+}
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  toggleSidebar(false);
+  closeFindingDrawer();
+});
+
+function toast(msg, type = 'info', ms = 4200) {
+  const stack = document.getElementById('toast-stack');
+  if (!stack) return;
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  const icon = { error: '⛔', success: '✅', warn: '⚠️', info: 'ℹ️' }[type] || '';
+  el.innerHTML = `<span>${icon}</span><span style="flex:1;"></span>`;
+  el.lastChild.textContent = msg;
+  stack.appendChild(el);
+  let gone = false;
+  const remove = () => { if (gone) return; gone = true; el.classList.add('leaving'); setTimeout(() => el.remove(), 280); };
+  el.addEventListener('click', remove);
+  setTimeout(remove, ms);
+}
+// alert() cũ → toast không chặn UI (confirm() vẫn giữ native)
+window.alert = (m) => {
+  const msg = String(m ?? '');
+  toast(msg, /lỗi|error|❌|thất bại/i.test(msg) ? 'error' : 'warn', 5200);
+};
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch {}
+    ta.remove();
+  }
+  if (btn) { const o = btn.textContent; btn.textContent = '✓ Đã copy'; setTimeout(() => { btn.textContent = o; }, 1400); }
+  toast('Đã copy vào clipboard', 'success', 1800);
+}
+function safeUrl(u) { return /^https?:\/\//i.test(String(u || '')) ? escHtml(u) : null; }
+
+// ─── AUTH ──────────────────────────────────────────────────────
+let currentUser = null;
+const ROLE_LABEL = { ADMIN: 'ADMIN', ANALYST: 'ANALYST', VIEWER: 'VIEWER' };
+
+async function initAuth() {
+  try {
+    const r = await fetch('/api/auth/me');
+    if (r.status === 401) {
+      // Auth tắt ở backend → /me vẫn 401 nhưng không cần đăng nhập; chỉ redirect khi auth đang bật
+      const st = await fetch('/api/auth/status').then(x => x.ok ? x.json() : null).catch(() => null);
+      if (!st || st.auth_enabled !== false) { redirectToLogin(); return; }
+      throw new Error('auth disabled');
+    }
+    if (!r.ok) throw new Error('auth unavailable');
+    currentUser = await r.json();
+  } catch {
+    currentUser = null;   // backend chưa bật auth → ẩn khối người dùng
+  }
+  renderUserChip();
+}
+function canAdmin() { return !currentUser || currentUser.role === 'ADMIN'; }
+function initials(name) {
+  const parts = String(name || '?').trim().split(/\s+/);
+  return ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase() || '?';
+}
+function renderUserChip() {
+  const chip = document.getElementById('user-chip');
+  const usersTab = document.getElementById('st-tab-users');
+  if (!currentUser) { chip.style.display = 'none'; usersTab.style.display = 'none'; return; }
+  chip.style.display = 'flex';
+  document.getElementById('user-name').textContent = currentUser.name || currentUser.email;
+  document.getElementById('user-name').title = currentUser.email || '';
+  document.getElementById('user-avatar').textContent = initials(currentUser.name || currentUser.email);
+  const roleEl = document.getElementById('user-role');
+  roleEl.textContent = ROLE_LABEL[currentUser.role] || currentUser.role || '—';
+  roleEl.className = 'role-badge ' + (currentUser.role || '');
+  usersTab.style.display = currentUser.role === 'ADMIN' ? '' : 'none';
+}
+async function logout() {
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+  location.href = '/login';
+}
+
+// ─── SETTINGS › NGƯỜI DÙNG (ADMIN) ────────────────────────────
+let usersCache = [];
+let resetPwUserId = null;
+
+async function loadUsers() {
+  const el = document.getElementById('users-list');
+  if (!usersCache.length) el.innerHTML = SKELETON_HTML;
+  try {
+    usersCache = await api('/api/auth/users');
+    renderUsers();
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderUsers() {
+  const el = document.getElementById('users-list');
+  if (!usersCache.length) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">👥</div><p>Chưa có người dùng nào</p></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Người dùng</th><th>Vai trò</th><th>Hoạt động</th><th>Đăng nhập gần nhất</th><th></th></tr></thead>
+    <tbody>${usersCache.map(u => {
+      const self = currentUser && u.id === currentUser.id;
+      const active = u.is_active !== false;
+      return `<tr style="${active ? '' : 'opacity:.55;'}">
+        <td><div class="flex" style="gap:10px;">
+          <div class="user-avatar" style="width:30px;height:30px;font-size:11px;">${escHtml(initials(u.name || u.email))}</div>
+          <div><strong>${escHtml(u.name || '—')}</strong>${self ? ' <span class="chip" style="margin-left:4px;">bạn</span>' : ''}<br><span class="text-sm">${escHtml(u.email)}</span></div>
+        </div></td>
+        <td><select style="width:auto;min-width:130px;" ${self ? 'disabled title="Không thể tự đổi vai trò của chính mình"' : ''} onchange="updateUser('${escHtml(u.id)}', { role: this.value })">
+          ${['ADMIN', 'ANALYST', 'VIEWER'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('')}
+        </select></td>
+        <td><label class="toggle" title="${active ? 'Đang hoạt động — click để vô hiệu hóa' : 'Đã vô hiệu hóa — click để kích hoạt'}">
+          <input type="checkbox" ${active ? 'checked' : ''} ${self ? 'disabled' : ''} onchange="updateUser('${escHtml(u.id)}', { is_active: this.checked })">
+          <span class="toggle-slider"></span></label></td>
+        <td class="text-sm">${u.last_login_at ? fmtDate(u.last_login_at) : 'Chưa đăng nhập'}${u.created_at ? `<br><span style="color:var(--text3)">Tạo: ${fmtDate(u.created_at)}</span>` : ''}</td>
+        <td style="white-space:nowrap;text-align:right;">
+          <button class="btn btn-ghost btn-sm" onclick="openResetPassword('${escHtml(u.id)}')">🔑 Đặt lại mật khẩu</button>
+          ${self ? '' : `<button class="btn btn-ghost btn-sm" title="Xóa người dùng" onclick="deleteUser('${escHtml(u.id)}')">🗑</button>`}
+        </td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+async function updateUser(id, patch) {
+  try {
+    await api(`/api/auth/users/${id}`, { method: 'PATCH', body: patch });
+    toast(patch.password ? 'Đã đặt lại mật khẩu' : 'Đã cập nhật người dùng', 'success', 2200);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+  loadUsers();
+}
+async function deleteUser(id) {
+  const u = usersCache.find(x => x.id === id);
+  if (!confirm(`Xóa người dùng "${u ? (u.name || u.email) : id}"? Thao tác này không thể hoàn tác.`)) return;
+  try { await api(`/api/auth/users/${id}`, { method: 'DELETE' }); toast('Đã xóa người dùng', 'success', 2200); }
+  catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+  loadUsers();
+}
+function openUserModal() {
+  ['nu-name', 'nu-email', 'nu-password'].forEach(i => { document.getElementById(i).value = ''; });
+  document.getElementById('nu-role').value = 'ANALYST';
+  document.getElementById('nu-error').textContent = '';
+  document.getElementById('user-modal').classList.add('open');
+  setTimeout(() => document.getElementById('nu-name').focus(), 50);
+}
+function closeUserModal() { document.getElementById('user-modal').classList.remove('open'); }
+async function createUser() {
+  const name = document.getElementById('nu-name').value.trim();
+  const email = document.getElementById('nu-email').value.trim();
+  const password = document.getElementById('nu-password').value;
+  const role = document.getElementById('nu-role').value;
+  const err = document.getElementById('nu-error');
+  if (!name || !email) { err.textContent = 'Nhập họ tên và email'; return; }
+  if (password.length < 10) { err.textContent = 'Mật khẩu tối thiểu 10 ký tự'; return; }
+  try {
+    await api('/api/auth/users', { method: 'POST', body: { email, name, password, role } });
+    closeUserModal();
+    toast(`Đã tạo người dùng ${email}`, 'success');
+    loadUsers();
+  } catch (e) { err.textContent = e.message; }
+}
+function openResetPassword(id) {
+  resetPwUserId = id;
+  const u = usersCache.find(x => x.id === id);
+  document.getElementById('rp-user').textContent = u ? `${u.name || ''} <${u.email}>` : id;
+  document.getElementById('rp-password').value = '';
+  document.getElementById('rp-password2').value = '';
+  document.getElementById('rp-error').textContent = '';
+  document.getElementById('reset-pw-modal').classList.add('open');
+}
+async function submitResetPassword() {
+  const p1 = document.getElementById('rp-password').value;
+  const p2 = document.getElementById('rp-password2').value;
+  const err = document.getElementById('rp-error');
+  if (p1.length < 10) { err.textContent = 'Mật khẩu tối thiểu 10 ký tự'; return; }
+  if (p1 !== p2) { err.textContent = 'Hai mật khẩu không khớp'; return; }
+  document.getElementById('reset-pw-modal').classList.remove('open');
+  await updateUser(resetPwUserId, { password: p1 });
+}
+
+// ─── SETTINGS › AI PROVIDER ───────────────────────────────────
+const AI_DEFAULTS = {
+  provider: 'anthropic', mode: 'local_only',
+  anthropic: { auth_mode: 'api_key', model: 'claude-opus-5-5', api_key_set: false, api_key_hint: '',
+    wif: { federation_rule_id: '', organization_id: '', identity_token_file: '', workspace_id: '', service_account_id: '' } },
+  bedrock: { region: 'us-east-1', aws_profile: '', model: 'anthropic.claude-opus-5-5' },
+  hybrid: { escalate_min_severity: 'MEDIUM', fp_band_low: 15, fp_band_high: 85 },
+  privacy: { send_code_context: true, context_lines: 15, redact_secrets: true },
+};
+let aiConfig = null;
+
+function mergeDeep(base, over) {
+  const out = Array.isArray(base) ? [...base] : { ...base };
+  for (const [k, v] of Object.entries(over || {})) {
+    out[k] = (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object') ? mergeDeep(base[k], v) : v;
+  }
+  return out;
+}
+const radioVal = name => document.querySelector(`input[name="${name}"]:checked`)?.value;
+const setRadio = (name, v) => { const el = document.querySelector(`input[name="${name}"][value="${v}"]`); if (el) el.checked = true; };
+const val = id => document.getElementById(id).value;
+const setVal = (id, v) => { document.getElementById(id).value = v ?? ''; };
+
+async function loadAIConfig() {
+  const st = document.getElementById('ai-config-status');
+  st.textContent = 'Đang tải cấu hình...';
+  let cfg = {};
+  try { cfg = await api('/api/ai/config'); st.textContent = ''; }
+  catch (e) { st.innerHTML = `<span style="color:var(--critical)">Không tải được cấu hình: ${escHtml(e.message)}</span>`; }
+  aiConfig = mergeDeep(AI_DEFAULTS, cfg);
+  fillAIForm(aiConfig);
+}
+function fillAIForm(c) {
+  setRadio('ai-mode', c.mode);
+  setRadio('ai-provider', c.provider === 'bedrock' ? 'bedrock' : 'anthropic');
+  setVal('ai-anth-auth', c.anthropic.auth_mode);
+  setVal('ai-anth-model', c.anthropic.model);
+  setVal('ai-anth-key', '');
+  document.getElementById('ai-anth-key-hint').textContent = c.anthropic.api_key_set
+    ? `Đã lưu: ${c.anthropic.api_key_hint || '••••'} — để trống để giữ nguyên, nhập key mới để thay.`
+    : 'Chưa có API key nào được lưu.';
+  document.getElementById('ai-clear-key').style.display = (c.anthropic.api_key_set && canAdmin()) ? 'inline' : 'none';
+  const w = c.anthropic.wif || {};
+  setVal('ai-wif-rule', w.federation_rule_id); setVal('ai-wif-org', w.organization_id);
+  setVal('ai-wif-token', w.identity_token_file); setVal('ai-wif-ws', w.workspace_id); setVal('ai-wif-sa', w.service_account_id);
+  setVal('ai-br-region', c.bedrock.region); setVal('ai-br-profile', c.bedrock.aws_profile); setVal('ai-br-model', c.bedrock.model);
+  setVal('ai-escalate-sev', c.hybrid.escalate_min_severity);
+  setVal('ai-fp-low', c.hybrid.fp_band_low); setVal('ai-fp-high', c.hybrid.fp_band_high);
+  document.getElementById('ai-priv-send').checked = !!c.privacy.send_code_context;
+  setVal('ai-priv-lines', c.privacy.context_lines);
+  document.getElementById('ai-priv-redact').checked = !!c.privacy.redact_secrets;
+
+  const editable = canAdmin();
+  document.querySelectorAll('#st-ai input, #st-ai select').forEach(i => { i.disabled = !editable; });
+  document.getElementById('ai-save-btn').style.display = editable ? '' : 'none';
+  document.getElementById('ai-config-readonly').style.display = editable ? 'none' : 'block';
+  onAIModeChange(); onAIAuthModeChange(); renderFpBand();
+}
+function onAIModeChange() {
+  const mode = radioVal('ai-mode') || 'local_only';
+  document.getElementById('ai-hybrid-section').style.display = mode === 'hybrid' ? 'block' : 'none';
+  const local = mode === 'local_only';
+  ['ai-cloud-card', 'ai-privacy-card'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.opacity = local ? '.55' : '';
+    el.title = local ? 'Không dùng ở chế độ "Chỉ local" — vẫn có thể cấu hình sẵn' : '';
+  });
+  onAIProviderChange();
+}
+function onAIProviderChange() {
+  const p = radioVal('ai-provider') || 'anthropic';
+  document.getElementById('ai-anthropic-section').style.display = p === 'anthropic' ? 'block' : 'none';
+  document.getElementById('ai-bedrock-section').style.display = p === 'bedrock' ? 'block' : 'none';
+  renderPrivacyWarning();
+}
+function onAIAuthModeChange() {
+  const m = val('ai-anth-auth');
+  document.getElementById('ai-auth-apikey').style.display = m === 'api_key' ? 'block' : 'none';
+  document.getElementById('ai-auth-wif').style.display = m === 'wif' ? 'block' : 'none';
+  document.getElementById('ai-auth-env').style.display = m === 'environment' ? 'block' : 'none';
+}
+function renderFpBand() {
+  let lo = Math.max(0, Math.min(100, parseInt(val('ai-fp-low'), 10) || 0));
+  let hi = Math.max(0, Math.min(100, parseInt(val('ai-fp-high'), 10) || 0));
+  if (hi < lo) [lo, hi] = [hi, lo];
+  const band = document.getElementById('ai-fp-band');
+  band.style.left = lo + '%'; band.style.width = (hi - lo) + '%';
+  document.getElementById('ai-fp-band-hint').textContent =
+    `FP% từ ${lo}% đến ${hi}% → chưa chắc chắn, gửi Claude xác minh. Dưới ${lo}% coi là lỗi thật, trên ${hi}% coi là false positive.`;
+}
+function renderPrivacyWarning() {
+  const mode = radioVal('ai-mode') || 'local_only';
+  const send = document.getElementById('ai-priv-send').checked;
+  document.getElementById('ai-privacy-warning').style.display = (send && mode !== 'local_only') ? 'block' : 'none';
+  document.getElementById('ai-privacy-provider').textContent = radioVal('ai-provider') === 'bedrock' ? 'Amazon Bedrock' : 'Anthropic';
+}
+function buildAIPayload() {
+  const mode = radioVal('ai-mode') || 'local_only';
+  const cloud = radioVal('ai-provider') || 'anthropic';
+  let lo = parseInt(val('ai-fp-low'), 10) || 0, hi = parseInt(val('ai-fp-high'), 10) || 0;
+  if (hi < lo) [lo, hi] = [hi, lo];
+  const payload = {
+    provider: cloud,   // cloud provider dùng cho hybrid / cloud_only (local_only vẫn lưu lựa chọn)
+    mode,
+    anthropic: {
+      auth_mode: val('ai-anth-auth'),
+      model: val('ai-anth-model').trim() || AI_DEFAULTS.anthropic.model,
+      wif: {
+        federation_rule_id: val('ai-wif-rule').trim(), organization_id: val('ai-wif-org').trim(),
+        identity_token_file: val('ai-wif-token').trim(), workspace_id: val('ai-wif-ws').trim(),
+        service_account_id: val('ai-wif-sa').trim(),
+      },
+    },
+    bedrock: { region: val('ai-br-region').trim(), aws_profile: val('ai-br-profile').trim(), model: val('ai-br-model').trim() },
+    hybrid: { escalate_min_severity: val('ai-escalate-sev'), fp_band_low: Math.max(0, lo), fp_band_high: Math.min(100, hi) },
+    privacy: {
+      send_code_context: document.getElementById('ai-priv-send').checked,
+      context_lines: Math.max(0, parseInt(val('ai-priv-lines'), 10) || 0),
+      redact_secrets: document.getElementById('ai-priv-redact').checked,
+    },
+  };
+  const key = val('ai-anth-key').trim();
+  if (key) payload.anthropic.api_key = key;   // write-only: chỉ gửi khi người dùng nhập key mới
+  return payload;
+}
+async function saveAIConfig() {
+  const btn = document.getElementById('ai-save-btn');
+  const payload = buildAIPayload();
+  if (payload.mode !== 'local_only' && payload.provider === 'anthropic' && payload.anthropic.auth_mode === 'api_key'
+      && !payload.anthropic.api_key && !(aiConfig && aiConfig.anthropic.api_key_set)) {
+    toast('Chưa có API key Anthropic — nhập API key hoặc chọn phương thức xác thực khác.', 'warn');
+    return;
+  }
+  btn.disabled = true; btn.textContent = '⏳ Đang lưu...';
+  try {
+    const saved = await api('/api/ai/config', { method: 'PUT', body: payload });
+    aiConfig = mergeDeep(AI_DEFAULTS, saved || payload);
+    fillAIForm(aiConfig);
+    toast('Đã lưu cấu hình AI Provider', 'success');
+  } catch (e) { toast('Lỗi khi lưu: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '💾 Lưu cấu hình'; }
+}
+async function clearAIKey() {
+  if (!confirm('Xóa API key Anthropic đã lưu trên máy chủ?')) return;
+  try {
+    const saved = await api('/api/ai/config', { method: 'PUT', body: { anthropic: { clear_api_key: true } } });
+    aiConfig = mergeDeep(AI_DEFAULTS, saved || {});
+    fillAIForm(aiConfig);
+    toast('Đã xóa API key', 'success');
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function testAIConfig() {
+  const btn = document.getElementById('ai-test-btn');
+  const out = document.getElementById('ai-test-result');
+  btn.disabled = true; btn.textContent = '⏳ Đang kiểm tra...';
+  out.innerHTML = '<div class="progress-bar" style="max-width:320px;"><div class="progress-fill indeterminate"></div></div>';
+  try {
+    const r = await api('/api/ai/test', { method: 'POST' });
+    out.innerHTML = r.ok
+      ? `<div class="approve-ok">✅ Kết nối thành công — <strong>${escHtml(r.provider || '')}</strong> · <span class="text-mono">${escHtml(r.model || '')}</span> · ${r.latency_ms != null ? escHtml(r.latency_ms) + ' ms' : ''}</div>`
+      : `<div class="approve-blocked">❌ Kết nối thất bại (${escHtml(r.provider || '')}${r.model ? ' · ' + escHtml(r.model) : ''}): ${escHtml(r.error || 'không rõ lỗi')}</div>`;
+  } catch (e) {
+    out.innerHTML = `<div class="approve-blocked">❌ ${escHtml(e.message)}</div>`;
+  } finally { btn.disabled = false; btn.textContent = '🔌 Kiểm tra kết nối'; }
+}
+
+// ─── VULN › PHÂN TÍCH LẠI BẰNG CLAUDE ─────────────────────────
+const AI_PROVIDER_LABEL = { ollama: '🏠 Ollama (local)', anthropic: '✳️ Claude · Anthropic', bedrock: '🟧 Claude · Bedrock' };
+function renderAIProviderChip(v) {
+  const chip = document.getElementById('ai-provider-chip');
+  const p = v.ai_provider || (v.ai_explanation ? 'ollama' : null);
+  chip.textContent = p ? (AI_PROVIDER_LABEL[p] || p) : 'Chưa phân tích';
+  chip.className = 'chip' + (p && p !== 'ollama' ? ' cloud' : '');
+}
+async function reanalyzeVuln() {
+  if (!currentVulnId) return;
+  const btn = document.getElementById('ai-reanalyze-btn');
+  const aiLoading = document.getElementById('ai-loading');
+  const aiContent = document.getElementById('ai-content');
+  const aiNA = document.getElementById('ai-unavailable');
+  const prev = { content: aiContent.style.display, na: aiNA.style.display };
+  btn.disabled = true; btn.textContent = '⏳ Claude đang phân tích...';
+  aiContent.style.display = 'none'; aiNA.style.display = 'none'; aiLoading.style.display = 'flex';
+  try {
+    const r = await api(`/api/vulns/${currentVulnId}/reanalyze`, { method: 'POST' });
+    const idx = allVulns.findIndex(v => v.id === currentVulnId);
+    if (idx >= 0 && r) Object.assign(allVulns[idx], r);
+    openVulnDetail(currentVulnId);
+    switchTab(document.querySelector('#vuln-modal .tab:nth-child(2)'), 'tab-ai');
+    toast('Đã phân tích lại bằng ' + (AI_PROVIDER_LABEL[r?.ai_provider] || 'Claude'), 'success');
+  } catch (e) {
+    aiLoading.style.display = 'none'; aiContent.style.display = prev.content; aiNA.style.display = prev.na;
+    toast('Lỗi phân tích lại: ' + e.message, 'error');
+  } finally { btn.disabled = false; btn.textContent = '🔁 Phân tích lại bằng Claude'; }
+}
+// Nút "Phân tích ngay" (khi vuln chưa có AI) — trước đây gọi hàm không tồn tại
+function requestAI() { return reanalyzeVuln(); }
+
+// ─── DOMAIN › WEB SCAN (NUCLEI) ───────────────────────────────
+let domainCrawlsCache = [];
+let webScanPollTimer = null;
+const webScanState = { scans: [], selectedId: null, findings: [], sev: '', status: '', search: '' };
+const WEB_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
+const WEB_SEV_COLOR = { critical: 'var(--critical)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--low)', info: 'var(--info)' };
+const WEB_PHASE_LABEL = { pending: 'Đang chờ', scanning: 'Đang quét', done: 'Hoàn tất', failed: 'Thất bại' };
+const isActiveScan = s => s.status === 'RUNNING' || s.status === 'PENDING';
+
+function stopWebScanPoll() { clearInterval(webScanPollTimer); webScanPollTimer = null; }
+function ensureWebScanPoll() {
+  const active = webScanState.scans.some(isActiveScan);
+  if (active && !webScanPollTimer) webScanPollTimer = setInterval(pollWebScans, 2000);
+  else if (!active) stopWebScanPoll();
+}
+async function loadWebScans() {
+  if (!currentDomainId) return;
+  const el = document.getElementById('webscan-list');
+  const domainAtStart = currentDomainId;
+  if (!webScanState.scans.length) el.innerHTML = SKELETON_HTML;
+  try {
+    const scans = await api(`/api/domains/${currentDomainId}/webscans`);
+    if (domainAtStart !== currentDomainId) return;
+    webScanState.scans = scans || [];
+    renderWebScans();
+    ensureWebScanPoll();
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+async function pollWebScans() {
+  const active = webScanState.scans.filter(isActiveScan);
+  if (!active.length) return stopWebScanPoll();
+  const updated = await Promise.all(active.map(s => api(`/api/webscans/${s.id}`).catch(() => null)));
+  updated.forEach(u => {
+    if (!u) return;
+    const i = webScanState.scans.findIndex(x => x.id === u.id);
+    if (i < 0) return;
+    webScanState.scans[i] = u;
+    if (!isActiveScan(u)) {
+      toast(u.status === 'COMPLETED' ? `Web scan hoàn thành — ${u.summary?.total ?? 0} findings` : `Web scan thất bại: ${u.error_message || ''}`,
+            u.status === 'COMPLETED' ? 'success' : 'error');
+      if (webScanState.selectedId === u.id) loadWebFindings(u.id);
+    }
+  });
+  renderWebScans();
+  ensureWebScanPoll();
+}
+function crawlLabel(crawlId) {
+  if (!crawlId) return 'Chỉ root URL';
+  const c = domainCrawlsCache.find(x => x.id === crawlId);
+  return c ? `Crawl #${c.crawl_number}` : 'Crawl ' + String(crawlId).slice(0, 8);
+}
+function sevSummaryHtml(s) {
+  s = s || {};
+  const total = WEB_SEVS.reduce((a, k) => a + (s[k] || 0), 0);
+  const bar = total ? `<div style="display:flex;height:6px;border-radius:999px;overflow:hidden;background:var(--bg3);margin-top:12px;">
+      ${WEB_SEVS.map(k => s[k] ? `<div title="${k}: ${s[k]}" style="width:${(s[k] / total * 100).toFixed(2)}%;background:${WEB_SEV_COLOR[k]};"></div>` : '').join('')}
+    </div>` : '';
+  return `<div class="grid4 ws-sev-grid" style="grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:12px;">
+      ${WEB_SEVS.map(k => `<div class="mini-stat"><div class="stat-num" style="font-size:20px;color:${WEB_SEV_COLOR[k]};">${s[k] || 0}</div><div class="stat-label">${k}</div></div>`).join('')}
+    </div>${bar}`;
+}
+function renderWebScans() {
+  const el = document.getElementById('webscan-list');
+  const scans = webScanState.scans;
+  document.getElementById('webscan-count').textContent = scans.length ? `${scans.length} lần quét` : '';
+  if (!scans.length) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="icon">🎯</div><p>Chưa có lần quét Nuclei nào</p>
+      <p class="text-sm" style="margin-top:6px;">Nên chạy crawl trước để Nuclei quét được toàn bộ endpoint đã phát hiện.</p>
+      <button class="btn btn-primary mt-16" onclick="openWebScanModal()">🎯 Bắt đầu Web Scan</button></div></div>`;
+    return;
+  }
+  const statusColor = { PENDING: 'var(--text2)', RUNNING: 'var(--medium)', COMPLETED: 'var(--low)', FAILED: 'var(--critical)' };
+  const statusIcon = { PENDING: '⏳', RUNNING: '⚡', COMPLETED: '✅', FAILED: '❌' };
+  // Chỉ chạy stagger ở lần render đầu cho domain này — các lần poll 2s sau không nháy lại
+  const animate = webScanState.animatedFor !== currentDomainId;
+  webScanState.animatedFor = currentDomainId;
+  el.innerHTML = `<div class="${animate ? 'vg-stagger' : ''}" style="display:flex;flex-direction:column;gap:12px;">${scans.map(w => {
+    const p = w.progress || {};
+    let body = '';
+    if (isActiveScan(w)) {
+      body = `<div style="margin-top:12px;">
+          <div class="flex-between text-sm"><span class="flex"><span class="vg-live-dot"></span>${escHtml(WEB_PHASE_LABEL[p.phase] || p.phase || (w.status === 'PENDING' ? 'Đang chờ' : 'Đang quét'))}${p.message ? ' — ' + escHtml(p.message) : ''}</span>
+          <span>${p.findings != null ? escHtml(p.findings) + ' findings' : ''}</span></div>
+          <div class="progress-bar"><div class="progress-fill indeterminate"></div></div>
+        </div>`;
+    } else if (w.status === 'FAILED') {
+      body = `<div class="path-warning" style="margin:12px 0 0;">❌ <strong>Thất bại:</strong> ${escHtml(w.error_message || 'Web scan thất bại')}</div>`;
+    } else {
+      body = sevSummaryHtml(w.summary);
+    }
+    return `<div class="card ws-card ${webScanState.selectedId === w.id ? 'selected' : ''}" style="margin-bottom:0;">
+      <div class="ws-card-head">
+        <div class="flex" style="flex-wrap:wrap;">
+          <strong>🎯 Web Scan</strong>
+          <span class="status-pill" style="color:${statusColor[w.status] || 'var(--text2)'};">${statusIcon[w.status] || ''} ${escHtml(w.status)}</span>
+          <span class="tag">${escHtml(crawlLabel(w.crawl_id))}</span>
+          ${w.target_count != null ? `<span class="tag">${escHtml(w.target_count)} URL mục tiêu</span>` : ''}
+        </div>
+        <span class="text-sm">${fmtDate(w.started_at)}${w.completed_at ? ' → ' + fmtDate(w.completed_at) : ''}</span>
+      </div>
+      ${body}
+      <div class="flex mt-16" style="flex-wrap:wrap;">
+        ${w.status === 'COMPLETED' ? `<button class="btn btn-primary btn-sm" onclick="selectWebScan('${escHtml(w.id)}')">Xem ${w.summary?.total ?? ''} findings →</button>` : ''}
+        ${isActiveScan(w) ? `<button class="btn btn-ghost btn-sm" onclick="selectWebScan('${escHtml(w.id)}')">Xem findings tạm thời</button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="deleteWebScan('${escHtml(w.id)}')" title="Xóa lần quét">🗑</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+function selectWebScan(id) {
+  webScanState.selectedId = id;
+  webScanState.sev = ''; webScanState.status = ''; webScanState.search = '';
+  renderWebScans();
+  loadWebFindings(id);
+  setTimeout(() => document.getElementById('webscan-findings').scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+}
+async function deleteWebScan(id) {
+  if (!confirm('Xóa lần web scan này và toàn bộ findings?')) return;
+  try {
+    await api(`/api/webscans/${id}`, { method: 'DELETE' });
+    if (webScanState.selectedId === id) { webScanState.selectedId = null; document.getElementById('webscan-findings').innerHTML = ''; }
+    webScanState.scans = webScanState.scans.filter(s => s.id !== id);
+    renderWebScans();
+    toast('Đã xóa web scan', 'success', 2000);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function loadWebFindings(id) {
+  const el = document.getElementById('webscan-findings');
+  el.innerHTML = `<div class="card">${SKELETON_HTML}</div>`;
+  try {
+    const f = await api(`/api/webscans/${id}/findings`);
+    if (webScanState.selectedId !== id) return;
+    const order = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    webScanState.findings = (f || []).sort((a, b) => (order[String(a.severity).toLowerCase()] ?? 9) - (order[String(b.severity).toLowerCase()] ?? 9));
+    renderWebFindings();
+  } catch (e) {
+    el.innerHTML = `<div class="card"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderWebFindings() {
+  const el = document.getElementById('webscan-findings');
+  const all = webScanState.findings;
+  const counts = {};
+  all.forEach(f => { const k = String(f.severity).toLowerCase(); counts[k] = (counts[k] || 0) + 1; });
+  el.innerHTML = `<div class="card vg-enter" style="padding:0;overflow:hidden;">
+    <div style="padding:16px 18px;border-bottom:1px solid var(--border);">
+      <div class="flex-between" style="margin-bottom:12px;">
+        <h2 style="margin:0;">Findings (${all.length})</h2>
+        <div class="flex" style="flex-wrap:wrap;">
+          <input id="wf-search" placeholder="Tìm theo tên, template, URL..." style="width:240px;" oninput="webScanState.search=this.value.toLowerCase();renderWebFindingRows()">
+          <select id="wf-status" style="width:auto;" onchange="webScanState.status=this.value;renderWebFindingRows()">
+            <option value="">Tất cả trạng thái</option><option value="OPEN">Open</option><option value="FALSE_POSITIVE">False Positive</option>
+            <option value="ACCEPTED">Accepted</option><option value="FIXED">Fixed</option>
+          </select>
+        </div>
+      </div>
+      <div class="sev-chips" id="wf-sev-chips">
+        <button class="sev-chip" data-sev="" onclick="setWebSevFilter('')">Tất cả <span class="text-sm">${all.length}</span></button>
+        ${WEB_SEVS.map(k => `<button class="sev-chip" data-sev="${k}" onclick="setWebSevFilter('${k}')"><span class="dot" style="background:${WEB_SEV_COLOR[k]}"></span>${k} <span class="text-sm">${counts[k] || 0}</span></button>`).join('')}
+      </div>
+    </div>
+    <div class="table-wrap" style="max-height:560px;overflow:auto;">
+      <table><thead><tr><th width="100">Severity</th><th>Finding</th><th>Matched at</th><th width="90">Type</th><th width="120">Status</th></tr></thead>
+      <tbody id="wf-rows"></tbody></table>
+    </div>
+  </div>`;
+  renderWebFindingRows();
+}
+function setWebSevFilter(k) { webScanState.sev = k; renderWebFindingRows(); }
+function renderWebFindingRows() {
+  const tb = document.getElementById('wf-rows');
+  if (!tb) return;
+  document.querySelectorAll('#wf-sev-chips .sev-chip').forEach(b => b.classList.toggle('active', b.dataset.sev === webScanState.sev));
+  const q = webScanState.search;
+  const rows = webScanState.findings.filter(f => {
+    if (webScanState.sev && String(f.severity).toLowerCase() !== webScanState.sev) return false;
+    if (webScanState.status && f.status !== webScanState.status) return false;
+    if (q && ![f.name, f.template_id, f.matched_at, f.host].some(x => String(x || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  tb.innerHTML = rows.length ? rows.map(f => `
+    <tr class="vuln-row" onclick="openFindingDrawer('${escHtml(f.id)}')">
+      <td>${sevBadge(String(f.severity || 'info').toUpperCase())}</td>
+      <td><div style="font-weight:500;">${escHtml(f.name || f.template_id)}</div><div class="text-mono text-sm">${escHtml(f.template_id || '')}${f.cve ? ` · <span style="color:var(--info)">${escHtml(f.cve)}</span>` : ''}</div></td>
+      <td class="text-mono text-sm" style="max-width:340px;word-break:break-all;">${escHtml(f.matched_at || f.host || '')}</td>
+      <td><span class="tag">${escHtml(f.type || '—')}</span></td>
+      <td>${statusBadge(f.status || 'OPEN')}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="5"><div class="empty-state" style="padding:36px 10px;"><div class="icon">✨</div><p>${webScanState.findings.length ? 'Không có finding nào phù hợp bộ lọc' : 'Không phát hiện lỗ hổng nào'}</p></div></td></tr>`;
+}
+function openFindingDrawer(id) {
+  const f = webScanState.findings.find(x => x.id === id);
+  if (!f) return;
+  document.getElementById('wf-sev').innerHTML = sevBadge(String(f.severity || 'info').toUpperCase());
+  document.getElementById('wf-title').textContent = f.name || f.template_id || 'Finding';
+  document.getElementById('wf-template').textContent = f.template_id || '';
+  const matchedLink = safeUrl(f.matched_at);
+  const list = (arr) => (arr || []).filter(Boolean);
+  const refs = list(f.reference);
+  const tags = list(f.tags);
+  const extracted = list(f.extracted);
+  document.getElementById('wf-body').innerHTML = `
+    <div class="form-group">
+      <label>Trạng thái</label>
+      <select id="wf-status-select" style="max-width:240px;" onchange="setWebFindingStatus('${escHtml(f.id)}', this.value)">
+        ${['OPEN', 'FALSE_POSITIVE', 'ACCEPTED', 'FIXED'].map(st => `<option value="${st}" ${(f.status || 'OPEN') === st ? 'selected' : ''}>${{ OPEN: 'Open', FALSE_POSITIVE: 'False Positive', ACCEPTED: 'Accepted', FIXED: 'Fixed' }[st]}</option>`).join('')}
+      </select>
+    </div>
+    <dl class="kv">
+      <dt>Matched at</dt><dd class="text-mono">${matchedLink ? `<a href="${matchedLink}" target="_blank" rel="noopener noreferrer">${escHtml(f.matched_at)}</a>` : escHtml(f.matched_at || '—')}</dd>
+      <dt>Host</dt><dd class="text-mono">${escHtml(f.host || '—')}</dd>
+      <dt>Type</dt><dd>${escHtml(f.type || '—')}</dd>
+      ${f.cve ? `<dt>CVE</dt><dd class="text-mono" style="color:var(--info)">${escHtml(f.cve)}</dd>` : ''}
+      ${f.cwe ? `<dt>CWE</dt><dd class="text-mono">${escHtml(f.cwe)}</dd>` : ''}
+      ${f.cvss_score != null ? `<dt>CVSS</dt><dd><strong>${escHtml(f.cvss_score)}</strong></dd>` : ''}
+      ${tags.length ? `<dt>Tags</dt><dd>${tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</dd>` : ''}
+    </dl>
+    ${f.description ? `<div class="separator"></div><label>Mô tả</label><div class="text-sm" style="line-height:1.7;white-space:pre-wrap;color:var(--text);">${escHtml(f.description)}</div>` : ''}
+    ${f.remediation ? `<div class="separator"></div><label>Cách khắc phục</label><div class="text-sm" style="line-height:1.7;white-space:pre-wrap;color:var(--text);">${escHtml(f.remediation)}</div>` : ''}
+    ${extracted.length ? `<div class="separator"></div><label>Dữ liệu trích xuất</label><div class="code-block">${extracted.map(escHtml).join('\n')}</div>` : ''}
+    ${f.curl_command ? `<div class="separator"></div>
+      <div class="flex-between"><label style="margin:0;">Tái hiện bằng curl</label></div>
+      <div class="code-wrap"><button class="btn btn-ghost btn-sm copy-btn" id="wf-copy-btn">📋 Copy</button><div class="code-block" id="wf-curl" style="padding-right:90px;">${escHtml(f.curl_command)}</div></div>
+      <div class="field-hint">⚠️ Chỉ chạy lại lệnh trên hệ thống bạn được ủy quyền kiểm thử.</div>` : ''}
+    ${refs.length ? `<div class="separator"></div><label>Tham khảo</label><ul style="padding-left:18px;font-size:13px;line-height:1.8;">
+      ${refs.map(r => { const u = safeUrl(r); return `<li style="word-break:break-all;">${u ? `<a href="${u}" target="_blank" rel="noopener noreferrer">${escHtml(r)}</a>` : escHtml(r)}</li>`; }).join('')}</ul>` : ''}
+  `;
+  const copyBtn = document.getElementById('wf-copy-btn');
+  if (copyBtn) copyBtn.onclick = () => copyText(f.curl_command, copyBtn);
+  document.getElementById('wf-drawer-overlay').classList.add('open');
+  const d = document.getElementById('wf-drawer');
+  d.classList.add('open'); d.setAttribute('aria-hidden', 'false');
+}
+function closeFindingDrawer() {
+  document.getElementById('wf-drawer-overlay')?.classList.remove('open');
+  const d = document.getElementById('wf-drawer');
+  if (d) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
+}
+async function setWebFindingStatus(id, status) {
+  try {
+    await api(`/api/webscans/findings/${id}/status`, { method: 'PATCH', body: { status } });
+    const f = webScanState.findings.find(x => x.id === id);
+    if (f) f.status = status;
+    renderWebFindingRows();
+    toast('Đã cập nhật trạng thái finding', 'success', 1800);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function openWebScanModal() {
+  if (!currentDomainId) return;
+  if (!domainCrawlsCache.length) {
+    try { domainCrawlsCache = await api(`/api/domains/${currentDomainId}/crawls`); } catch {}
+  }
+  const done = domainCrawlsCache.filter(c => c.status === 'COMPLETED').sort((a, b) => (b.crawl_number || 0) - (a.crawl_number || 0));
+  const sel = document.getElementById('ws-crawl');
+  sel.innerHTML = done.map(c => `<option value="${escHtml(c.id)}">Crawl #${c.crawl_number} — ${(c.summary || {}).total_urls || 0} URL — ${fmtDate(c.completed_at || c.started_at)}</option>`).join('')
+    + '<option value="">Chỉ root URL (không dùng crawl)</option>';
+  sel.value = done.length ? done[0].id : '';
+  document.getElementById('ws-tags').value = '';
+  document.getElementById('ws-rate').value = 50;
+  document.getElementById('ws-fuzz').checked = false;
+  document.getElementById('ws-authorized').checked = false;
+  document.getElementById('ws-start-btn').disabled = true;
+  document.querySelectorAll('.ws-sev').forEach(c => { c.checked = c.value !== 'info'; });
+  document.getElementById('webscan-modal').classList.add('open');
+}
+function closeWebScanModal() { document.getElementById('webscan-modal').classList.remove('open'); }
+async function triggerWebScan() {
+  const severities = [...document.querySelectorAll('.ws-sev:checked')].map(c => c.value);
+  if (!severities.length) return toast('Chọn ít nhất 1 mức severity', 'warn');
+  if (!document.getElementById('ws-authorized').checked) return toast('Bạn cần xác nhận có quyền quét domain này', 'warn');
+  const tags = document.getElementById('ws-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+  const payload = {
+    crawl_id: document.getElementById('ws-crawl').value || null,
+    severities, tags,
+    fuzz: document.getElementById('ws-fuzz').checked,
+    rate_limit: Math.min(500, Math.max(1, parseInt(document.getElementById('ws-rate').value, 10) || 50)),
+    authorized: true,
+  };
+  const btn = document.getElementById('ws-start-btn');
+  btn.disabled = true;
+  try {
+    await api(`/api/domains/${currentDomainId}/webscans`, { method: 'POST', body: payload });
+    closeWebScanModal();
+    toast('Đã bắt đầu web scan', 'success');
+    loadWebScans();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); btn.disabled = false; }
+}
+
 // ─── Init ──────────────────────────────────────────────────────
+applyThemeButtons();
+initAuth();
+document.getElementById('page-dashboard').classList.add('vg-enter');
 loadDashboard();
 </script>
 </body>

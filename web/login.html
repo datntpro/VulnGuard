@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="VulnGuard — Bảo mật từ code đến hạ tầng — chạy local, AI hỗ trợ">
+<title>Đăng nhập — VulnGuard</title>
+<link rel="icon" type="image/svg+xml" href="/static/assets/logo.svg">
+<link rel="stylesheet" href="/static/brand.css">
+<script>
+  (function () { var t = 'system'; try { t = localStorage.getItem('vg-theme') || 'system'; } catch (e) {} document.documentElement.dataset.theme = t; })();
+</script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .shell { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+
+  /* ── Brand panel (luôn tối, bất kể theme) ── */
+  .brand { position: relative; overflow: hidden; color: #E8ECF6; padding: 48px 56px; display: flex; flex-direction: column;
+    background: radial-gradient(900px 600px at 0% 0%, rgba(91,91,247,.45), transparent 60%),
+                radial-gradient(800px 600px at 100% 100%, rgba(45,212,232,.28), transparent 60%),
+                linear-gradient(160deg, #0B1022 0%, #070A15 100%); }
+  .brand::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+    background-image: linear-gradient(rgba(124,124,250,.10) 1px, transparent 1px), linear-gradient(90deg, rgba(124,124,250,.10) 1px, transparent 1px);
+    background-size: 44px 44px; -webkit-mask-image: radial-gradient(ellipse at 40% 45%, #000 20%, transparent 75%); mask-image: radial-gradient(ellipse at 40% 45%, #000 20%, transparent 75%); }
+  .scan { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .scan::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 18%;
+    background: linear-gradient(180deg, transparent 0%, rgba(45,212,232,.06) 70%, rgba(45,212,232,.22) 100%);
+    border-bottom: 1px solid rgba(45,212,232,.55); box-shadow: 0 6px 24px -6px rgba(45,212,232,.45);
+    animation: vg-scan 6s cubic-bezier(.45,0,.55,1) infinite; }
+  @keyframes vg-scan { 0% { transform: translateY(-120%); } 100% { transform: translateY(620%); } }
+  .brand-top { position: relative; display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 20px; letter-spacing: -.02em; }
+  .brand-top img { width: 40px; height: 40px; filter: drop-shadow(0 8px 22px rgba(91,91,247,.6)); }
+  .brand-mid { position: relative; margin: auto 0; max-width: 520px; }
+  .shield-wrap { position: relative; width: 112px; height: 112px; margin-bottom: 32px; animation: vg-fade-up var(--dur-slow) var(--ease-out) both; }
+  .shield-wrap img { width: 100%; height: 100%; position: relative; z-index: 1; filter: drop-shadow(0 20px 40px rgba(91,91,247,.55)); }
+  .shield-wrap::before { content: ""; position: absolute; inset: -18px; border-radius: 50%; border: 1px solid rgba(45,212,232,.35); animation: vg-ring 2.8s var(--ease-out) infinite; }
+  .shield-wrap::after { content: ""; position: absolute; inset: -18px; border-radius: 50%; border: 1px solid rgba(91,91,247,.35); animation: vg-ring 2.8s var(--ease-out) 1.4s infinite; }
+  @keyframes vg-ring { from { transform: scale(.8); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
+  .brand h1 { font-size: 40px; line-height: 1.15; letter-spacing: -.03em; font-weight: 800; animation: vg-fade-up var(--dur-slow) var(--ease-out) 60ms both; }
+  .brand p.tag { margin-top: 16px; font-size: 16px; color: #98A2BC; max-width: 440px; animation: vg-fade-up var(--dur-slow) var(--ease-out) 120ms both; }
+  .caps { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+  .caps span { font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; color: #C9D0F5; background: rgba(91,91,247,.14); border: 1px solid rgba(124,124,250,.28);
+    animation: vg-fade-up var(--dur-slow) var(--ease-out) both; }
+  .caps span:nth-child(1){animation-delay:180ms} .caps span:nth-child(2){animation-delay:220ms} .caps span:nth-child(3){animation-delay:260ms}
+  .caps span:nth-child(4){animation-delay:300ms} .caps span:nth-child(5){animation-delay:340ms} .caps span:nth-child(6){animation-delay:380ms}
+  .brand-foot { position: relative; font-size: 12px; color: #6A7591; display: flex; align-items: center; gap: 8px; }
+  .brand-foot a { color: #9EA8FF; text-decoration: none; font-weight: 600; }
+
+  /* ── Form panel ── */
+  .panel { display: flex; align-items: center; justify-content: center; padding: 40px 24px; position: relative; }
+  .form-card { width: 100%; max-width: 400px; animation: vg-fade-up var(--dur-slow) var(--ease-out) 80ms both; }
+  .form-card h2 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+  .form-card .sub { color: var(--text2); margin-top: 6px; margin-bottom: 28px; }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text2); margin-bottom: 6px; }
+  .input { position: relative; }
+  .input input { width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); padding: 11px 14px; font: inherit; font-size: 14px; outline: none;
+    transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
+  .input input:hover { border-color: var(--border-strong); }
+  .input input:focus { border-color: var(--brand-500); box-shadow: var(--ring); }
+  .input input::placeholder { color: var(--text3); }
+  .input .eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; color: var(--text3); cursor: pointer; padding: 6px 8px; border-radius: 6px; font: inherit; font-size: 12px; font-weight: 600; }
+  .input .eye:hover { color: var(--text); background: var(--bg3); }
+  .input.has-eye input { padding-right: 64px; }
+  .btn { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 16px; border-radius: var(--radius); border: 0; cursor: pointer; font: inherit; font-size: 14.5px; font-weight: 700; color: #fff;
+    background: var(--brand-gradient); box-shadow: 0 1px 0 rgba(255,255,255,.18) inset, 0 6px 18px -8px rgba(91,91,247,.7);
+    transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur) var(--ease-out), filter var(--dur-fast); margin-top: 6px; }
+  .btn:hover:not(:disabled) { box-shadow: var(--brand-glow); filter: brightness(1.06); }
+  .btn:active:not(:disabled) { transform: scale(.98); }
+  .btn:disabled { opacity: .6; cursor: progress; }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .alert { display: none; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 16px;
+    background: color-mix(in srgb, var(--critical) 10%, transparent); border: 1px solid color-mix(in srgb, var(--critical) 40%, transparent); color: color-mix(in srgb, var(--critical) 80%, var(--text)); }
+  .alert.show { display: block; animation: vg-fade-up var(--dur) var(--ease-out) both; }
+  .alert.info { background: color-mix(in srgb, var(--brand-500) 10%, transparent); border-color: color-mix(in srgb, var(--brand-500) 35%, transparent); color: var(--text); }
+  .hint { font-size: 11.5px; color: var(--text3); margin-top: 6px; }
+  .strength { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 8px; }
+  .strength i { height: 4px; border-radius: 4px; background: var(--border); transition: background var(--dur) var(--ease-out); }
+  .setup-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--brand-400);
+    background: var(--brand-soft); border: 1px solid color-mix(in srgb, var(--brand-500) 30%, transparent); padding: 3px 10px; border-radius: 999px; margin-bottom: 14px; }
+  .foot { margin-top: 28px; font-size: 12px; color: var(--text3); text-align: center; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .skeleton-block { height: 46px; margin-bottom: 14px; }
+  .theme-btn { position: absolute; top: 20px; right: 20px; background: var(--bg2); border: 1px solid var(--border); color: var(--text2); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .theme-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .mobile-brand { display: none; }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    .brand { padding: 28px 24px 30px; min-height: 0; }
+    .brand-mid { margin: 22px 0 0; }
+    .shield-wrap { width: 64px; height: 64px; margin-bottom: 18px; }
+    .shield-wrap::before, .shield-wrap::after { inset: -10px; }
+    .brand h1 { font-size: 26px; }
+    .brand p.tag { font-size: 14px; margin-top: 10px; }
+    .caps { margin-top: 16px; }
+    .brand-foot { display: none; }
+    .panel { align-items: flex-start; padding: 28px 16px 40px; }
+    .theme-btn { top: 22px; right: 16px; background: rgba(255,255,255,.06); color: #C9D0F5; border-color: rgba(255,255,255,.14); position: absolute; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <section class="brand" aria-hidden="false">
+    <div class="scan"></div>
+    <div class="brand-top">
+      <img src="/static/assets/logo.svg" alt="">
+      <span><span class="vg-gradient-text">Vuln</span>Guard</span>
+    </div>
+    <div class="brand-mid">
+      <div class="shield-wrap"><img src="/static/assets/logo.svg" alt="VulnGuard"></div>
+      <h1>Bảo mật từ code<br>đến <span class="vg-gradient-text">hạ tầng</span></h1>
+      <p class="tag">— chạy local, AI hỗ trợ. Một bảng điều khiển cho SAST, SCA, IaC, secrets và quét web; dữ liệu không rời khỏi máy chủ của bạn.</p>
+      <div class="caps"><span>SAST</span><span>SCA</span><span>IaC</span><span>Secrets</span><span>DAST · Nuclei</span><span>AI triage</span></div>
+    </div>
+    <div class="brand-foot"><span class="vg-live-dot"></span> Dữ liệu được xử lý trên máy chủ của bạn · Powered by <a href="https://1vision.work" target="_blank" rel="noopener">1VISION</a></div>
+  </section>
+
+  <main class="panel">
+    <button class="theme-btn" id="theme-btn" onclick="cycleTheme()" title="Đổi giao diện">🌓 <span id="theme-label">Auto</span></button>
+    <div class="form-card">
+      <!-- Loading -->
+      <div class="view active" id="view-loading" aria-busy="true">
+        <div class="vg-skeleton" style="height:30px;width:60%;margin-bottom:10px;"></div>
+        <div class="vg-skeleton" style="height:16px;width:80%;margin-bottom:28px;"></div>
+        <div class="vg-skeleton skeleton-block"></div>
+        <div class="vg-skeleton skeleton-block"></div>
+        <div class="vg-skeleton skeleton-block"></div>
+      </div>
+
+      <!-- Login -->
+      <div class="view" id="view-login">
+        <h2>Đăng nhập</h2>
+        <p class="sub">Chào mừng trở lại — đăng nhập để tiếp tục vào VulnGuard.</p>
+        <div class="alert" id="login-error" role="alert"></div>
+        <form id="login-form" novalidate>
+          <div class="field"><label for="login-email">Email</label>
+            <div class="input"><input id="login-email" type="email" autocomplete="username" placeholder="ban@congty.vn" required></div></div>
+          <div class="field"><label for="login-password">Mật khẩu</label>
+            <div class="input has-eye"><input id="login-password" type="password" autocomplete="current-password" placeholder="••••••••" required>
+              <button type="button" class="eye" data-eye="login-password">Hiện</button></div></div>
+          <button class="btn" type="submit" id="login-btn">Đăng nhập</button>
+        </form>
+        <p class="foot">Quên mật khẩu? Liên hệ quản trị viên (ADMIN) để được đặt lại.</p>
+      </div>
+
+      <!-- First-run setup -->
+      <div class="view" id="view-setup">
+        <span class="setup-badge">✨ Thiết lập lần đầu</span>
+        <h2>Tạo tài khoản quản trị đầu tiên</h2>
+        <p class="sub">Tài khoản này có quyền ADMIN: quản lý người dùng, cấu hình AI provider và toàn bộ dữ liệu scan.</p>
+        <div class="alert" id="setup-error" role="alert"></div>
+        <form id="setup-form" novalidate>
+          <div class="field"><label for="setup-name">Họ tên</label>
+            <div class="input"><input id="setup-name" autocomplete="name" placeholder="Nguyễn Văn A" required></div></div>
+          <div class="field"><label for="setup-email">Email</label>
+            <div class="input"><input id="setup-email" type="email" autocomplete="username" placeholder="admin@congty.vn" required></div></div>
+          <div class="field"><label for="setup-password">Mật khẩu</label>
+            <div class="input has-eye"><input id="setup-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự" required>
+              <button type="button" class="eye" data-eye="setup-password">Hiện</button></div>
+            <div class="strength" id="pw-strength"><i></i><i></i><i></i><i></i></div>
+            <div class="hint" id="pw-hint">Nên dùng ≥ 12 ký tự, có chữ hoa, số và ký tự đặc biệt.</div></div>
+          <div class="field"><label for="setup-confirm">Xác nhận mật khẩu</label>
+            <div class="input"><input id="setup-confirm" type="password" autocomplete="new-password" placeholder="Nhập lại mật khẩu" required></div></div>
+          <button class="btn" type="submit" id="setup-btn">Tạo tài khoản &amp; đăng nhập</button>
+        </form>
+      </div>
+
+      <!-- Auth disabled / unreachable -->
+      <div class="view" id="view-disabled">
+        <h2>Xác thực đang tắt</h2>
+        <p class="sub" id="disabled-msg">Máy chủ VulnGuard chưa bật đăng nhập — bạn có thể vào thẳng dashboard.</p>
+        <a class="btn" href="/" style="text-decoration:none;">Vào Dashboard →</a>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── Theme ──
+const THEMES = ['system', 'dark', 'light'];
+const THEME_LABEL = { system: 'Auto', dark: 'Tối', light: 'Sáng' };
+function renderThemeLabel() { document.getElementById('theme-label').textContent = THEME_LABEL[document.documentElement.dataset.theme] || 'Auto'; }
+function cycleTheme() {
+  const cur = document.documentElement.dataset.theme || 'system';
+  const next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('vg-theme', next); } catch (e) {}
+  renderThemeLabel();
+}
+renderThemeLabel();
+
+// ── Helpers ──
+function nextUrl() {
+  const n = new URLSearchParams(location.search).get('next');
+  return (n && n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login')) ? n : '/';
+}
+function show(view) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + view).classList.add('active');
+  const first = document.querySelector('#view-' + view + ' input');
+  if (first) setTimeout(() => first.focus(), 60);
+}
+function showError(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
+function clearError(id) { document.getElementById(id).classList.remove('show'); }
+async function readError(r) {
+  try { const j = await r.json(); if (typeof j.detail === 'string') return j.detail; if (Array.isArray(j.detail)) return j.detail.map(d => d.msg).join('; '); } catch (e) {}
+  return r.status === 401 ? 'Email hoặc mật khẩu không đúng' : `Lỗi máy chủ (HTTP ${r.status})`;
+}
+function setBusy(btn, busy, label) {
+  btn.disabled = busy;
+  btn.innerHTML = busy ? '<span class="spinner"></span> Đang xử lý...' : label;
+}
+document.querySelectorAll('[data-eye]').forEach(b => b.addEventListener('click', () => {
+  const inp = document.getElementById(b.dataset.eye);
+  const vis = inp.type === 'password';
+  inp.type = vis ? 'text' : 'password';
+  b.textContent = vis ? 'Ẩn' : 'Hiện';
+}));
+
+// ── Status → chọn view ──
+(async function init() {
+  try {
+    const r = await fetch('/api/auth/status');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const s = await r.json();
+    if (s.setup_required) show('setup');
+    else if (s.auth_enabled === false) show('disabled');
+    else show('login');
+  } catch (e) {
+    document.getElementById('disabled-msg').textContent = 'Không đọc được trạng thái xác thực từ máy chủ (' + e.message + '). Có thể backend chưa bật đăng nhập.';
+    show('disabled');
+  }
+})();
+
+// ── Login ──
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clearError('login-error');
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  if (!email || !password) return showError('login-error', 'Nhập email và mật khẩu');
+  const btn = document.getElementById('login-btn');
+  setBusy(btn, true);
+  try {
+    const r = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    if (!r.ok) throw new Error(await readError(r));
+    location.href = nextUrl();
+  } catch (err) {
+    showError('login-error', err.message);
+    setBusy(btn, false, 'Đăng nhập');
+  }
+});
+
+// ── Setup ──
+const pw = document.getElementById('setup-password');
+pw.addEventListener('input', () => {
+  const v = pw.value;
+  let score = 0;
+  if (v.length >= 10) score++;
+  if (v.length >= 12) score++;
+  if (/[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v)) score++;
+  if (/[^A-Za-z0-9]/.test(v)) score++;
+  const colors = ['var(--critical)', 'var(--high)', 'var(--medium)', 'var(--low)'];
+  document.querySelectorAll('#pw-strength i').forEach((el, i) => { el.style.background = i < score ? colors[Math.max(0, score - 1)] : ''; });
+  document.getElementById('pw-hint').textContent = !v ? 'Nên dùng ≥ 12 ký tự, có chữ hoa, số và ký tự đặc biệt.'
+    : ['Quá yếu', 'Yếu', 'Khá', 'Tốt', 'Rất mạnh'][score];
+});
+document.getElementById('setup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  clearError('setup-error');
+  const name = document.getElementById('setup-name').value.trim();
+  const email = document.getElementById('setup-email').value.trim();
+  const password = pw.value;
+  const confirmPw = document.getElementById('setup-confirm').value;
+  if (!name || !email) return showError('setup-error', 'Nhập họ tên và email');
+  if (!/^[^\s@]+@[^\s@]+$/.test(email)) return showError('setup-error', 'Email không hợp lệ');
+  if (password.length < 10) return showError('setup-error', 'Mật khẩu tối thiểu 10 ký tự');
+  if (password !== confirmPw) return showError('setup-error', 'Hai mật khẩu không khớp');
+  const btn = document.getElementById('setup-btn');
+  setBusy(btn, true);
+  try {
+    const r = await fetch('/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, name }) });
+    if (!r.ok) throw new Error(await readError(r));
+    location.href = nextUrl();
+  } catch (err) {
+    showError('setup-error', err.message);
+    setBusy(btn, false, 'Tạo tài khoản &amp; đăng nhập');
+  }
+});
+</script>
+</body>
+</html>
