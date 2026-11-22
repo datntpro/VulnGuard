@@ -127,6 +127,7 @@ class VulnOut(BaseModel):
     ai_explanation: Optional[str]
     ai_fix_suggestion: Optional[str]
     ai_analyzed_at: Optional[datetime]
+    ai_provider: Optional[str] = None
     fingerprint: Optional[str]
     created_at: datetime
     waiver: Optional[WaiverOut]

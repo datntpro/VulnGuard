@@ -1,0 +1,112 @@
+/* ════════════════════════════════════════════════════════════════
+   VulnGuard Brand System v2 — "Sentinel"
+   Tokens + motion primitives. Mọi page (index, login, agent...) import file này.
+   Xem docs/BRAND.md cho guideline.
+   ════════════════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ── Brand ── */
+  --brand-500: #5B5BF7;          /* Sentinel Indigo — primary */
+  --brand-400: #7C7CFA;
+  --brand-600: #4646E0;
+  --signal-400: #2DD4E8;         /* Scan Cyan — accent, "tia quét" */
+  --brand-gradient: linear-gradient(135deg, #5B5BF7 0%, #2DD4E8 100%);
+  --brand-glow: 0 0 0 1px rgba(91,91,247,.35), 0 8px 32px -8px rgba(91,91,247,.55);
+
+  /* ── Surfaces (dark default) ── */
+  --bg: #090D18;
+  --bg2: #0F1524;                /* card */
+  --bg3: #161E31;                /* elevated / hover */
+  --bg-glass: rgba(15,21,36,.72);
+  --border: #222C44;
+  --border-strong: #33405F;
+  --text: #E8ECF6;
+  --text2: #98A2BC;
+  --text3: #6A7591;
+
+  /* ── Severity (semantic, giữ cố định giữa 2 theme) ── */
+  --critical: #F43F5E;
+  --high: #FB8A3C;
+  --medium: #F5C443;
+  --low: #34D399;
+  --info: #60A5FA;
+  --accent: var(--low);
+  --accent2: var(--brand-500);
+  --blocked: var(--critical);
+  --approved: var(--low);
+
+  /* ── Shape & depth ── */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 10px 30px -12px rgba(0,0,0,.6);
+
+  /* ── Type ── */
+  --font-sans: 'Be Vietnam Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* ── Motion ── */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);     /* expo-out: vào nhanh, dừng mềm */
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-fast: 140ms;
+  --dur: 260ms;
+  --dur-slow: 480ms;
+  --stagger: 40ms;
+
+  /* ── Extended surfaces (dùng chung index / login / agent) ── */
+  --code-bg: #070A13;
+  --code-text: #E2C08D;
+  --overlay: rgba(4,6,14,.62);
+  --brand-soft: rgba(91,91,247,.12);
+  --ring: 0 0 0 3px rgba(91,91,247,.30);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #F6F7FB; --bg2: #FFFFFF; --bg3: #EEF1F8; --bg-glass: rgba(255,255,255,.75);
+  --border: #E1E5EF; --border-strong: #C9D0E0;
+  --text: #0E1424; --text2: #4B5672; --text3: #7A849C;
+  --shadow-2: 0 10px 30px -12px rgba(20,30,60,.18);
+  --code-bg: #F1F3F9; --code-text: #8A4B08; --overlay: rgba(15,20,36,.38);
+  --brand-soft: rgba(91,91,247,.09); color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #F6F7FB; --bg2: #FFFFFF; --bg3: #EEF1F8; --bg-glass: rgba(255,255,255,.75);
+    --border: #E1E5EF; --border-strong: #C9D0E0;
+    --text: #0E1424; --text2: #4B5672; --text3: #7A849C;
+    --shadow-2: 0 10px 30px -12px rgba(20,30,60,.18);
+    --code-bg: #F1F3F9; --code-text: #8A4B08; --overlay: rgba(15,20,36,.38);
+    --brand-soft: rgba(91,91,247,.09); color-scheme: light;
+  }
+}
+
+/* ── Motion primitives ── */
+@keyframes vg-fade-up   { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes vg-fade-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vg-scale-in  { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes vg-shimmer   { from { background-position: -400px 0; } to { background-position: 400px 0; } }
+@keyframes vg-scanline  { 0% { transform: translateY(-100%); } 100% { transform: translateY(100%); } }
+@keyframes vg-pulse-ring{ 0% { box-shadow: 0 0 0 0 rgba(45,212,232,.45); } 100% { box-shadow: 0 0 0 10px rgba(45,212,232,0); } }
+
+.vg-enter      { animation: vg-fade-up var(--dur-slow) var(--ease-out) both; }
+.vg-stagger > * { animation: vg-fade-up var(--dur-slow) var(--ease-out) both; }
+.vg-stagger > *:nth-child(1){animation-delay:calc(var(--stagger)*0)}
+.vg-stagger > *:nth-child(2){animation-delay:calc(var(--stagger)*1)}
+.vg-stagger > *:nth-child(3){animation-delay:calc(var(--stagger)*2)}
+.vg-stagger > *:nth-child(4){animation-delay:calc(var(--stagger)*3)}
+.vg-stagger > *:nth-child(5){animation-delay:calc(var(--stagger)*4)}
+.vg-stagger > *:nth-child(6){animation-delay:calc(var(--stagger)*5)}
+.vg-stagger > *:nth-child(n+7){animation-delay:calc(var(--stagger)*6)}
+.vg-lift { transition: transform var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out), border-color var(--dur); }
+.vg-lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: var(--border-strong); }
+.vg-skeleton { background: linear-gradient(90deg, var(--bg3) 0px, var(--border) 80px, var(--bg3) 160px); background-size: 800px 100%; animation: vg-shimmer 1.2s linear infinite; border-radius: var(--radius-sm); }
+.vg-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--signal-400); animation: vg-pulse-ring 1.6s var(--ease-out) infinite; }
+.vg-gradient-text { background: var(--brand-gradient); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}

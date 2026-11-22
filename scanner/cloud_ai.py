@@ -1,0 +1,265 @@
+"""
+Cloud AI analyzer — Claude qua Anthropic API hoặc Amazon Bedrock.
+
+Mục tiêu chính: GIẢM FALSE POSITIVE so với model local nhỏ:
+  1. Model mạnh hơn (mặc định claude-opus-5-5) + structured output (JSON schema
+     được API đảm bảo → không còn lỗi "AI không parse được").
+  2. Gửi NGỮ CẢNH CODE THẬT (±N dòng quanh finding, đọc từ scan_path) thay vì
+     snippet 300 ký tự — phần lớn FP của SAST chỉ nhận ra được khi thấy
+     input có thực sự tới sink hay không.
+  3. Có verdict "needs_review" để model không phải đoán khi thiếu ngữ cảnh.
+
+Xác thực (xem api/services/ai_config.py):
+  anthropic/api_key      — API key Claude Console (org cá nhân hoặc workspace doanh nghiệp)
+  anthropic/wif          — Workload Identity Federation: đổi JWT từ IdP doanh nghiệp
+                           (Entra ID, Okta, Google, K8s SA…) lấy token Anthropic ngắn hạn
+  anthropic/environment  — SDK tự resolve: ANTHROPIC_API_KEY / `ant auth login` profile trên host
+  bedrock                — AWS credential chain / profile IAM Identity Center (aws sso login)
+
+Privacy: secret trong code được redact trước khi gửi (privacy.redact_secrets).
+"""
+import json
+import logging
+import os
+import re
+import time
+from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = """Bạn là chuyên gia AppSec senior đang TRIAGE kết quả của các công cụ quét bảo mật tự động \
+(SAST, SCA, IaC, secret scanning, DAST) cho đội phát triển sở hữu chính mã nguồn/hệ thống này. \
+Mục tiêu là giúp đội phòng thủ: loại bỏ báo động giả (false positive) và ưu tiên sửa lỗi thật.
+
+Nguyên tắc đánh giá false positive:
+- Truy vết luồng dữ liệu: dữ liệu không tin cậy có thực sự tới sink không? Có validate/escape/parameterize trên đường đi không?
+- File test, fixture, ví dụ, mock, script dev-only, code chết → thường ít rủi ro (nhưng secret thật trong test vẫn là lỗi thật).
+- Secret: giá trị placeholder/ví dụ ("changeme", "xxx", "<your-key>", biến môi trường) là FP; chuỗi có entropy cao, đúng format nhà cung cấp là lỗi thật.
+- SCA: CVE chỉ quan trọng nếu hàm/tính năng bị lỗi được dùng và package nằm trong runtime (không phải devDependency).
+- IaC: cân nhắc resource có public-facing không.
+- Nếu ngữ cảnh KHÔNG đủ để kết luận, chọn verdict "needs_review" và nói rõ cần kiểm tra thêm gì — đừng đoán.
+
+Trả lời bằng tiếng Việt, cụ thể theo code được cung cấp, không chung chung. \
+fix_suggestion nên có đoạn code sửa nếu phù hợp."""
+
+ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["true_positive", "false_positive", "needs_review"]},
+        "false_positive_likelihood": {"type": "integer", "description": "0 = chắc chắn lỗi thật, 100 = chắc chắn false positive"},
+        "false_positive_reason": {"type": "string"},
+        "exploitability_public": {"type": "string"},
+        "exploitability_private": {"type": "string"},
+        "explanation": {"type": "string"},
+        "fix_suggestion": {"type": "string"},
+    },
+    "required": ["verdict", "false_positive_likelihood", "false_positive_reason",
+                 "exploitability_public", "exploitability_private", "explanation", "fix_suggestion"],
+    "additionalProperties": False,
+}
+
+VERDICT_LABEL = {
+    "true_positive": "Lỗi thật",
+    "false_positive": "Khả năng cao là false positive",
+    "needs_review": "Cần review thủ công",
+}
+
+# ─────────────────────────────────────────────
+# Redaction — che secret trước khi gửi ra cloud
+# ─────────────────────────────────────────────
+_SECRET_PATTERNS = [
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
+    re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{10,}"),
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"),
+    re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+]
+_ASSIGN_PATTERN = re.compile(
+    r"""(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)"""
+    r"""[\w\-]*\s*[:=]\s*['"])([^'"\s]{4,})(['"])"""
+)
+
+
+def _mask(value: str) -> str:
+    return f"{value[:3]}…[REDACTED {len(value)} ký tự]"
+
+
+def redact(text: str) -> str:
+    if not text:
+        return text
+    for pat in _SECRET_PATTERNS:
+        text = pat.sub(lambda m: _mask(m.group(0)), text)
+    return _ASSIGN_PATTERN.sub(lambda m: m.group(1) + _mask(m.group(2)) + m.group(3), text)
+
+
+# ─────────────────────────────────────────────
+# Code context
+# ─────────────────────────────────────────────
+def read_code_context(scan_path: str, file_path: str, line: int, radius: int) -> Optional[str]:
+    """Đọc ±radius dòng quanh `line`, đánh số dòng, đánh dấu dòng finding bằng '>>'.
+    Chỉ đọc file nằm TRONG scan_path (chống path traversal)."""
+    if not scan_path or not file_path or radius <= 0:
+        return None
+    try:
+        root = os.path.realpath(scan_path)
+        cand = file_path if os.path.isabs(file_path) else os.path.join(root, file_path)
+        real = os.path.realpath(cand)
+        if not (real == root or real.startswith(root + os.sep)) or not os.path.isfile(real):
+            return None
+        if os.path.getsize(real) > 5 * 1024 * 1024:
+            return None
+        with open(real, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        if not lines:
+            return None
+        line = max(1, int(line or 1))
+        start, end = max(1, line - radius), min(len(lines), line + radius)
+        out = []
+        for n in range(start, end + 1):
+            mark = ">>" if n == line else "  "
+            out.append(f"{mark}{n:5d} | {lines[n - 1].rstrip()[:400]}")
+        return "\n".join(out)
+    except Exception as e:
+        logger.debug(f"read_code_context lỗi: {e}")
+        return None
+
+
+def build_user_prompt(v: Dict[str, Any], code_context: Optional[str], local_opinion: Optional[dict],
+                      do_redact: bool) -> str:
+    def r(s):
+        s = str(s or "")
+        return redact(s) if do_redact else s
+
+    parts = [
+        "## Finding",
+        f"- Tool: {v.get('tool','')} ({v.get('scan_type','')})",
+        f"- Rule/CVE: {v.get('rule_id','')} | CWE: {v.get('cwe','') or '-'} | CVE: {v.get('cve','') or '-'}",
+        f"- Tiêu đề: {r(v.get('title',''))}",
+        f"- Severity do tool gán: {v.get('severity','')}",
+        f"- File: {v.get('file_path','') or '-'} (dòng {v.get('line_start', 0) or '-'})",
+    ]
+    if v.get("package_name"):
+        parts.append(f"- Package: {v.get('package_name')} {v.get('package_version','')} "
+                     f"(bản sửa: {v.get('fixed_version','') or 'chưa có'})")
+    parts += ["", "## Mô tả từ tool", r(v.get("description", ""))[:2000] or "(không có)"]
+    if v.get("code_snippet"):
+        parts += ["", "## Snippet tool báo", "```", r(v.get("code_snippet"))[:1500], "```"]
+    if code_context:
+        parts += ["", "## Ngữ cảnh code thực tế (dòng đánh dấu >> là dòng finding)", "```",
+                  r(code_context), "```"]
+    if local_opinion and local_opinion.get("false_positive_likelihood") not in (None, "", "N/A"):
+        parts += ["", "## Ý kiến sơ bộ của model local (có thể sai)",
+                  f"- FP likelihood: {local_opinion.get('false_positive_likelihood')}",
+                  f"- Lý do: {str(local_opinion.get('false_positive_reason',''))[:500]}"]
+    parts += ["", "Hãy triage finding này."]
+    return "\n".join(parts)
+
+
+# ─────────────────────────────────────────────
+# Client factory
+# ─────────────────────────────────────────────
+def build_client(cfg: Dict[str, Any]) -> Tuple[Any, str, bool]:
+    """Trả về (async_client, model, is_first_party)."""
+    import anthropic
+
+    timeout = anthropic.Timeout(180.0, connect=10.0)
+    if cfg["provider"] == "bedrock":
+        b = cfg["bedrock"]
+        client = anthropic.AsyncAnthropicBedrockMantle(
+            aws_region=b.get("region") or None,
+            aws_profile=b.get("aws_profile") or None,
+            timeout=timeout,
+            # Bedrock không có server-side `fallbacks` → dùng middleware phía client
+            middleware=[anthropic.BetaRefusalFallbackMiddleware([{"model": "anthropic.claude-opus-4-8"}])],
+        )
+        return client, b.get("model") or "anthropic.claude-opus-5-5", False
+
+    a = cfg["anthropic"]
+    mode = a.get("auth_mode", "api_key")
+    if mode == "api_key":
+        from api.services.ai_config import get_anthropic_api_key
+        key = get_anthropic_api_key(cfg)
+        if not key:
+            raise RuntimeError("Chưa cấu hình Anthropic API key (Settings → AI Provider)")
+        client = anthropic.AsyncAnthropic(api_key=key, timeout=timeout)
+    elif mode == "wif":
+        w = a.get("wif") or {}
+        for k in ("federation_rule_id", "organization_id", "identity_token_file"):
+            if not w.get(k):
+                raise RuntimeError(f"WIF thiếu trường {k}")
+        creds = anthropic.WorkloadIdentityCredentials(
+            identity_token_provider=anthropic.IdentityTokenFile(w["identity_token_file"]),
+            federation_rule_id=w["federation_rule_id"],
+            organization_id=w["organization_id"],
+            service_account_id=w.get("service_account_id") or None,
+            workspace_id=w.get("workspace_id") or None,
+        )
+        client = anthropic.AsyncAnthropic(credentials=creds, timeout=timeout)
+    else:  # environment — ANTHROPIC_API_KEY / ant auth login profile
+        client = anthropic.AsyncAnthropic(timeout=timeout)
+    return client, a.get("model") or "claude-opus-5-5", True
+
+
+class CloudAnalyzer:
+    def __init__(self, cfg: Optional[Dict[str, Any]] = None):
+        from api.services.ai_config import load_config
+        self.cfg = cfg or load_config()
+        self.client, self.model, self.first_party = build_client(self.cfg)
+
+    @property
+    def provider_label(self) -> str:
+        return f"{'claude-api' if self.first_party else 'bedrock'}:{self.model}"
+
+    async def _create(self, system: str, user: str, schema: dict, max_tokens: int = 8000) -> str:
+        kwargs = dict(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
+        )
+        if self.first_party:
+            # Nội dung bảo mật đôi khi chạm classifier `cyber` → server tự chạy lại trên
+            # model fallback phù hợp thay vì trả refusal trống.
+            kwargs["betas"] = ["server-side-fallback-2026-07-01"]
+            kwargs["fallbacks"] = "default"
+        resp = await self.client.beta.messages.create(**kwargs)
+        if resp.stop_reason == "refusal":
+            cat = getattr(getattr(resp, "stop_details", None), "category", None)
+            raise RuntimeError(f"Model từ chối phân tích (category={cat})")
+        if resp.stop_reason == "max_tokens":
+            raise RuntimeError("Model hết max_tokens trước khi trả đủ JSON")
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        return text
+
+    async def analyze_finding(self, vuln: Dict[str, Any], local_opinion: Optional[dict] = None) -> Dict[str, Any]:
+        privacy = self.cfg["privacy"]
+        ctx = None
+        if privacy.get("send_code_context"):
+            ctx = read_code_context(vuln.get("scan_path", ""), vuln.get("file_path", ""),
+                                    vuln.get("line_start", 0), int(privacy.get("context_lines", 15)))
+        prompt = build_user_prompt(vuln, ctx, local_opinion, bool(privacy.get("redact_secrets", True)))
+        t0 = time.monotonic()
+        data = json.loads(await self._create(SYSTEM_PROMPT, prompt, ANALYSIS_SCHEMA))
+        fp = max(0, min(100, int(data.get("false_positive_likelihood", 50))))
+        verdict = data.get("verdict", "needs_review")
+        logger.info(f"[CloudAI] {self.provider_label} {verdict} fp={fp}% ({time.monotonic()-t0:.1f}s)")
+        return {
+            "false_positive_likelihood": f"{fp}%",
+            "false_positive_reason": f"[{VERDICT_LABEL.get(verdict, verdict)}] {data.get('false_positive_reason','')}",
+            "exploitability_public": data.get("exploitability_public", ""),
+            "exploitability_private": data.get("exploitability_private", ""),
+            "explanation": data.get("explanation", ""),
+            "fix_suggestion": data.get("fix_suggestion", ""),
+            "verdict": verdict,
+            "provider": self.provider_label,
+        }
+
+    async def ping(self) -> str:
+        """Gọi thử 1 request nhỏ — dùng cho POST /api/ai/test."""
+        schema = {"type": "object", "properties": {"ok": {"type": "boolean"}},
+                  "required": ["ok"], "additionalProperties": False}
+        return await self._create("Trả lời JSON.", "Trả về {\"ok\": true}.", schema, max_tokens=2000)

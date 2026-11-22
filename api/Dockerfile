@@ -61,6 +61,20 @@ RUN ARCH=${TARGETARCH:-amd64} \
     && chmod +x /usr/local/bin/katana \
     || echo "⚠ Katana install failed — skipping (chỉ ảnh hưởng tính năng Domain Sitemap)"
 
+# 6. Nuclei — web vulnerability scanner (template-based, ~10k+ templates CVE/misconfig/exposure)
+#    Quét các URL mà Katana đã crawl. Template tải sẵn lúc build để chạy được offline.
+ARG NUCLEI_VERSION=3.4.7
+RUN ARCH=${TARGETARCH:-amd64} \
+    && if [ "$ARCH" = "arm64" ]; then NU_ARCH="arm64"; else NU_ARCH="amd64"; fi \
+    && curl -sL \
+        "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${NU_ARCH}.zip" \
+        -o /tmp/nuclei.zip \
+    && unzip -p /tmp/nuclei.zip nuclei > /usr/local/bin/nuclei \
+    && rm -f /tmp/nuclei.zip \
+    && chmod +x /usr/local/bin/nuclei \
+    && (nuclei -update-templates -silent || echo "⚠ Không tải được nuclei-templates lúc build — sẽ tải khi chạy lần đầu") \
+    || echo "⚠ Nuclei install failed — skipping (chỉ ảnh hưởng tính năng Web Scan)"
+
 # ─────────────────────────────────────────────
 # Python dependencies
 # ─────────────────────────────────────────────

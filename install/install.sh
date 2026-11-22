@@ -170,6 +170,22 @@ else
     log "Katana đã có — bỏ qua"
 fi
 
+# 2.6 Nuclei — web vulnerability scanner (feature "Web Scan"), quét URL Katana đã crawl
+if ! command -v nuclei >/dev/null 2>&1; then
+    log "Cài Nuclei..."
+    NU_ARCH="amd64"; [ "$ARCH" = "arm64" ] && NU_ARCH="arm64"
+    NU_VERSION="${NUCLEI_VERSION:-3.4.7}"
+    curl -sL \
+        "https://github.com/projectdiscovery/nuclei/releases/download/v${NU_VERSION}/nuclei_${NU_VERSION}_linux_${NU_ARCH}.zip" \
+        -o /tmp/nuclei.zip \
+    && unzip -p /tmp/nuclei.zip nuclei > /usr/local/bin/nuclei \
+    && rm -f /tmp/nuclei.zip \
+    && chmod +x /usr/local/bin/nuclei \
+    || warn "Nuclei install thất bại — bỏ qua (chỉ ảnh hưởng tính năng Web Scan)"
+else
+    log "Nuclei đã có — bỏ qua"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # 3. Python virtualenv + dependencies
 # ─────────────────────────────────────────────────────────────

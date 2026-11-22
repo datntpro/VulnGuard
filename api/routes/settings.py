@@ -115,6 +115,16 @@ TOOL_REGISTRY = [
         "install_hint": "curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh",
         "icon": "🐋",
     },
+    # DAST / Web
+    {
+        "tool": "nuclei",
+        "label": "Nuclei",
+        "description": "Web vulnerability scanner (ProjectDiscovery) — 10k+ template CVE, misconfig, exposure; quét các URL Katana đã crawl.",
+        "scan_type": "DAST",
+        "check_cmd": ["nuclei", "-version"],
+        "install_hint": "Download binary từ github.com/projectdiscovery/nuclei/releases",
+        "icon": "☢️",
+    },
 ]
 
 

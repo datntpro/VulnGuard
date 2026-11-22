@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="VulnGuard">
+  <defs>
+    <linearGradient id="vgG" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B5BF7"/><stop offset="1" stop-color="#2DD4E8"/>
+    </linearGradient>
+  </defs>
+  <!-- Shield -->
+  <path d="M32 4 54 12v18c0 14.5-9.4 25.6-22 30C19.4 55.6 10 44.5 10 30V12L32 4Z" fill="url(#vgG)"/>
+  <!-- V monogram = 2 nét quét hội tụ -->
+  <path d="M21 22 32 44 43 22" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Scan line -->
+  <path d="M16 31h32" stroke="#fff" stroke-opacity=".45" stroke-width="2" stroke-linecap="round"/>
+</svg>

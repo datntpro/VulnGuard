@@ -34,5 +34,28 @@ class Settings(BaseSettings):
     # Dùng để Web UI hiển thị hint scan path đúng (path container vs path thật trên host)
     deploy_mode: Literal["docker", "native"] = "docker"
 
+    # ── Auth ──
+    # AUTH_ENABLED=false chỉ dành cho dev/local 1 người — production luôn bật.
+    auth_enabled: bool = True
+    # Secret ký JWT + mã hoá API key cloud AI. Để trống → tự sinh & lưu vào
+    # <storage>/secret.key (chmod 600). Đặt cố định nếu chạy nhiều instance.
+    vulnguard_secret_key: str = ""
+    session_ttl_hours: int = 12
+    # Cookie Secure flag — bật khi chạy sau HTTPS reverse proxy
+    cookie_secure: bool = False
+
+    # ── Web scan (Nuclei) ──
+    max_webscans_per_domain: int = 5
+    nuclei_timeout_minutes: int = 60
+
+    @property
+    def storage_dir(self) -> str:
+        """Thư mục storage gốc — suy ra từ DATABASE_URL (…/storage/db/x.db → …/storage)."""
+        import os
+        db_path = self.database_url.replace("sqlite:////", "/").replace("sqlite:///", "")
+        if os.path.isabs(db_path):
+            return os.path.dirname(os.path.dirname(db_path))
+        return os.path.abspath("storage")
+
 
 settings = Settings()

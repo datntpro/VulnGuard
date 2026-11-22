@@ -211,6 +211,8 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
 
     try:
         vulns = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
+        _scan_row = db.query(Scan).filter(Scan.id == scan_id).first()
+        scan_path = _scan_row.scan_path if _scan_row else ""   # cho cloud AI đọc ngữ cảnh code
         total = len(vulns)
         if not total:
             return
@@ -262,6 +264,7 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
                             _v.ai_explanation               = analysis.get("explanation")
                             _v.ai_fix_suggestion            = analysis.get("fix_suggestion")
                             _v.ai_analyzed_at               = datetime.utcnow()
+                            _v.ai_provider                  = analysis.get("provider")
                             _db.commit()
                     finally:
                         _db.close()
@@ -295,6 +298,7 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
                 "package_name": v.package_name or "",
                 "package_version": v.package_version or "",
                 "fixed_version": v.fixed_version or "",
+                "scan_path": scan_path,
             })
             for v in vulns
         ]
@@ -596,6 +600,7 @@ def _export_json(scan: Scan, vulns: list, project_name: str, filename_base: str)
                 "ai_false_positive_likelihood": v.ai_false_positive_likelihood,
                 "ai_explanation": v.ai_explanation,
                 "ai_fix_suggestion": v.ai_fix_suggestion,
+                "ai_provider": v.ai_provider,
                 "waiver": {
                     "approver_name": v.waiver.approver_name,
                     "approver_email": v.waiver.approver_email,
