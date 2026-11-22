@@ -356,6 +356,100 @@
   .pt-run-stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .pt-run-stat .l { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
   .pt-eng-card { cursor: pointer; }
+
+  /* ══ Risk Dashboard ══════════════════════════════════════════
+     Màu biểu đồ lấy từ dataviz skill (status palette, cố định giữa 2 theme;
+     riêng INFO dùng categorical blue, đổi theo theme). Mỗi biểu đồ luôn có
+     chú giải + nhãn số + thứ tự cố định + khe 2px → thoả quy tắc "status color
+     không bao giờ đứng một mình bằng màu". */
+  .vg-dash {
+    --sev-crit: #d03b3b;   /* status/critical */
+    --sev-high: #ec835a;   /* status/serious  */
+    --sev-med:  #fab219;   /* status/warning  */
+    --sev-low:  #0ca30c;   /* status/good     */
+    --sev-info: #3987e5;   /* categorical blue (dark step, mặc định theme tối) */
+    --sev-track: color-mix(in srgb, var(--text2) 20%, transparent);
+    --on-fill: #fff;        /* chữ trên nền màu */
+    --on-fill-yellow: #0b0b0b;
+  }
+  :root[data-theme="light"] .vg-dash { --sev-info: #2a78d6; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .vg-dash { --sev-info: #2a78d6; } }
+  .sev-crit { color: var(--sev-crit); } .sev-high { color: var(--sev-high); }
+  .sev-med { color: color-mix(in srgb, var(--sev-med) 88%, var(--text)); } .sev-low { color: var(--sev-low); } .sev-info { color: var(--sev-info); }
+
+  .dash-hero { display: grid; grid-template-columns: minmax(240px, 300px) 1fr; gap: 16px; align-items: stretch; }
+  .dash-gauge-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 4px; }
+  .dash-gauge { position: relative; width: 190px; max-width: 58vw; }
+  .dash-gauge svg { display: block; width: 100%; height: auto; }
+  .dash-gauge .g-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; pointer-events: none; }
+  .dash-gauge .g-score { font-size: 42px; font-weight: 800; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .dash-gauge .g-of { font-size: 12px; color: var(--text3); margin-top: 1px; }
+  .dash-posture-label { font-size: 13px; font-weight: 800; letter-spacing: .04em; padding: 3px 12px; border-radius: var(--radius-pill); }
+
+  .dash-attn { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .dash-attn .stat-card { cursor: pointer; }
+  .dash-attn .stat-card.calm { cursor: default; }
+  .attn-flag { --tone: var(--sev-med); }
+  .attn-alarm { --tone: var(--sev-crit); }
+
+  .dash-2col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; align-items: start; }
+  .dash-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 2px 0 14px; }
+  .dash-legend .lg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); font-weight: 600; }
+  .dash-legend .sw { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent) inset; }
+
+  .dash-counters { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 14px; }
+  .dash-counter { text-align: center; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 4px; }
+  .dash-counter .n { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .dash-counter .k { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text3); margin-top: 3px; }
+
+  .dash-donut-wrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .dash-donut { position: relative; width: 150px; flex-shrink: 0; }
+  .dash-donut svg { display: block; width: 100%; height: auto; }
+  .dash-donut .d-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .dash-donut .d-total { font-size: 28px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .dash-donut .d-lbl { font-size: 10.5px; color: var(--text3); font-weight: 600; margin-top: 2px; }
+  .dash-dlegend { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 150px; }
+  .dash-dlegend .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .dash-dlegend .row .nm { color: var(--text2); font-weight: 600; }
+  .dash-dlegend .row .ct { margin-left: auto; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--text); }
+
+  .dash-alert-banner { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding: 11px 14px; border-radius: var(--radius); font-size: 13px; font-weight: 600;
+    background: color-mix(in srgb, var(--sev-crit) 12%, var(--bg2)); border: 1px solid color-mix(in srgb, var(--sev-crit) 40%, transparent); color: color-mix(in srgb, var(--sev-crit) 86%, var(--text)); }
+  .dash-alert-banner.ok { background: color-mix(in srgb, var(--sev-low) 10%, var(--bg2)); border-color: color-mix(in srgb, var(--sev-low) 35%, transparent); color: color-mix(in srgb, var(--sev-low) 82%, var(--text)); }
+
+  .dash-cov { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .dash-cov .mini-stat { text-align: left; padding: 13px 14px; }
+  .dash-cov .cv-n { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .dash-cov .cv-k { font-size: 11px; color: var(--text2); font-weight: 600; margin-top: 4px; }
+  .dash-cov .cv-sub { font-size: 10.5px; color: var(--text3); margin-top: 2px; }
+
+  /* Thanh xếp chồng ngang (findings by source) — khe 2px = surface gap */
+  .dsb-row { display: grid; grid-template-columns: 64px 1fr 36px; gap: 10px; align-items: center; margin: 9px 0; }
+  .dsb-lbl { font-size: 12.5px; font-weight: 700; color: var(--text2); }
+  .dsb-track { position: relative; background: var(--bg3); border-radius: var(--radius-sm); height: 26px; display: flex; align-items: center; }
+  .dsb-bar { display: flex; height: 26px; border-radius: var(--radius-sm); gap: 2px; min-width: 3px; overflow: hidden; }
+  .dsb-seg { display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; font-variant-numeric: tabular-nums; min-width: 3px; }
+  .dsb-zero { position: absolute; left: 10px; font-size: 12px; color: var(--text3); font-weight: 700; }
+  .dsb-total { text-align: right; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+  .dash-spark { width: 100%; }
+  .dash-spark svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+  .dash-top-row { cursor: pointer; }
+  .dash-src-chip { display: inline-block; padding: 0 6px; border-radius: var(--radius-sm); font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: var(--bg3); border: 1px solid var(--border); color: var(--text2); margin: 1px; }
+  .dash-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  @media (max-width: 1100px) { .dash-cov { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 900px) {
+    .dash-hero { grid-template-columns: 1fr; }
+    .dash-2col { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .dash-attn { grid-template-columns: 1fr; }
+    .dash-cov { grid-template-columns: repeat(2, 1fr); }
+    .dash-counters { grid-template-columns: repeat(5, 1fr); gap: 5px; }
+    .dash-counter .n { font-size: 16px; }
+  }
 </style>
 </head>
 <body>
@@ -458,8 +552,14 @@
   <!-- DASHBOARD PAGE -->
   <div class="page active" id="page-dashboard">
     <div class="flex-between mb-16">
-      <h1>Dashboard</h1>
-      <button class="btn btn-primary" onclick="navigate('projects')">+ New Scan</button>
+      <div>
+        <h1 style="margin-bottom:2px">Rủi ro hệ thống</h1>
+        <span id="dash-updated" class="text-sm" style="color:var(--text3)">Đang tải…</span>
+      </div>
+      <div class="flex" style="gap:8px">
+        <button class="btn btn-ghost" onclick="loadDashboard()" title="Làm mới">↻ Làm mới</button>
+        <button class="btn btn-primary" onclick="navigate('projects')">+ Scan mới</button>
+      </div>
     </div>
     <div id="dashboard-content">
       <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
@@ -1676,54 +1776,261 @@ function statusBadge(s) {
 function fmtDate(d) { return d ? new Date(d).toLocaleString('vi-VN') : '—'; }
 
 // ─── DASHBOARD ───────────────────────────────────────────────
+// Severity bands → màu lấy từ dataviz skill (status palette). Thứ tự cố định.
+const DASH_SEVS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+const DASH_SEV_LABEL = { CRITICAL: 'Nghiêm trọng', HIGH: 'Cao', MEDIUM: 'Trung bình', LOW: 'Thấp', INFO: 'Thông tin' };
+const DASH_SEV_VAR = { CRITICAL: 'var(--sev-crit)', HIGH: 'var(--sev-high)', MEDIUM: 'var(--sev-med)', LOW: 'var(--sev-low)', INFO: 'var(--sev-info)' };
+// Chữ trên nền màu: trắng, trừ nền vàng (MEDIUM) dùng mực tối — theo dataviz.
+const DASH_SEV_INK = { CRITICAL: 'var(--on-fill)', HIGH: 'var(--on-fill)', MEDIUM: 'var(--on-fill-yellow)', LOW: 'var(--on-fill)', INFO: 'var(--on-fill)' };
+
+function dashLegend(sevs) {
+  return `<div class="dash-legend">${sevs.map(s =>
+    `<span class="lg"><span class="sw" style="background:${DASH_SEV_VAR[s]}"></span>${DASH_SEV_LABEL[s]}</span>`).join('')}</div>`;
+}
+function postureTone(label) {
+  return { 'NGHIÊM TRỌNG': 'var(--sev-crit)', 'CAO': 'var(--sev-high)', 'TRUNG BÌNH': 'var(--sev-med)',
+           'THẤP': 'var(--sev-low)', 'TỐT': 'var(--sev-low)' }[label] || 'var(--sev-info)';
+}
+
+// Đồng hồ cung 270° (gauge) — SVG thuần, hở đáy.
+function dashGauge(score, toneVar) {
+  const r = 52, C = 2 * Math.PI * r, span = 0.75, track = span * C;
+  const val = Math.max(0, Math.min(100, Number(score) || 0)) / 100 * track;
+  return `<svg viewBox="0 0 128 128" role="img" aria-label="Điểm tư thế rủi ro ${score} trên 100">
+    <g transform="rotate(135 64 64)">
+      <circle cx="64" cy="64" r="${r}" fill="none" stroke="var(--sev-track)" stroke-width="12" stroke-linecap="round" stroke-dasharray="${track.toFixed(1)} ${C.toFixed(1)}"/>
+      <circle cx="64" cy="64" r="${r}" fill="none" stroke="${toneVar}" stroke-width="12" stroke-linecap="round" stroke-dasharray="${val.toFixed(1)} ${C.toFixed(1)}" style="transition:stroke-dasharray .6s var(--ease-out)"/>
+    </g>
+  </svg>`;
+}
+
+// Donut — mỗi segment là 1 circle stroke-dasharray, khe 2px giữa các lát.
+function dashDonut(segments, aria) {
+  const r = 54, C = 2 * Math.PI * r, sw = 18, gap = 2;
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  let off = 0, parts = '';
+  if (total <= 0) {
+    parts = `<circle cx="64" cy="64" r="${r}" fill="none" stroke="var(--sev-track)" stroke-width="${sw}"/>`;
+  } else {
+    segments.forEach(s => {
+      if (s.value <= 0) return;
+      const frac = s.value / total;
+      let len = frac * C - gap;
+      if (len < 0.5) len = Math.max(frac * C * 0.7, 0.5);
+      parts += `<circle cx="64" cy="64" r="${r}" fill="none" stroke="${s.colorVar}" stroke-width="${sw}" stroke-linecap="butt" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 64 64)"/>`;
+      off += frac * C;
+    });
+  }
+  return `<svg viewBox="0 0 128 128" role="img" aria-label="${aria || 'Donut'}">${parts}</svg>`;
+}
+
+// Thanh xếp chồng ngang: 1 thanh / nguồn, scale theo nguồn lớn nhất.
+function dashSourceBars(bySource) {
+  const defs = [['code', 'Code'], ['web', 'Web'], ['pentest', 'Pentest'], ['asset', 'Tài sản']];
+  const rows = defs.map(([k, lbl]) => {
+    const c = bySource[k] || {};
+    const total = DASH_SEVS.reduce((a, s) => a + (c[s] || 0), 0);
+    return { k, lbl, c, total };
+  });
+  const max = Math.max(1, ...rows.map(r => r.total));
+  return rows.map(r => {
+    const segs = DASH_SEVS.filter(s => (r.c[s] || 0) > 0).map(s => {
+      const w = r.c[s] / r.total * 100;
+      return `<div class="dsb-seg" style="flex:${r.c[s]};background:${DASH_SEV_VAR[s]};color:${DASH_SEV_INK[s]}" title="${DASH_SEV_LABEL[s]}: ${r.c[s]}">${w > 11 ? r.c[s] : ''}</div>`;
+    }).join('');
+    const pct = r.total ? Math.max(r.total / max * 100, 3) : 0;
+    return `<div class="dsb-row">
+      <div class="dsb-lbl">${r.lbl}</div>
+      <div class="dsb-track">${r.total ? `<div class="dsb-bar" style="width:${pct}%">${segs}</div>` : '<span class="dsb-zero">0</span>'}</div>
+      <div class="dsb-total">${r.total}</div>
+    </div>`;
+  }).join('');
+}
+
+// Sparkline cột 14 ngày.
+function dashSpark(series) {
+  const map = {}; (series || []).forEach(p => { map[p.date] = p.scans; });
+  const days = [];
+  const today = new Date();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    days.push({ key, label: `${d.getDate()}/${d.getMonth() + 1}`, v: map[key] || 0 });
+  }
+  const total = days.reduce((a, d) => a + d.v, 0);
+  if (total === 0) {
+    return `<div class="empty-state" style="padding:22px 12px"><p class="text-sm" style="color:var(--text3);font-weight:600">Chưa đủ dữ liệu — hãy chạy scan trong 14 ngày gần đây.</p></div>`;
+  }
+  const max = Math.max(1, ...days.map(d => d.v));
+  const W = 560, H = 72, n = days.length, slot = W / n, bw = slot * 0.62;
+  const bars = days.map((d, i) => {
+    const h = d.v / max * (H - 14);
+    const x = i * slot + (slot - bw) / 2;
+    const y = H - h;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(h, d.v ? 2 : 0).toFixed(1)}" rx="2" fill="var(--sev-info)"><title>${d.label}: ${d.v} scan</title></rect>`;
+  }).join('');
+  return `<div class="dash-spark"><svg viewBox="0 0 ${W} ${H + 16}">
+    ${bars}
+    <text x="0" y="${H + 13}" font-size="11" fill="var(--text3)">${days[0].label}</text>
+    <text x="${W}" y="${H + 13}" font-size="11" fill="var(--text3)" text-anchor="end">${days[n - 1].label}</text>
+  </svg></div>`;
+}
+
+// ─── DASHBOARD ───────────────────────────────────────────────
 async function loadDashboard() {
   const el = document.getElementById('dashboard-content');
+  document.getElementById('page-dashboard').classList.add('vg-dash');
   try {
-    const projects = await api('/api/projects');
-    if (!projects.length) {
-      el.innerHTML = `<div class="empty-state"><div class="icon">🛡️</div><p>Chưa có project nào</p><button class="btn btn-primary mt-16" onclick="navigate('projects')">Tạo Project đầu tiên</button></div>`;
-      return;
-    }
+    const d = await api('/api/dashboard/overview');
+    const p = d.posture || { score: 0, label: 'TỐT', drivers: {} };
+    const tone = postureTone(p.label);
+    const q = d.queue || {};
+    const cov = d.coverage || {};
+    const totals = d.findings_total || {};
+    const openTotal = d.findings_open_total || 0;
+    const bands = d.asset_bands || {};
+    const assetTotal = DASH_SEVS.reduce((a, s) => a + (bands[s] || 0), 0);
+    const activeAlerts = d.assets_with_active_alerts || 0;
+    const topAssets = d.top_assets || [];
 
-    let totalC = 0, totalH = 0, totalM = 0, totalL = 0, totalOpen = 0;
-    const projectCards = await Promise.all(projects.map(async p => {
-      const scans = await api(`/api/projects/${p.id}/scans`);
-      const latest = scans[0];
-      const s = latest?.summary || {};
-      totalC += s.CRITICAL || 0; totalH += s.HIGH || 0; totalM += s.MEDIUM || 0; totalL += s.LOW || 0;
-      totalOpen += s.open || 0;
-      return { p, latest, s };
-    }));
+    // ── Hero: gauge + attention tiles ──
+    const flag = q.pending_approvals > 0;
+    const hero = `
+      <div class="card dash-hero vg-enter">
+        <div class="dash-gauge-wrap">
+          <div class="dash-gauge">
+            ${dashGauge(p.score, tone)}
+            <div class="g-center">
+              <div class="g-score" style="color:${tone}">${p.score}</div>
+              <div class="g-of">/ 100</div>
+            </div>
+          </div>
+          <div class="dash-posture-label" style="background:color-mix(in srgb, ${tone} 16%, transparent);color:color-mix(in srgb, ${tone} 86%, var(--text));border:1px solid color-mix(in srgb, ${tone} 42%, transparent)">${escHtml(p.label)}</div>
+          <p class="text-sm" style="max-width:260px;margin-top:8px;line-height:1.5">Tư thế rủi ro tổng hợp từ lỗ hổng code/web/pentest, rủi ro tài sản và cảnh báo EDR. Điểm càng cao, rủi ro càng lớn.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="dash-attn vg-stagger">
+            <div class="stat-card vg-lift ${flag ? 'attn-flag' : ''}" onclick="navigate('pentest')" role="button" tabindex="0">
+              <div class="stat-num ${flag ? 'sev-med' : ''}">${q.pending_approvals || 0}</div>
+              <div class="stat-label">Chờ duyệt${flag ? ' ⚠' : ''}</div>
+            </div>
+            <div class="stat-card vg-lift" onclick="navigate('pentest')" role="button" tabindex="0">
+              <div class="stat-num">${q.active_pentest_runs || 0}</div>
+              <div class="stat-label">Phiên pentest đang chạy</div>
+            </div>
+            <div class="stat-card vg-lift" onclick="navigate('projects')" role="button" tabindex="0">
+              <div class="stat-num">${q.running_scans || 0}</div>
+              <div class="stat-label">Scan đang chạy</div>
+            </div>
+          </div>
+          <div class="card" style="margin:0;background:var(--bg3);padding:14px 16px">
+            <div class="text-sm" style="font-weight:700;color:var(--text2);margin-bottom:8px">Nguồn đóng góp điểm rủi ro <span style="font-weight:500;color:var(--text3)">(điểm có trọng số)</span></div>
+            <div class="dash-meta text-sm">
+              <span>Lỗ hổng code/web/pentest <strong class="sev-crit">${(p.drivers || {}).weighted_findings ?? 0}đ</strong></span>
+              <span style="color:var(--text3)">·</span>
+              <span>Tài sản C/H <strong class="sev-high">${(p.drivers || {}).critical_high_assets ?? 0}đ</strong></span>
+              <span style="color:var(--text3)">·</span>
+              <span>Cảnh báo EDR <strong class="sev-info">${(p.drivers || {}).active_alerts ?? 0}đ</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    // ── Findings by source + asset donut ──
+    const anyFinding = openTotal > 0;
+    const findingsCard = `
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:4px"><h2 style="margin:0">Phát hiện theo nguồn</h2>
+          <span class="text-sm">Tổng mở: <strong class="sev-crit" style="font-size:16px">${openTotal}</strong></span></div>
+        ${anyFinding ? `
+          ${dashLegend(DASH_SEVS)}
+          <div>${dashSourceBars(d.findings_by_source || {})}</div>
+          <div class="dash-counters">
+            ${DASH_SEVS.map(s => `<div class="dash-counter"><div class="n" style="color:${DASH_SEV_VAR[s]}">${totals[s] || 0}</div><div class="k">${s}</div></div>`).join('')}
+          </div>`
+        : `<div class="empty-state" style="padding:36px 16px"><div class="icon">✅</div><p>Chưa có phát hiện nào</p><p class="text-sm">Hãy chạy scan để bắt đầu thu thập rủi ro.</p><button class="btn btn-primary mt-16" onclick="navigate('projects')">Chạy scan</button></div>`}
+      </div>`;
+
+    const bandSegs = DASH_SEVS.map(s => ({ value: bands[s] || 0, colorVar: DASH_SEV_VAR[s] }));
+    const assetCard = `
+      <div class="card">
+        <h2 style="margin:0 0 12px">Rủi ro tài sản</h2>
+        ${assetTotal > 0 ? `
+          <div class="dash-donut-wrap">
+            <div class="dash-donut">
+              ${dashDonut(bandSegs, 'Phân bố tài sản theo mức rủi ro')}
+              <div class="d-center"><div class="d-total">${assetTotal}</div><div class="d-lbl">tài sản</div></div>
+            </div>
+            <div class="dash-dlegend">
+              ${DASH_SEVS.map(s => `<div class="row"><span class="sw" style="width:11px;height:11px;border-radius:3px;background:${DASH_SEV_VAR[s]}"></span><span class="nm">${DASH_SEV_LABEL[s]}</span><span class="ct">${bands[s] || 0}</span></div>`).join('')}
+            </div>
+          </div>`
+        : `<div class="empty-state" style="padding:30px 16px"><div class="icon">🖥️</div><p>Chưa có tài sản</p><p class="text-sm">Đồng bộ từ kết nối XDR/NAC.</p><button class="btn btn-ghost btn-sm mt-16" onclick="navigate('connectors')">Tới Kết nối</button></div>`}
+        <div class="dash-alert-banner ${activeAlerts > 0 ? '' : 'ok'}">
+          <span style="font-size:16px">${activeAlerts > 0 ? '⚠' : '✓'}</span>
+          <span>${activeAlerts > 0 ? `<strong>${activeAlerts}</strong> tài sản đang có cảnh báo EDR` : 'Không có cảnh báo EDR đang hoạt động'}</span>
+        </div>
+      </div>`;
+
+    // ── Top rủi ro ──
+    const topCard = `
+      <div class="card">
+        <h2 style="margin:0 0 12px">Top rủi ro</h2>
+        ${topAssets.length ? `
+          <div style="overflow-x:auto"><table style="min-width:0">
+            <thead><tr><th>Tài sản</th><th>Điểm · Mức</th><th>Cảnh báo</th><th>Nguồn</th></tr></thead>
+            <tbody>
+              ${topAssets.map(a => `
+                <tr class="dash-top-row" onclick="navigate('assets')">
+                  <td><strong>${escHtml(a.hostname || a.ip || '—')}</strong>${a.hostname && a.ip ? `<br><span class="text-sm" style="font-family:var(--font-mono)">${escHtml(a.ip)}</span>` : ''}</td>
+                  <td><span style="font-weight:800;font-variant-numeric:tabular-nums">${a.risk_score ?? 0}</span> ${sevBadge(a.band || 'INFO')}</td>
+                  <td>${(a.active_alerts || 0) > 0 ? `<span class="sev-crit" style="font-weight:800">${a.active_alerts}</span>` : '<span class="text-sm" style="color:var(--text3)">0</span>'}</td>
+                  <td>${(a.sources || []).map(s => `<span class="dash-src-chip">${escHtml(s)}</span>`).join('') || '<span class="text-sm" style="color:var(--text3)">—</span>'}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table></div>`
+        : `<div class="empty-state" style="padding:30px 16px"><p class="text-sm">Chưa có tài sản rủi ro nào.</p></div>`}
+      </div>`;
+
+    // ── Độ phủ ──
+    const covTiles = [
+      ['Projects', cov.projects || 0, '', "navigate('projects')"],
+      ['Domains', cov.domains || 0, '', "navigate('domains')"],
+      ['Tài sản', cov.assets || 0, '', "navigate('assets')"],
+      ['Kết nối', `${cov.connectors_ok || 0}/${cov.connectors || 0}`, 'đang hoạt động', "navigate('connectors')"],
+      ['Engagements', cov.engagements || 0, '', "navigate('pentest')"],
+      ['EDR giám sát', `${cov.edr_monitored || 0}/${cov.assets || 0}`, 'tài sản', "navigate('assets')"],
+    ];
+    const coverageCard = `
+      <div class="card">
+        <h2 style="margin:0 0 12px">Độ phủ</h2>
+        <div class="dash-cov vg-stagger">
+          ${covTiles.map(([k, v, sub, nav]) => `
+            <div class="mini-stat vg-lift" style="cursor:pointer" onclick="${nav}">
+              <div class="cv-n">${v}</div><div class="cv-k">${k}</div>${sub ? `<div class="cv-sub">${sub}</div>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>`;
+
+    // ── Xu hướng scan ──
+    const trendCard = `
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:10px"><h2 style="margin:0">Xu hướng scan 14 ngày</h2></div>
+        ${dashSpark(d.scan_trend)}
+      </div>`;
 
     el.innerHTML = `
-      <div class="grid4 mb-16 vg-stagger">
-        <div class="stat-card"><div class="stat-num c">${totalC}</div><div class="stat-label">CRITICAL</div></div>
-        <div class="stat-card"><div class="stat-num h">${totalH}</div><div class="stat-label">HIGH</div></div>
-        <div class="stat-card"><div class="stat-num m">${totalM}</div><div class="stat-label">MEDIUM</div></div>
-        <div class="stat-card"><div class="stat-num l">${totalOpen}</div><div class="stat-label">Open Issues</div></div>
-      </div>
-      <h2>Projects</h2>
-      <div class="card" style="padding:0;overflow:hidden;">
-        <table>
-          <thead><tr><th>Project</th><th>Last Scan</th><th>C</th><th>H</th><th>M</th><th>L</th><th>Status</th><th></th></tr></thead>
-          <tbody>
-            ${projectCards.map(({p, latest, s}) => `
-              <tr>
-                <td><strong>${p.name}</strong><br><span class="text-sm">${p.description || ''}</span></td>
-                <td class="text-sm">${latest ? '#' + latest.scan_number + ' — ' + fmtDate(latest.started_at) : '—'}</td>
-                <td class="c">${s.CRITICAL || 0}</td>
-                <td class="h">${s.HIGH || 0}</td>
-                <td class="m">${s.MEDIUM || 0}</td>
-                <td class="l">${s.LOW || 0}</td>
-                <td>${latest ? `<span class="scan-status-${latest.status.toLowerCase()}">${latest.status}</span>` : '—'}</td>
-                <td><button class="btn btn-ghost btn-sm" onclick="openProjectScans('${p.id}','${p.name}')">Xem</button></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>`;
-  } catch(e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+      ${hero}
+      <div class="dash-2col">${findingsCard}${assetCard}</div>
+      ${topCard}
+      ${coverageCard}
+      ${trendCard}`;
+
+    // Footer: cập nhật + làm mới
+    const foot = document.getElementById('dash-updated');
+    if (foot) foot.textContent = 'Cập nhật lúc ' + fmtDate(d.generated_at);
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Không tải được dashboard</p><p class="text-sm" style="color:var(--critical)">${escHtml(e.message)}</p><button class="btn btn-ghost btn-sm mt-16" onclick="loadDashboard()">Thử lại</button></div>`;
   }
 }
 
