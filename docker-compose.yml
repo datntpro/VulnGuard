@@ -10,6 +10,8 @@ services:
     container_name: vulnguard-api
     ports:
       - "${VULNGUARD_PORT:-8080}:8080"
+      # Recording MITM proxy (Pentest Agent — bắt bằng chứng từ trình duyệt/công cụ)
+      - "${PENTEST_PROXY_PORT:-8788}:8788"
     volumes:
       - ./storage:/app/storage
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock

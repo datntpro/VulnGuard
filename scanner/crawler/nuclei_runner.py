@@ -22,7 +22,7 @@ def is_nuclei_available() -> bool:
 
 
 def build_command(targets_file: str, severities: List[str], tags: List[str], fuzz: bool,
-                  rate_limit: int, concurrency: int = 10) -> List[str]:
+                  rate_limit: int, concurrency: int = 10, capture_traffic: bool = False) -> List[str]:
     sev = [s for s in severities if s in VALID_SEVERITIES] or list(VALID_SEVERITIES[:4])
     cmd = [
         NUCLEI_BIN,
@@ -39,6 +39,8 @@ def build_command(targets_file: str, severities: List[str], tags: List[str], fuz
     ]
     if tags:
         cmd += ["-tags", ",".join(t.strip() for t in tags if t.strip())]
+    if capture_traffic:
+        cmd.append("-irr")          # include request/response trong JSONL → làm bằng chứng
     if fuzz:
         cmd.append("-dast")         # chạy fuzzing template trên URL có tham số — xâm lấn hơn
     return cmd
@@ -88,6 +90,8 @@ def parse_finding(line: str) -> Optional[Dict[str, Any]]:
         "cvss_score": str(cvss)[:10] if cvss not in (None, "") else None,
         "extracted": [str(x)[:500] for x in (d.get("extracted-results") or [])][:20],
         "curl_command": (d.get("curl-command") or "")[:4000],
+        "request": (d.get("request") or "")[:16000] or None,
+        "response": (d.get("response") or "")[:16000] or None,
     }
 
 
@@ -99,6 +103,7 @@ async def run_nuclei(
     rate_limit: int,
     timeout: int,
     on_finding: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    capture_traffic: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Chạy nuclei → (findings, meta{error, timed_out, stderr_tail})."""
     if not is_nuclei_available():
@@ -113,7 +118,7 @@ async def run_nuclei(
         tfile = os.path.join(tmp, "targets.txt")
         with open(tfile, "w") as f:
             f.write("\n".join(targets))
-        cmd = build_command(tfile, severities, tags, fuzz, rate_limit)
+        cmd = build_command(tfile, severities, tags, fuzz, rate_limit, capture_traffic=capture_traffic)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,

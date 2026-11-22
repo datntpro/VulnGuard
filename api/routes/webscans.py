@@ -107,7 +107,8 @@ async def _run_webscan(scan_id: str, domain_id: str, targets: List[str], params:
                 return
             seen_fp.add(fp)
             counts[item["severity"]] = counts.get(item["severity"], 0) + 1
-            db.add(WebFinding(scan_id=scan_id, fingerprint=fp, **item))
+            cols = {k: v for k, v in item.items() if k not in ('request', 'response')}
+            db.add(WebFinding(scan_id=scan_id, fingerprint=fp, **cols))
             db.commit()
             _set_progress(f"Đã phát hiện {sum(counts.values())} finding…")
 
