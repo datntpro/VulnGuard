@@ -339,6 +339,23 @@
     .toast { max-width: none; min-width: 0; }
   }
   @media (max-width: 520px) { .stat-num { font-size: 26px; } .card { padding: 16px; } #cw-folder-select { width: 100% !important; } }
+  /* ── Pentest ── */
+  .pt-check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text); line-height: 1.5; margin: 6px 0; cursor: pointer; }
+  .pt-check input { width: auto; margin: 2px 0 0; flex-shrink: 0; }
+  .pt-scope-row { display: grid; grid-template-columns: 120px 1fr auto auto auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .pt-scope-row select, .pt-scope-row input[type=text] { width: 100%; }
+  @media (max-width: 640px) { .pt-scope-row { grid-template-columns: 1fr 1fr; } }
+  .pt-approval { border: 1px solid color-mix(in srgb, var(--high) 45%, var(--border)); background: color-mix(in srgb, var(--high) 8%, var(--bg2)); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
+  .pt-timeline { position: relative; display: flex; flex-direction: column; gap: 10px; }
+  .pt-step { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg2); padding: 12px 14px; }
+  .pt-step summary { cursor: pointer; list-style: none; }
+  .pt-step summary::-webkit-details-marker { display: none; }
+  .pt-step-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pt-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .pt-run-stat { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+  .pt-run-stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pt-run-stat .l { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
+  .pt-eng-card { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -366,6 +383,8 @@
   <div class="nav-item" onclick="navigate('domains')" id="nav-domains"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>Domains</span></div>
   <div class="nav-item" onclick="navigate('docreview')" id="nav-docreview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/></svg><span>Document Review</span></div>
   <div class="nav-item" onclick="navigate('coworker')" id="nav-coworker"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5"/><path d="M13 15h4"/></svg><span>Co-work</span></div>
+  <div class="nav-section">Pentest</div>
+  <div class="nav-item" onclick="navigate('pentest')" id="nav-pentest"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="2"/></svg><span>Pentest Agent</span></div>
   <div class="nav-section">Hệ thống</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Settings</span></div>
   <div class="sidebar-footer">
@@ -562,6 +581,42 @@
     </div>
     <div id="docreview-detail-content">
       <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- PENTEST — LIST PAGE -->
+  <div class="page" id="page-pentest">
+    <div class="flex-between mb-16">
+      <h1>🎯 Pentest Agent</h1>
+      <button class="btn btn-primary" onclick="openEngagementModal()">+ Tạo Engagement</button>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      <strong>Engagement</strong> = hợp đồng pentest: khai báo <strong>scope</strong> (phạm vi tài sản được phép)
+      và <strong>uỷ quyền</strong>. Agent chỉ thao tác trong scope; hành động xâm lấn/phá huỷ luôn cần người duyệt.
+      Chỉ kiểm thử tài sản bạn <strong>sở hữu hoặc được uỷ quyền bằng văn bản</strong>.
+    </div>
+    <div id="pentest-list">
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- PENTEST — ENGAGEMENT DETAIL -->
+  <div class="page" id="page-pentest-engagement">
+    <div class="flex mb-16">
+      <button class="btn btn-ghost btn-sm" onclick="navigate('pentest')">← Về Pentest</button>
+    </div>
+    <div id="pentest-engagement-content">
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- PENTEST — RUN DETAIL -->
+  <div class="page" id="page-pentest-run">
+    <div class="flex mb-16">
+      <button class="btn btn-ghost btn-sm" id="pentest-run-back" onclick="navigate('pentest')">← Quay lại</button>
+    </div>
+    <div id="pentest-run-content">
+      <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -1340,6 +1395,78 @@
   <div class="drawer-body" id="wf-body"></div>
 </aside>
 
+<!-- Pentest — Engagement create/edit modal -->
+<div class="modal-overlay" id="engagement-modal">
+  <div class="modal" style="max-width:720px;">
+    <div class="modal-header"><strong id="em-title">Tạo Engagement</strong><button class="btn btn-ghost btn-sm" onclick="closeEngagementModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Tên engagement *</label><input id="em-name" placeholder="VD: Kiểm thử ứng dụng web nội bộ Q4"></div>
+      <div class="form-group"><label>Mô tả</label><textarea id="em-desc" rows="2" placeholder="Mục tiêu, bối cảnh, bên liên quan..."></textarea></div>
+
+      <div class="form-group">
+        <label>Scope — phạm vi tài sản *</label>
+        <div class="field-hint" style="margin-bottom:8px;">Khai báo rõ domain/IP/CIDR/URL được phép (allow) hoặc loại trừ (deny). Agent chỉ thao tác trong allow và luôn tránh deny.</div>
+        <div id="em-scope-rows"></div>
+        <button type="button" class="btn btn-ghost btn-sm mt-8" onclick="addScopeRow()">+ Thêm luật scope</button>
+      </div>
+
+      <div class="separator"></div>
+      <div class="form-group">
+        <label>Uỷ quyền</label>
+        <label class="pt-check" style="align-items:flex-start;"><input type="checkbox" id="em-authorized"><span>Tôi xác nhận có quyền kiểm thử các tài sản trong scope</span></label>
+        <div class="field-hint" style="color:var(--high);margin-top:4px;">⚠️ Không tick ô này thì engagement chưa được uỷ quyền và <strong>không thể chạy run</strong>.</div>
+        <div class="grid2" style="margin-top:10px;">
+          <div><label>Ghi chú uỷ quyền</label><input id="em-auth-note" placeholder="VD: Theo hợp đồng số..., email duyệt ngày..."></div>
+          <div><label>Hết hạn uỷ quyền</label><input id="em-expiry" type="datetime-local"></div>
+        </div>
+      </div>
+
+      <div class="separator"></div>
+      <div class="form-group">
+        <label>Chế độ tự chủ mặc định</label>
+        <label class="pt-check" style="align-items:flex-start;"><input type="radio" name="em-mode" value="AUTONOMOUS_IN_SCOPE" checked><span><strong>AUTONOMOUS_IN_SCOPE</strong> (khuyến nghị) — recon + quét không phá huỷ tự chạy trong scope; hành động xâm lấn/phá huỷ cần duyệt.</span></label>
+        <label class="pt-check" style="align-items:flex-start;"><input type="radio" name="em-mode" value="GUIDED"><span><strong>GUIDED</strong> — chỉ recon tự chạy; còn lại cần duyệt.</span></label>
+      </div>
+      <div class="grid2">
+        <div class="form-group"><label>Số bước tối đa (max_steps)</label><input id="em-max-steps" type="number" min="1" max="200" value="40"></div>
+        <div class="form-group"><label>Token tối đa (max_tokens)</label><input id="em-max-tokens" type="number" min="20000" max="5000000" step="10000" value="400000"></div>
+      </div>
+      <div id="em-error" class="text-sm" style="color:var(--critical);"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeEngagementModal()">Hủy</button>
+      <button class="btn btn-primary" id="em-save-btn" onclick="saveEngagement()">Lưu engagement</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pentest — run finding drawer -->
+<div class="drawer-overlay" id="pf-drawer-overlay" onclick="closePentestFindingDrawer()"></div>
+<aside class="drawer" id="pf-drawer" aria-hidden="true">
+  <div class="drawer-header">
+    <div style="min-width:0;">
+      <div id="pf-sev"></div>
+      <div id="pf-title" style="font-size:16px;font-weight:700;margin-top:6px;word-break:break-word;"></div>
+      <div id="pf-target" class="text-mono text-sm" style="margin-top:2px;"></div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="closePentestFindingDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="pf-body"></div>
+</aside>
+
+<!-- Pentest — traffic viewer drawer -->
+<div class="drawer-overlay" id="pt-traffic-overlay" onclick="closeTrafficDrawer()"></div>
+<aside class="drawer" id="pt-traffic-drawer" aria-hidden="true">
+  <div class="drawer-header">
+    <div style="min-width:0;">
+      <div id="ptt-badges"></div>
+      <div id="ptt-url" class="text-mono text-sm" style="margin-top:6px;word-break:break-all;"></div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="closeTrafficDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="ptt-body"></div>
+</aside>
+
 <!-- User Modal (add) -->
 <div class="modal-overlay" id="user-modal">
   <div class="modal" style="max-width:480px;">
@@ -1403,13 +1530,14 @@ function navigate(page) {
   pageEl.classList.add('vg-enter');
   toggleSidebar(false);
   if (page !== 'domain-crawls') stopWebScanPoll();
+  if (page !== 'pentest-run') stopPentestPoll();
 
   // Sub-pages (vd. domain-crawls) không có nav item riêng — highlight nav cha thay vào đó
-  const navParent = { 'domain-crawls': 'domains', 'docreview-detail': 'docreview' }[page] || page;
+  const navParent = { 'domain-crawls': 'domains', 'docreview-detail': 'docreview', 'pentest-engagement': 'pentest', 'pentest-run': 'pentest' }[page] || page;
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest };
   if (loaders[page]) loaders[page]();
 }
 
@@ -4187,6 +4315,653 @@ async function triggerWebScan() {
     toast('Đã bắt đầu web scan', 'success');
     loadWebScans();
   } catch (e) { toast('Lỗi: ' + e.message, 'error'); btn.disabled = false; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PENTEST AGENT
+// ═══════════════════════════════════════════════════════════════
+const PT_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
+const PT_ACTIVE_STATUS = ['PENDING', 'RUNNING', 'WAITING_APPROVAL', 'PAUSED'];
+const ptActive = s => PT_ACTIVE_STATUS.includes(s);
+const ptState = { engagements: [], curEng: null, curEngId: null, runs: [], curRunId: null, run: null, steps: [], findings: [], approvals: [], runTraffic: [], engTraffic: [], proxy: null, engTab: 'runs', bindFindings: [] };
+let ptPollTimer = null;
+function stopPentestPoll() { clearInterval(ptPollTimer); ptPollTimer = null; }
+
+function psevBadge(s) { return sevBadge(String(s || 'info').toUpperCase()); }
+function ptBadge(text, tokenVar) { return `<span class="badge" style="--b:${tokenVar}">${escHtml(text)}</span>`; }
+function ptRiskBadge(r) {
+  const t = { RECON: 'var(--low)', ACTIVE_SAFE: 'var(--info)', INTRUSIVE: 'var(--high)', DESTRUCTIVE: 'var(--critical)' }[r] || 'var(--text3)';
+  return ptBadge(r || '—', t);
+}
+function ptDecidedBadge(d) {
+  const t = { model: 'var(--info)', human: 'var(--brand-500)', system: 'var(--text3)' }[d] || 'var(--text3)';
+  const l = { model: '🤖 model', human: '👤 human', system: '⚙ system' }[d] || d || '—';
+  return `<span class="badge" style="--b:${t}">${escHtml(l)}</span>`;
+}
+function ptOutcomeBadge(o) {
+  if (!o) return '';
+  let t = 'var(--text3)';
+  if (o === 'executed') t = 'var(--low)';
+  else if (o === 'awaiting_approval') t = 'var(--medium)';
+  else if (['blocked_scope', 'blocked_unavail', 'denied', 'error'].includes(o)) t = 'var(--critical)';
+  return ptBadge(o, t);
+}
+const PT_RUN_STATUS = {
+  PENDING: ['⏳ Chờ', 'var(--text2)'], RUNNING: ['⚡ Đang chạy', 'var(--medium)'],
+  WAITING_APPROVAL: ['✋ Chờ duyệt', 'var(--high)'], PAUSED: ['⏸ Tạm dừng', 'var(--text2)'],
+  COMPLETED: ['✅ Hoàn tất', 'var(--low)'], FAILED: ['❌ Thất bại', 'var(--critical)'],
+  STOPPED: ['⛔ Đã dừng', 'var(--critical)'],
+};
+function ptRunStatusBadge(s) { const m = PT_RUN_STATUS[s] || [s, 'var(--text3)']; return `<span class="badge" style="--b:${m[1]}">${escHtml(m[0])}</span>`; }
+function ptPretty(v) {
+  if (v == null) return '';
+  try { return typeof v === 'string' ? v : JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+// Code block, show-more nếu dài
+function ptCode(v, label) {
+  const s = ptPretty(v);
+  if (!s) return '';
+  const head = label ? `<label style="margin-top:10px;">${escHtml(label)}</label>` : '';
+  if (s.length <= 1400) return `${head}<div class="code-block">${escHtml(s)}</div>`;
+  const id = 'ptc' + Math.random().toString(36).slice(2, 8);
+  return `${head}<div class="code-block" id="${id}">${escHtml(s.slice(0, 1400))}…</div>
+    <button class="btn btn-ghost btn-sm" onclick="(function(b){document.getElementById('${id}').textContent=${JSON.stringify(s)};b.remove();})(this)">Xem thêm (${s.length} ký tự)</button>`;
+}
+
+// ─── Engagement list ──────────────────────────────────────────
+async function loadPentest() {
+  const el = document.getElementById('pentest-list');
+  if (!ptState.engagements.length) el.innerHTML = SKELETON_HTML;
+  try {
+    const engs = await api('/api/pentest/engagements');
+    ptState.engagements = engs || [];
+    // đếm số run cho mỗi engagement
+    const counts = {};
+    await Promise.all(ptState.engagements.map(async e => {
+      try { const r = await api(`/api/pentest/engagements/${e.id}/runs`); counts[e.id] = (r || []).length; } catch { counts[e.id] = 0; }
+    }));
+    renderEngagementCards(counts);
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderEngagementCards(counts) {
+  const el = document.getElementById('pentest-list');
+  const list = ptState.engagements;
+  if (!list.length) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="icon">🎯</div><p>Chưa có engagement nào</p>
+      <p class="text-sm" style="margin-top:6px;">Tạo engagement đầu tiên — khai báo scope &amp; uỷ quyền trước khi chạy pentest agent.</p>
+      <button class="btn btn-primary mt-16" onclick="openEngagementModal()">+ Tạo Engagement</button></div></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="vg-stagger" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;">
+    ${list.map(e => {
+    const expired = e.expiry_date && new Date(e.expiry_date) < new Date();
+    const authBadge = e.authorized && !expired
+      ? ptBadge('✓ Đã uỷ quyền', 'var(--low)')
+      : (expired ? ptBadge('⌛ Hết hạn uỷ quyền', 'var(--critical)') : ptBadge('✗ Chưa uỷ quyền', 'var(--text3)'));
+    const modeBadge = ptBadge(e.default_mode === 'GUIDED' ? 'GUIDED' : 'AUTONOMOUS', 'var(--info)');
+    return `<div class="card pt-eng-card vg-lift" onclick="openEngagement('${escHtml(e.id)}')">
+      <div class="flex-between" style="align-items:flex-start;">
+        <strong style="font-size:15px;word-break:break-word;">${escHtml(e.name)}</strong>
+      </div>
+      ${e.description ? `<div class="text-sm" style="margin-top:4px;color:var(--text2);">${escHtml(e.description)}</div>` : ''}
+      <div class="text-sm text-mono" style="margin-top:10px;color:var(--text2);word-break:break-word;">🎯 ${escHtml(e.scope_summary || 'chưa có scope')}</div>
+      <div class="pt-chips" style="margin-top:12px;">${authBadge}${modeBadge}<span class="tag">${counts[e.id] ?? 0} run</span></div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+// ─── Engagement create/edit modal ─────────────────────────────
+let emEditId = null;
+function emScopeRowHtml(r) {
+  r = r || { type: 'domain', value: '', include_subdomains: true, mode: 'allow' };
+  const sub = r.type === 'domain';
+  return `<div class="pt-scope-row">
+    <select class="em-sc-type" onchange="onScopeTypeChange(this)">
+      ${['domain', 'ip', 'cidr', 'url'].map(t => `<option value="${t}" ${r.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+    </select>
+    <input type="text" class="em-sc-value" value="${escHtml(r.value || '')}" placeholder="${r.type === 'cidr' ? '10.0.0.0/24' : r.type === 'url' ? 'https://app.example.com/path' : r.type === 'ip' ? '203.0.113.5' : 'example.com'}">
+    <label class="pt-check em-sc-sub-wrap" style="${sub ? '' : 'visibility:hidden;'}margin:0;white-space:nowrap;"><input type="checkbox" class="em-sc-sub" ${r.include_subdomains ? 'checked' : ''}>sub</label>
+    <select class="em-sc-mode" style="width:auto;">
+      <option value="allow" ${r.mode === 'allow' ? 'selected' : ''}>allow</option>
+      <option value="deny" ${r.mode === 'deny' ? 'selected' : ''}>deny</option>
+    </select>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.pt-scope-row').remove()" title="Xoá luật">✕</button>
+  </div>`;
+}
+function onScopeTypeChange(sel) {
+  const row = sel.closest('.pt-scope-row');
+  const sub = row.querySelector('.em-sc-sub-wrap');
+  sub.style.visibility = sel.value === 'domain' ? 'visible' : 'hidden';
+}
+function addScopeRow(r) {
+  document.getElementById('em-scope-rows').insertAdjacentHTML('beforeend', emScopeRowHtml(r));
+}
+function openEngagementModal(eng) {
+  emEditId = eng ? eng.id : null;
+  document.getElementById('em-title').textContent = eng ? 'Sửa Engagement' : 'Tạo Engagement';
+  document.getElementById('em-save-btn').textContent = eng ? 'Lưu thay đổi' : 'Lưu engagement';
+  document.getElementById('em-name').value = eng ? (eng.name || '') : '';
+  document.getElementById('em-desc').value = eng ? (eng.description || '') : '';
+  document.getElementById('em-auth-note').value = eng ? (eng.authorization_note || '') : '';
+  document.getElementById('em-authorized').checked = eng ? !!eng.authorized : false;
+  document.getElementById('em-max-steps').value = eng ? (eng.max_steps ?? 40) : 40;
+  document.getElementById('em-max-tokens').value = eng ? (eng.max_tokens ?? 400000) : 400000;
+  const exp = document.getElementById('em-expiry');
+  exp.value = eng && eng.expiry_date ? toLocalDatetime(eng.expiry_date) : '';
+  const mode = eng && eng.default_mode === 'GUIDED' ? 'GUIDED' : 'AUTONOMOUS_IN_SCOPE';
+  document.querySelectorAll('input[name="em-mode"]').forEach(r => { r.checked = r.value === mode; });
+  const rows = document.getElementById('em-scope-rows');
+  rows.innerHTML = '';
+  const srcRules = (eng && eng.scope_rules && eng.scope_rules.length) ? eng.scope_rules : [{ type: 'domain', value: '', include_subdomains: true, mode: 'allow' }];
+  srcRules.forEach(r => addScopeRow(r));
+  document.getElementById('em-error').textContent = '';
+  document.getElementById('engagement-modal').classList.add('open');
+}
+function closeEngagementModal() { document.getElementById('engagement-modal').classList.remove('open'); }
+function toLocalDatetime(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function readScopeRules() {
+  return [...document.querySelectorAll('#em-scope-rows .pt-scope-row')].map(row => {
+    const type = row.querySelector('.em-sc-type').value;
+    return {
+      type, value: row.querySelector('.em-sc-value').value.trim(),
+      include_subdomains: type === 'domain' ? row.querySelector('.em-sc-sub').checked : false,
+      mode: row.querySelector('.em-sc-mode').value,
+    };
+  }).filter(r => r.value);
+}
+async function saveEngagement() {
+  const err = document.getElementById('em-error');
+  err.textContent = '';
+  const name = document.getElementById('em-name').value.trim();
+  if (!name) { err.textContent = 'Tên engagement là bắt buộc'; return; }
+  const scope_rules = readScopeRules();
+  const expVal = document.getElementById('em-expiry').value;
+  const payload = {
+    name,
+    description: document.getElementById('em-desc').value.trim() || null,
+    scope_rules,
+    authorized: document.getElementById('em-authorized').checked,
+    authorization_note: document.getElementById('em-auth-note').value.trim() || null,
+    expiry_date: expVal ? new Date(expVal).toISOString() : null,
+    default_mode: (document.querySelector('input[name="em-mode"]:checked') || {}).value || 'AUTONOMOUS_IN_SCOPE',
+    max_steps: Math.min(200, Math.max(1, parseInt(document.getElementById('em-max-steps').value, 10) || 40)),
+    max_tokens: Math.min(5000000, Math.max(20000, parseInt(document.getElementById('em-max-tokens').value, 10) || 400000)),
+  };
+  const btn = document.getElementById('em-save-btn');
+  btn.disabled = true;
+  try {
+    if (emEditId) {
+      await api(`/api/pentest/engagements/${emEditId}`, { method: 'PATCH', body: payload });
+      toast('Đã cập nhật engagement', 'success');
+      closeEngagementModal();
+      if (ptState.curEngId === emEditId) loadEngagementDetail(); else loadPentest();
+    } else {
+      const e = await api('/api/pentest/engagements', { method: 'POST', body: payload });
+      toast('Đã tạo engagement', 'success');
+      closeEngagementModal();
+      openEngagement(e.id);
+    }
+  } catch (e) { err.textContent = e.message; }
+  finally { btn.disabled = false; }
+}
+
+// ─── Engagement detail ────────────────────────────────────────
+function openEngagement(id) {
+  ptState.curEngId = id;
+  navigate('pentest-engagement');
+  loadEngagementDetail();
+}
+async function loadEngagementDetail() {
+  const el = document.getElementById('pentest-engagement-content');
+  const id = ptState.curEngId;
+  el.innerHTML = SKELETON_HTML;
+  try {
+    const [eng, runs] = await Promise.all([
+      api(`/api/pentest/engagements/${id}`),
+      api(`/api/pentest/engagements/${id}/runs`).catch(() => []),
+    ]);
+    if (ptState.curEngId !== id) return;
+    ptState.curEng = eng;
+    ptState.runs = runs || [];
+    renderEngagementDetail();
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderEngagementDetail() {
+  const e = ptState.curEng;
+  const expired = e.expiry_date && new Date(e.expiry_date) < new Date();
+  const authOk = e.authorized && !expired;
+  const authBadge = authOk ? ptBadge('✓ Đã uỷ quyền', 'var(--low)')
+    : (expired ? ptBadge('⌛ Hết hạn uỷ quyền', 'var(--critical)') : ptBadge('✗ Chưa uỷ quyền', 'var(--critical)'));
+  const el = document.getElementById('pentest-engagement-content');
+  el.innerHTML = `
+    <div class="flex-between mb-16" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div style="min-width:0;">
+        <h1 style="margin:0;word-break:break-word;">${escHtml(e.name)}</h1>
+        <div class="pt-chips" style="margin-top:8px;">${authBadge}${ptBadge(e.default_mode === 'GUIDED' ? 'GUIDED' : 'AUTONOMOUS_IN_SCOPE', 'var(--info)')}
+          <span class="tag">max ${escHtml(e.max_steps)} bước</span><span class="tag">max ${Number(e.max_tokens).toLocaleString('vi-VN')} token</span></div>
+      </div>
+      <div class="flex">
+        <button class="btn btn-ghost btn-sm" onclick="openEngagementModal(ptState.curEng)">✎ Sửa</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteEngagement()">🗑 Xoá</button>
+      </div>
+    </div>
+    ${e.description ? `<div class="text-sm" style="color:var(--text2);margin-bottom:12px;line-height:1.6;">${escHtml(e.description)}</div>` : ''}
+    <div class="card">
+      <label style="margin:0 0 8px;">Scope</label>
+      <div class="text-mono text-sm" style="color:var(--text2);margin-bottom:10px;">${escHtml(e.scope_summary || '—')}</div>
+      <div class="table-wrap"><table><thead><tr><th>Loại</th><th>Giá trị</th><th>Subdomain</th><th>Mode</th></tr></thead><tbody>
+        ${(e.scope_rules || []).length ? e.scope_rules.map(r => `<tr>
+          <td><span class="tag">${escHtml(r.type)}</span></td>
+          <td class="text-mono text-sm" style="word-break:break-all;">${escHtml(r.value)}</td>
+          <td>${r.type === 'domain' ? (r.include_subdomains ? '✓' : '—') : '—'}</td>
+          <td>${r.mode === 'deny' ? ptBadge('deny', 'var(--critical)') : ptBadge('allow', 'var(--low)')}</td>
+        </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state" style="padding:20px;"><p>Chưa khai báo scope</p></div></td></tr>`}
+      </tbody></table></div>
+      ${e.authorization_note ? `<div class="text-sm" style="margin-top:10px;color:var(--text2);">📝 ${escHtml(e.authorization_note)}</div>` : ''}
+      ${e.expiry_date ? `<div class="text-sm" style="margin-top:4px;color:${expired ? 'var(--critical)' : 'var(--text2)'};">⌛ Hết hạn: ${fmtDate(e.expiry_date)}</div>` : ''}
+    </div>
+
+    <div class="card">
+      <label style="margin:0 0 8px;">▶ Chạy phiên mới</label>
+      ${authOk ? '' : `<div class="notice" style="border-color:color-mix(in srgb,var(--critical) 40%,transparent);background:color-mix(in srgb,var(--critical) 8%,transparent);">Engagement ${expired ? 'đã hết hạn uỷ quyền' : 'chưa được uỷ quyền'} — không thể chạy run. Hãy sửa engagement và xác nhận uỷ quyền.</div>`}
+      <div class="form-group"><label>Mục tiêu (goal) *</label><textarea id="pt-run-goal" rows="2" placeholder="VD: Tìm lỗ hổng xác thực và injection trên ứng dụng web mục tiêu" ${authOk ? '' : 'disabled'}></textarea></div>
+      <div class="grid2">
+        <div class="form-group"><label>Targets (mỗi dòng 1 target)</label><textarea id="pt-run-targets" rows="3" placeholder="app.example.com&#10;https://api.example.com" ${authOk ? '' : 'disabled'}></textarea></div>
+        <div class="form-group"><label>Chế độ (ghi đè)</label>
+          <select id="pt-run-mode" ${authOk ? '' : 'disabled'}>
+            <option value="">— Dùng mặc định của engagement —</option>
+            <option value="AUTONOMOUS_IN_SCOPE">AUTONOMOUS_IN_SCOPE</option>
+            <option value="GUIDED">GUIDED</option>
+          </select>
+          <div class="field-hint">Targets để trống → agent tự tìm trong scope.</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="pt-run-start" onclick="startRun()" ${authOk ? '' : 'disabled'}>🚀 Bắt đầu run</button>
+    </div>
+
+    <div class="tabs">
+      <div class="tab ${ptState.engTab === 'runs' ? 'active' : ''}" onclick="switchTab(this,'pt-eng-runs');ptState.engTab='runs'">⚡ Phiên chạy</div>
+      <div class="tab ${ptState.engTab === 'traffic' ? 'active' : ''}" onclick="switchTab(this,'pt-eng-traffic');ptState.engTab='traffic';loadEngagementTraffic()">🌐 Traffic &amp; Bằng chứng</div>
+    </div>
+    <div class="tab-content ${ptState.engTab === 'runs' ? 'active' : ''}" id="pt-eng-runs">${renderRunsList()}</div>
+    <div class="tab-content ${ptState.engTab === 'traffic' ? 'active' : ''}" id="pt-eng-traffic"><div id="pt-eng-traffic-body">${SKELETON_HTML}</div></div>
+  `;
+  if (ptState.engTab === 'traffic') loadEngagementTraffic();
+}
+function renderRunsList() {
+  const runs = ptState.runs;
+  if (!runs.length) return `<div class="card"><div class="empty-state"><div class="icon">⚡</div><p>Chưa có phiên chạy nào</p></div></div>`;
+  return `<div class="table-wrap card" style="padding:0;overflow:hidden;"><table><thead><tr><th width="60">#</th><th>Mục tiêu</th><th width="150">Trạng thái</th><th width="90">Bước</th><th width="110">Finding</th><th width="170">Bắt đầu</th></tr></thead><tbody>
+    ${runs.map(r => `<tr class="vuln-row" onclick="openRun('${escHtml(r.id)}')">
+      <td class="text-mono">#${escHtml(r.run_number)}</td>
+      <td style="max-width:360px;"><div style="word-break:break-word;">${escHtml((r.goal || '').slice(0, 120))}</div><div class="text-mono text-sm" style="color:var(--text3)">${escHtml((r.targets || []).join(', ').slice(0, 80))}</div></td>
+      <td>${ptRunStatusBadge(r.status)}</td>
+      <td class="text-mono">${escHtml(r.steps_used ?? 0)}</td>
+      <td>${(r.summary && r.summary.findings != null) ? escHtml(r.summary.findings) : '—'}</td>
+      <td class="text-sm">${fmtDate(r.started_at)}</td>
+    </tr>`).join('')}
+  </tbody></table></div>`;
+}
+async function deleteEngagement() {
+  if (!confirm('Xoá engagement này và toàn bộ run/finding liên quan?')) return;
+  try {
+    await api(`/api/pentest/engagements/${ptState.curEngId}`, { method: 'DELETE' });
+    toast('Đã xoá engagement', 'success');
+    navigate('pentest');
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function startRun() {
+  const goal = document.getElementById('pt-run-goal').value.trim();
+  if (!goal) return toast('Nhập mục tiêu (goal) cho run', 'warn');
+  const targets = document.getElementById('pt-run-targets').value.split('\n').map(t => t.trim()).filter(Boolean);
+  const mode = document.getElementById('pt-run-mode').value || undefined;
+  const btn = document.getElementById('pt-run-start');
+  btn.disabled = true;
+  try {
+    const run = await api(`/api/pentest/engagements/${ptState.curEngId}/runs`, { method: 'POST', body: { goal, targets, mode } });
+    if (run.rejected_targets && run.rejected_targets.length) {
+      toast(`⚠️ ${run.rejected_targets.length} target ngoài scope bị loại: ${run.rejected_targets.map(r => r.target + ' (' + r.reason + ')').join('; ')}`, 'warn', 7000);
+    }
+    toast('Đã khởi chạy run #' + run.run_number, 'success');
+    openRun(run.id);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); btn.disabled = false; }
+}
+
+// ─── Run detail ───────────────────────────────────────────────
+function openRun(id) {
+  ptState.curRunId = id;
+  ptState.run = null; ptState.steps = []; ptState.findings = []; ptState.approvals = []; ptState.runTraffic = [];
+  navigate('pentest-run');
+  const back = document.getElementById('pentest-run-back');
+  if (back && ptState.curEngId) back.setAttribute('onclick', `openEngagement('${ptState.curEngId}')`);
+  loadRunDetail(true);
+}
+async function loadRunDetail(showSkeleton) {
+  const id = ptState.curRunId;
+  if (showSkeleton) document.getElementById('pentest-run-content').innerHTML = SKELETON_HTML;
+  try {
+    const [run, steps, findings, approvals] = await Promise.all([
+      api(`/api/pentest/runs/${id}`),
+      api(`/api/pentest/runs/${id}/steps`).catch(() => []),
+      api(`/api/pentest/runs/${id}/findings`).catch(() => []),
+      api(`/api/pentest/runs/${id}/approvals`).catch(() => []),
+    ]);
+    if (ptState.curRunId !== id) return;
+    ptState.run = run; ptState.steps = steps || []; ptState.findings = findings || []; ptState.approvals = approvals || [];
+    renderRunDetail();
+    // poll khi còn active
+    if (ptActive(run.status)) { if (!ptPollTimer) ptPollTimer = setInterval(() => loadRunDetail(false), 2000); }
+    else stopPentestPoll();
+  } catch (e) {
+    stopPentestPoll();
+    document.getElementById('pentest-run-content').innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderRunDetail() {
+  const r = ptState.run;
+  const el = document.getElementById('pentest-run-content');
+  const prog = r.progress || {};
+  const sum = r.summary || {};
+  const engMax = ptState.curEng ? ptState.curEng.max_steps : null;
+  const engTok = ptState.curEng ? ptState.curEng.max_tokens : null;
+  const pending = ptState.approvals.filter(a => a.status === 'PENDING');
+  const active = ptActive(r.status);
+  el.innerHTML = `
+    <div class="flex-between mb-16" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div style="min-width:0;">
+        <div class="pt-chips">${ptRunStatusBadge(r.status)}${active ? '<span class="vg-live-dot"></span>' : ''}<span class="tag">run #${escHtml(r.run_number)}</span>${ptBadge(r.mode || '—', 'var(--info)')}</div>
+        <h1 style="margin:8px 0 0;font-size:19px;word-break:break-word;">${escHtml(r.goal)}</h1>
+        <div class="text-mono text-sm" style="color:var(--text3);margin-top:4px;word-break:break-all;">🎯 ${escHtml((r.targets || []).join(', ') || 'tự tìm trong scope')}</div>
+      </div>
+      ${active ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}
+    </div>
+    ${active && (prog.phase || prog.message || prog.current_tool) ? `<div class="card" style="margin-bottom:12px;">
+      <div class="flex" style="flex-wrap:wrap;"><span class="vg-live-dot"></span><strong>${escHtml(prog.phase || 'đang chạy')}</strong>${prog.message ? ' — ' + escHtml(prog.message) : ''}</div>
+      ${prog.current_tool ? `<div class="text-mono text-sm" style="margin-top:4px;color:var(--text2)">🔧 ${escHtml(prog.current_tool)}</div>` : ''}
+      <div class="progress-bar"><div class="progress-fill indeterminate"></div></div>
+    </div>` : ''}
+    ${r.status === 'FAILED' && r.error_message ? `<div class="notice" style="border-color:color-mix(in srgb,var(--critical) 40%,transparent);background:color-mix(in srgb,var(--critical) 8%,transparent);">❌ <strong>Lỗi:</strong> ${escHtml(r.error_message)}</div>` : ''}
+    ${sum.conclusion ? `<div class="notice">🧾 <strong>Kết luận:</strong> ${escHtml(sum.conclusion)}</div>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;">
+      <div class="pt-run-stat"><div class="v">${escHtml(r.steps_used ?? 0)}${engMax ? ` <span style="font-size:12px;color:var(--text3)">/ ${escHtml(engMax)}</span>` : ''}</div><div class="l">Bước</div></div>
+      <div class="pt-run-stat"><div class="v">${Number(r.tokens_used ?? 0).toLocaleString('vi-VN')}${engTok ? ` <span style="font-size:11px;color:var(--text3)">/ ${Number(engTok).toLocaleString('vi-VN')}</span>` : ''}</div><div class="l">Token</div></div>
+      <div class="pt-run-stat"><div class="v">${escHtml((sum.findings != null) ? sum.findings : ptState.findings.length)}</div><div class="l">Finding</div></div>
+      <div class="pt-run-stat"><div class="v">${escHtml(pending.length)}</div><div class="l">Chờ duyệt</div></div>
+    </div>
+
+    ${pending.length ? `<div class="card" style="border-color:color-mix(in srgb,var(--high) 50%,var(--border));">
+      <label style="margin:0 0 10px;color:var(--high);">✋ Hành động chờ duyệt (${pending.length}) — lan can an toàn</label>
+      ${pending.map(a => `<div class="pt-approval">
+        <div class="pt-chips" style="margin-bottom:8px;"><strong class="text-mono">${escHtml(a.tool_name)}</strong>${ptRiskBadge(a.risk_tier)}<span class="tag">bước #${escHtml(a.step_number)}</span></div>
+        ${a.rationale ? `<div class="text-sm" style="margin-bottom:8px;color:var(--text2)">💭 ${escHtml(a.rationale)}</div>` : ''}
+        ${ptCode(a.tool_input, 'Tham số (tool_input)')}
+        <div class="flex mt-8">
+          <button class="btn btn-sm" style="background:var(--low);color:#05210f;border:none;" onclick="decideApproval('${escHtml(a.id)}',true)">✓ Duyệt</button>
+          <button class="btn btn-danger btn-sm" onclick="decideApproval('${escHtml(a.id)}',false)">✗ Từ chối</button>
+        </div>
+      </div>`).join('')}
+    </div>` : ''}
+
+    <div class="card">
+      <label style="margin:0 0 10px;">🧭 Dòng thời gian (${ptState.steps.length} bước)</label>
+      ${ptState.steps.length ? `<div class="pt-timeline">${ptState.steps.map(renderStep).join('')}</div>`
+      : `<div class="empty-state" style="padding:24px;"><p>${active ? 'Agent đang khởi động — các bước sẽ xuất hiện ở đây...' : 'Chưa có bước nào'}</p></div>`}
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);"><label style="margin:0;">🔎 Findings (${ptState.findings.length})</label></div>
+      <div class="table-wrap"><table><thead><tr><th width="100">Severity</th><th>Tiêu đề</th><th>Target</th><th width="90">Verified</th></tr></thead><tbody>
+        ${ptState.findings.length ? ptState.findings.map(f => `<tr class="vuln-row" onclick="openPentestFindingDrawer('${escHtml(f.id)}')">
+          <td>${psevBadge(f.severity)}</td>
+          <td style="word-break:break-word;">${escHtml(f.title)}${f.cve ? ` <span class="text-mono text-sm" style="color:var(--info)">${escHtml(f.cve)}</span>` : ''}</td>
+          <td class="text-mono text-sm" style="word-break:break-all;">${escHtml(f.target || '—')}</td>
+          <td>${f.verified ? '<span style="color:var(--low)">✓ Đã xác thực</span>' : '<span style="color:var(--text3)">—</span>'}</td>
+        </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state" style="padding:24px;"><p>Chưa có finding</p></div></td></tr>`}
+      </tbody></table></div>
+    </div>
+  `;
+}
+function renderStep(s) {
+  return `<details class="pt-step vg-enter">
+    <summary>
+      <div class="pt-step-head">
+        <span class="text-mono" style="color:var(--text3);">#${escHtml(s.step_number)}</span>
+        <strong class="text-mono">${escHtml(s.tool_name || '—')}</strong>
+        <span class="pt-chips">${ptRiskBadge(s.risk_tier)}${ptDecidedBadge(s.decided_by)}${ptOutcomeBadge(s.outcome)}</span>
+      </div>
+      ${s.thought ? `<div class="text-sm" style="margin-top:6px;color:var(--text2);line-height:1.5;">💭 ${escHtml(String(s.thought).slice(0, 180))}${String(s.thought).length > 180 ? '…' : ''}</div>` : ''}
+    </summary>
+    <div style="margin-top:10px;">
+      ${s.thought && String(s.thought).length > 180 ? `<label>Suy luận</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.6;color:var(--text2);">${escHtml(s.thought)}</div>` : ''}
+      ${ptCode(s.tool_input, 'Tham số (tool_input)')}
+      ${ptCode(s.output, 'Kết quả (output)')}
+      <div class="text-sm" style="color:var(--text3);margin-top:6px;">${fmtDate(s.created_at)}</div>
+    </div>
+  </details>`;
+}
+async function decideApproval(id, approve) {
+  let note = null;
+  if (!approve) { note = prompt('Lý do từ chối (tuỳ chọn):') || undefined; }
+  try {
+    await api(`/api/pentest/approvals/${id}/decision`, { method: 'POST', body: { approve, note } });
+    toast(approve ? 'Đã duyệt hành động' : 'Đã từ chối hành động', approve ? 'success' : 'info');
+    loadRunDetail(false);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function stopRun() {
+  if (!confirm('Dừng khẩn cấp run này? Mọi approval đang chờ sẽ bị từ chối.')) return;
+  try {
+    await api(`/api/pentest/runs/${ptState.curRunId}/stop`, { method: 'POST' });
+    toast('Đã gửi lệnh dừng', 'success');
+    stopPentestPoll();
+    loadRunDetail(false);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+
+// ─── Run finding drawer ───────────────────────────────────────
+async function openPentestFindingDrawer(id) {
+  const f = ptState.findings.find(x => x.id === id);
+  if (!f) return;
+  // đảm bảo có traffic của run để gắn bằng chứng
+  if (!ptState.runTraffic.length) {
+    try { ptState.runTraffic = await api(`/api/pentest/runs/${ptState.curRunId}/traffic`) || []; } catch {}
+  }
+  document.getElementById('pf-sev').innerHTML = psevBadge(f.severity);
+  document.getElementById('pf-title').textContent = f.title || 'Finding';
+  document.getElementById('pf-target').textContent = f.target || '';
+  const trafOptions = ptState.runTraffic.map(t => `<option value="${escHtml(t.id)}">${escHtml(t.method || '')} ${escHtml((t.url || t.host || '').slice(0, 70))} [${escHtml(t.status_code ?? '')}]</option>`).join('');
+  document.getElementById('pf-body').innerHTML = `
+    <dl class="kv">
+      <dt>Severity</dt><dd>${psevBadge(f.severity)}</dd>
+      <dt>Target</dt><dd class="text-mono">${escHtml(f.target || '—')}</dd>
+      <dt>Trạng thái</dt><dd>${escHtml(f.status || '—')}</dd>
+      <dt>Xác thực</dt><dd>${f.verified ? '<span style="color:var(--low)">✓ Đã xác thực</span>' : 'Chưa'}</dd>
+      ${f.cwe ? `<dt>CWE</dt><dd class="text-mono">${escHtml(f.cwe)}</dd>` : ''}
+      ${f.cve ? `<dt>CVE</dt><dd class="text-mono" style="color:var(--info)">${escHtml(f.cve)}</dd>` : ''}
+    </dl>
+    ${f.description ? `<div class="separator"></div><label>Mô tả</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.description)}</div>` : ''}
+    ${f.reproduction ? `<div class="separator"></div><label>Tái hiện</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.reproduction)}</div>` : ''}
+    ${f.remediation ? `<div class="separator"></div><label>Khắc phục</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.remediation)}</div>` : ''}
+    ${f.evidence ? `<div class="separator"></div><label>Bằng chứng</label>${ptCode(f.evidence)}` : ''}
+    ${f.evidence_traffic_id ? `<div class="mt-8"><button class="btn btn-ghost btn-sm" onclick="closePentestFindingDrawer();openTrafficDrawer('${escHtml(f.evidence_traffic_id)}',{run:true})">🌐 Xem traffic bằng chứng</button></div>` : ''}
+    <div class="separator"></div>
+    <label>Gắn bằng chứng (traffic của run)</label>
+    ${ptState.runTraffic.length ? `<div class="flex" style="flex-wrap:wrap;">
+      <select id="pf-bind-sel" style="flex:1;min-width:200px;">${trafOptions}</select>
+      <button class="btn btn-primary btn-sm" onclick="bindEvidence('${escHtml(f.id)}')">Gắn</button>
+    </div>` : `<div class="field-hint">Chưa có traffic nào trong run để gắn làm bằng chứng.</div>`}
+  `;
+  document.getElementById('pf-drawer-overlay').classList.add('open');
+  const d = document.getElementById('pf-drawer');
+  d.classList.add('open'); d.setAttribute('aria-hidden', 'false');
+}
+function closePentestFindingDrawer() {
+  document.getElementById('pf-drawer-overlay')?.classList.remove('open');
+  const d = document.getElementById('pf-drawer');
+  if (d) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
+}
+async function bindEvidence(findingId) {
+  const tid = document.getElementById('pf-bind-sel').value;
+  if (!tid) return;
+  try {
+    await api(`/api/pentest/findings/${findingId}/evidence`, { method: 'POST', body: { traffic_id: tid } });
+    toast('Đã gắn bằng chứng — finding đã xác thực', 'success');
+    closePentestFindingDrawer();
+    loadRunDetail(false);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+
+// ─── Traffic (engagement tab) + proxy ─────────────────────────
+async function loadEngagementTraffic() {
+  const el = document.getElementById('pt-eng-traffic-body');
+  if (!el) return;
+  el.innerHTML = SKELETON_HTML;
+  try {
+    const [traffic, proxy] = await Promise.all([
+      api(`/api/pentest/engagements/${ptState.curEngId}/traffic`).catch(() => []),
+      api(`/api/pentest/engagements/${ptState.curEngId}/proxy`).catch(() => ({ running: false })),
+    ]);
+    ptState.engTraffic = traffic || [];
+    ptState.proxy = proxy || { running: false };
+    ptState.bindFindings = [];
+    renderEngagementTraffic();
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderEngagementTraffic() {
+  const el = document.getElementById('pt-eng-traffic-body');
+  const p = ptState.proxy || {};
+  el.innerHTML = `
+    <div class="card">
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+        <div><label style="margin:0;">🛰️ MITM Proxy ghi bằng chứng</label>
+          <div class="pt-chips" style="margin-top:6px;">${p.running ? ptBadge('● Đang chạy', 'var(--low)') : ptBadge('○ Đã tắt', 'var(--text3)')}${p.running && p.port ? `<span class="tag text-mono">cổng ${escHtml(p.port)}</span>` : ''}</div>
+        </div>
+        <div class="flex">
+          ${p.running ? `<button class="btn btn-danger btn-sm" onclick="stopProxy()">Dừng proxy</button>`
+      : `<button class="btn btn-primary btn-sm" onclick="startProxy()">Khởi động proxy</button>`}
+        </div>
+      </div>
+      ${p.running ? `<div class="notice" style="margin:12px 0 0;">
+        Trỏ <span class="text-mono">HTTP(S)_PROXY</span> hoặc proxy trình duyệt tới <strong class="text-mono">host:${escHtml(p.port || 8788)}</strong>, rồi
+        <a href="/api/pentest/proxy/ca.crt" download>Tải CA</a> và import vào trình duyệt/hệ điều hành để bắt được HTTPS.
+        Sau đó thao tác trên ứng dụng — mọi request/response trong scope sẽ được ghi lại làm bằng chứng.
+      </div>` : `<div class="field-hint" style="margin-top:10px;">Cổng mặc định <span class="text-mono">8788</span>. Proxy chỉ ghi traffic trong scope của engagement.</div>`}
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);"><label style="margin:0;">🌐 Traffic đã ghi (${ptState.engTraffic.length})</label></div>
+      <div class="table-wrap" style="max-height:520px;overflow:auto;"><table><thead><tr><th width="90">Nguồn</th><th width="70">Method</th><th>URL</th><th width="70">Status</th><th width="160">Thời gian</th></tr></thead><tbody>
+        ${ptState.engTraffic.length ? ptState.engTraffic.map(trafficRow).join('') : `<tr><td colspan="5"><div class="empty-state" style="padding:24px;"><p>Chưa có traffic nào</p></div></td></tr>`}
+      </tbody></table></div>
+    </div>
+  `;
+}
+const PT_SRC_COLOR = { http_probe: 'var(--info)', nuclei: 'var(--high)', proxy: 'var(--brand-500)', replay: 'var(--medium)', manual: 'var(--text3)' };
+function trafficRow(t, runCtx) {
+  const sc = t.status_code;
+  const scColor = sc == null ? 'var(--text3)' : (sc >= 500 ? 'var(--critical)' : sc >= 400 ? 'var(--high)' : sc >= 300 ? 'var(--medium)' : 'var(--low)');
+  return `<tr class="vuln-row" onclick="openTrafficDrawer('${escHtml(t.id)}',{run:${runCtx ? 'true' : 'false'}})">
+    <td>${ptBadge(t.source || '—', PT_SRC_COLOR[t.source] || 'var(--text3)')}</td>
+    <td class="text-mono">${escHtml(t.method || '—')}</td>
+    <td class="text-mono text-sm" style="word-break:break-all;max-width:360px;">${escHtml(t.url || t.host || '—')}</td>
+    <td class="text-mono" style="color:${scColor}">${escHtml(sc ?? '—')}</td>
+    <td class="text-sm">${fmtDate(t.created_at)}</td>
+  </tr>`;
+}
+async function startProxy() {
+  try {
+    const r = await api(`/api/pentest/engagements/${ptState.curEngId}/proxy/start`, { method: 'POST', body: { port: 8788 } });
+    toast('Đã khởi động proxy ở cổng ' + r.port, 'success');
+    loadEngagementTraffic();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function stopProxy() {
+  try {
+    await api(`/api/pentest/engagements/${ptState.curEngId}/proxy/stop`, { method: 'POST' });
+    toast('Đã dừng proxy', 'success');
+    loadEngagementTraffic();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+
+// ─── Traffic viewer drawer ────────────────────────────────────
+let curTraffic = null;
+async function openTrafficDrawer(id, opts) {
+  opts = opts || {};
+  document.getElementById('ptt-badges').innerHTML = '<span class="text-sm">Đang tải...</span>';
+  document.getElementById('ptt-url').textContent = '';
+  document.getElementById('ptt-body').innerHTML = SKELETON_HTML;
+  document.getElementById('pt-traffic-overlay').classList.add('open');
+  const d = document.getElementById('pt-traffic-drawer');
+  d.classList.add('open'); d.setAttribute('aria-hidden', 'false');
+  try {
+    const t = await api(`/api/pentest/traffic/${id}`);
+    curTraffic = t;
+    renderTrafficDrawer(t, !!opts.run);
+  } catch (e) {
+    document.getElementById('ptt-body').innerHTML = `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
+  }
+}
+function renderTrafficDrawer(t, runCtx) {
+  const sc = t.status_code;
+  const scColor = sc == null ? 'var(--text3)' : (sc >= 500 ? 'var(--critical)' : sc >= 400 ? 'var(--high)' : sc >= 300 ? 'var(--medium)' : 'var(--low)');
+  document.getElementById('ptt-badges').innerHTML = `${ptBadge(t.source || '—', PT_SRC_COLOR[t.source] || 'var(--text3)')}<span class="badge" style="--b:var(--info)">${escHtml(t.method || 'GET')}</span><span class="badge" style="--b:${scColor}">${escHtml(sc ?? '—')}</span>`;
+  document.getElementById('ptt-url').textContent = t.url || t.host || '';
+  const hdr = h => Object.entries(h || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  const findings = runCtx ? ptState.findings : [];
+  document.getElementById('ptt-body').innerHTML = `
+    <div class="flex" style="flex-wrap:wrap;margin-bottom:12px;">
+      <button class="btn btn-primary btn-sm" onclick="replayTraffic('${escHtml(t.id)}')">🔁 Replay</button>
+      ${findings.length ? `<select id="ptt-bind-finding" style="width:auto;min-width:160px;">${findings.map(f => `<option value="${escHtml(f.id)}">${escHtml((f.title || '').slice(0, 50))}</option>`).join('')}</select>
+      <button class="btn btn-ghost btn-sm" onclick="bindTrafficToFinding('${escHtml(t.id)}')">📎 Gắn vào finding</button>` : ''}
+    </div>
+    <div id="ptt-replay-result"></div>
+    <label>⬆ Request headers</label>${ptCode(hdr(t.request_headers))}
+    ${t.request_body ? `<label>Request body</label>${ptCode(t.request_body)}` : ''}
+    <div class="separator"></div>
+    <label>⬇ Response headers</label>${ptCode(hdr(t.response_headers))}
+    ${t.response_body != null ? `<label>Response body</label>${ptCode(t.response_body)}` : ''}
+    <dl class="kv" style="margin-top:14px;">
+      <dt>Host</dt><dd class="text-mono">${escHtml(t.host || '—')}</dd>
+      <dt>Scheme</dt><dd>${escHtml(t.scheme || '—')}</dd>
+      <dt>Thời lượng</dt><dd>${t.duration_ms != null ? escHtml(t.duration_ms) + ' ms' : '—'}</dd>
+      <dt>Thời gian</dt><dd>${fmtDate(t.created_at)}</dd>
+    </dl>
+  `;
+}
+function closeTrafficDrawer() {
+  document.getElementById('pt-traffic-overlay')?.classList.remove('open');
+  const d = document.getElementById('pt-traffic-drawer');
+  if (d) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
+}
+async function replayTraffic(id) {
+  const box = document.getElementById('ptt-replay-result');
+  box.innerHTML = '<div class="text-sm">Đang replay...</div>';
+  try {
+    const r = await api(`/api/pentest/traffic/${id}/replay`, { method: 'POST' });
+    box.innerHTML = `<div class="notice" style="margin-bottom:12px;">✅ Replay — status <strong>${escHtml(r.status_code)}</strong>${r.new_traffic_id ? ` · <a href="#" onclick="openTrafficDrawer('${escHtml(r.new_traffic_id)}',{run:false});return false;">xem traffic mới</a>` : ''}</div>
+      ${r.response_preview ? `<label>Response preview</label>${ptCode(r.response_preview)}` : ''}`;
+    if (ptState.engTab === 'traffic') loadEngagementTraffic();
+  } catch (e) { box.innerHTML = `<div class="notice" style="border-color:color-mix(in srgb,var(--critical) 40%,transparent);">Lỗi replay: ${escHtml(e.message)}</div>`; }
+}
+async function bindTrafficToFinding(trafficId) {
+  const sel = document.getElementById('ptt-bind-finding');
+  if (!sel || !sel.value) return;
+  try {
+    await api(`/api/pentest/findings/${sel.value}/evidence`, { method: 'POST', body: { traffic_id: trafficId } });
+    toast('Đã gắn traffic vào finding — đã xác thực', 'success');
+    closeTrafficDrawer();
+    loadRunDetail(false);
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
 }
 
 // ─── Init ──────────────────────────────────────────────────────
