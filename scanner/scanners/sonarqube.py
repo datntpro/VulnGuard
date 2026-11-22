@@ -101,7 +101,9 @@ class SonarQubeScanner(BaseScanner):
         super().__init__(scan_path)
         self.url = (_cfg("SONARQUBE_URL") or "").rstrip("/")
         self.token = _cfg("SONARQUBE_TOKEN") or ""
-        self.project_key = "vulnguard-" + hashlib.sha1(os.path.abspath(scan_path).encode()).hexdigest()[:12]
+        # sha1 chỉ để tạo project key ổn định (không dùng cho mục đích bảo mật)
+        self.project_key = "vulnguard-" + hashlib.sha1(
+            os.path.abspath(scan_path).encode(), usedforsecurity=False).hexdigest()[:12]
 
     def is_available(self) -> bool:
         return bool(self.url and self.token and shutil.which(self.tool_name))
