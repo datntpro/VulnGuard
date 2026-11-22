@@ -27,15 +27,29 @@ VulnGuard không còn chỉ quét code — nay là nền tảng bảo mật hợ
 
 ## 🚀 Quick Start
 
-### Cách nhanh nhất — trình cài đặt tương tác (chọn công cụ)
+### Cách nhanh nhất — trình cài đặt tương tác
 
 ```bash
-bash setup.sh      # chọn Docker hoặc Native; nếu Native: tự chọn nhóm công cụ cần cài
+bash setup.sh
 ```
-- Chạy production tại **http://localhost:8080**; lần đầu tạo tài khoản ADMIN trên trang đăng nhập.
-- `bash setup.sh --check` — xem công cụ nào đã cài.
-- `bash setup.sh --tools "sast sca web pentest" --no-run` — cài không tương tác.
-- Cài xong chạy lại: `bash run.sh` (production) · Demo có dữ liệu mẫu: `bash run_demo.sh`.
+Trình cài đặt sẽ:
+1. Hỏi **Docker** hay **Native** (Python venv).
+2. Nếu Native: cho **chọn nhóm công cụ** cần cài — SAST · SCA · Secrets · IaC · Container · Web/DAST · Pentest · AI (Ollama). Tự phát hiện `apt/dnf/yum/brew`, tải binary theo kiến trúc.
+3. **Tự sinh mật khẩu ADMIN** và tạo tài khoản — mật khẩu hiện trên màn hình và lưu `storage/admin_credentials.txt` (chmod 600). *Đổi mật khẩu sau khi đăng nhập rồi xoá file này.*
+4. Chạy production tại **http://localhost:8080**.
+
+| Lệnh | Tác dụng |
+|---|---|
+| `bash setup.sh` | Cài tương tác + tạo ADMIN + chạy production |
+| `bash setup.sh --check` | Liệt kê công cụ đã/chưa cài |
+| `bash setup.sh --tools "sast sca web pentest" --no-run` | Cài không tương tác, không chạy |
+| `bash setup.sh --admin-email you@corp.vn` | Đặt email ADMIN (vẫn tự sinh mật khẩu) |
+| `bash run.sh` | Chạy lại **production** (đã cài rồi) |
+| `bash run_demo.sh` | Chạy **demo** có sẵn dữ liệu mẫu mọi trang |
+
+**Yêu cầu Native:** Python 3.11+. Công cụ quét (nmap/nuclei/…) chỉ cần khi quét thật — có thể bỏ qua nếu chỉ dùng Document Review/xem UI. AI local cần Ollama (tuỳ chọn); hoặc dùng Claude/Bedrock trong Settings → AI Provider.
+
+> Bản **demo**: đăng nhập `demo@vulnguard.local` / `VulnGuardDemo!` (dữ liệu mẫu, không chạy scan thật).
 
 <details><summary>Cách thủ công (Docker Compose)</summary>
 
@@ -137,8 +151,11 @@ Sau đó vào Web UI → **Co-work** → "+ Thêm Folder", nhập absolute path 
 | **Grype** | Container | Anchore CVE scanner cho container images |
 | **Gitleaks** | Secrets | API keys, tokens, credentials trong code/git |
 | **detect-secrets** | Secrets | Entropy analysis + keyword detection |
+| **Nuclei** | DAST / Web | 10k+ template CVE/misconfig/exposure (quét URL đã crawl) |
 
 > Tất cả tools có thể **bật/tắt riêng lẻ** trong Settings → Scanner Tools.
+>
+> **Pentest Agent** dùng thêm: **katana** (crawl), **nmap** (port/service), **ffuf** (content discovery), **sqlmap** (SQLi). Cài qua `bash setup.sh` (chọn nhóm Web/Pentest).
 
 ---
 
@@ -156,6 +173,12 @@ Sau đó vào Web UI → **Co-work** → "+ Thêm Folder", nhập absolute path 
 - **Exploitability Public/Private**: Đánh giá rủi ro theo môi trường
 - **Giải thích tiếng Việt**: Developer dễ hiểu, không cần đọc CVE gốc
 - **Hướng dẫn fix chi tiết**: Kèm code snippet, tên file, số dòng
+
+### ☁️ Cloud AI — giảm false positive (tuỳ chọn)
+- Ngoài Ollama local: **Claude API** (API key / **Workload Identity Federation** cho tenant doanh nghiệp / environment) và **Amazon Bedrock** (IAM — nền tảng Kiro dùng).
+- 3 chế độ: **local-only** (không gửi gì ra ngoài) · **hybrid** (Ollama chấm trước; finding nặng hoặc FP% không chắc chắn mới gửi Claude xác minh) · **cloud-only**.
+- Chính xác hơn nhờ **structured output** + gửi **ngữ cảnh code thật** quanh dòng lỗi; **redact secret** trước khi gửi; API key **mã hoá Fernet**.
+- Nút **"Phân tích lại bằng Claude"** cho từng vuln. Cấu hình: **Settings → AI Provider** (chỉ ADMIN).
 
 ### 📄 Báo cáo AI (HTML)
 - Tạo báo cáo HTML hoàn chỉnh sau scan
@@ -188,59 +211,77 @@ Sau đó vào Web UI → **Co-work** → "+ Thêm Folder", nhập absolute path 
 - **Compare 2 version**: xem tiêu chí nào cải thiện / regress / vẫn chưa đáp ứng
 - Xuất báo cáo HTML để gửi email cho author tài liệu
 
+### 🔑 Đăng nhập & phân quyền (RBAC)
+- 3 vai trò: **ADMIN** (cấu hình AI/scanner/connector, quản lý user) · **ANALYST** (chạy scan, đổi trạng thái vuln, waiver) · **VIEWER** (chỉ xem).
+- Session **JWT cookie HttpOnly**; tạo ADMIN đầu tiên khi mở app, hoặc `setup.sh` **tự sinh mật khẩu**.
+- Tất cả `/api/*` yêu cầu đăng nhập; thao tác ADMIN enforce ở middleware.
+
+### 🌐 Web Scan (Nuclei)
+- Quét lỗ hổng web bằng **Nuclei** (10k+ template CVE/misconfig/exposure) trên các URL **katana** đã crawl.
+- Stream finding realtime; **bắt buộc xác nhận quyền quét** domain; bảng finding + curl tái hiện.
+
+### 🎯 Pentest Agent — tự động hoá pentest *có kiểm soát*
+- Vòng lặp **planner/worker** do Claude lái, chạy công cụ thật (nmap, nuclei, ffuf, sqlmap).
+- **Lan can bắt buộc**: scope gate (chặn ngoài phạm vi, loopback) · risk gate (recon/quét an toàn tự chạy; **xâm lấn/phá huỷ cần người duyệt**) · uỷ quyền + hạn · budget bước/token · **kill switch** · audit trail (ai/cái gì quyết định).
+- **Chuỗi tấn công bền (todolist)**; **chạy tool song song** (`max_parallel`).
+- **Bằng chứng**: gắn request/response thật vào finding; **recording MITM proxy** (CA tự sinh) bắt traffic của tool & trình duyệt; **replay** trong scope.
+- Chi tiết: `docs/PENTEST_AGENT.md`.
+
+### 🗂️ Asset Inventory + Risk Scoring theo ngữ cảnh
+- Gộp tài sản theo **mac / hostname / ip** (NAC + EDR thấy cùng máy → 1 asset).
+- **Điểm rủi ro giải thích được** (kiểu Tenable VPR / Nexpose): `CVSS × EPSS × KEV × độ quan trọng × mức phơi bày`, cộng thêm khi có **cảnh báo EDR đang hoạt động**. Cùng 1 CVE: máy critical/internet có thể 100đ, máy isolated chỉ vài điểm.
+- Feed **EPSS** (FIRST) + **CISA KEV**, cache offline; sửa criticality/exposure → tự tính lại.
+
+### 🔌 Connectors XDR/EDR/NAC + MCP
+- **Trellix XDR** (OAuth2), **Trend Micro Vision One** (Bearer), **FortiNAC** (token) — kéo asset/alert/software về inventory; secret **mã hoá at-rest**; đường dẫn endpoint cấu hình được.
+- Thêm vendor khác = 1 adapter kế thừa `BaseConnector`.
+- **MCP server** expose dữ liệu (asset, EPSS/KEV, ngữ cảnh EDR) cho **Pentest Agent / Claude Desktop** (read-only; cô lập host phải qua duyệt).
+- Chi tiết: `docs/CONNECTORS_MCP.md`.
+
+### 📊 Dashboard rủi ro toàn hệ thống
+- Gom **code + web + pentest + tài sản** thành một **điểm tư thế rủi ro** + nhãn.
+- Findings theo nguồn, donut rủi ro tài sản, **top rủi ro**, hàng chờ (chờ duyệt / scan đang chạy), độ phủ, xu hướng scan 14 ngày.
+
 ---
 
 ## 📁 Cấu trúc Project
 
 ```
 VulnGuard/
-├── docker-compose.yml          # Container orchestration
-├── .env                        # Cấu hình (SCAN_WORKSPACE, OLLAMA_MODEL...)
-├── .env.example                # Cấu hình mẫu
+├── setup.sh / run.sh / run_demo.sh   # Cài tương tác · chạy prod · chạy demo
+├── docker-compose.yml                # Docker orchestration
+├── .env.example / .env.native.example
 ├── api/
-│   ├── Dockerfile              # All-in-one: API + tất cả Scanner tools
-│   ├── requirements.txt        # Python deps cho API
-│   ├── config.py               # App settings (pydantic-settings)
-│   ├── database.py             # SQLite connection
-│   ├── main.py                 # FastAPI app entry point
-│   ├── models.py               # DB models: Project, Scan, Vulnerability, Waiver
-│   ├── schemas.py              # Pydantic schemas
+│   ├── Dockerfile  config.py  database.py  main.py
+│   ├── models.py  schemas.py                 # Project/Scan/Vulnerability/Waiver
+│   ├── security.py  auth_models.py           # JWT, hash, mã hoá secret, User/RBAC
+│   ├── asset_models.py  connector_models.py  # Asset inventory, Connector config
+│   ├── pentest_models.py  webscan_models.py  docreview_models.py
+│   ├── services/            # ollama_client, ai_config, chat/file/summarizer...
 │   └── routes/
-│       ├── projects.py         # CRUD projects
-│       ├── scans.py            # Trigger scan, live progress, export
-│       ├── vulns.py            # Vulnerability management, waivers
-│       ├── compare.py          # Scan comparison, approve check
-│       ├── report.py           # AI HTML report generator
-│       ├── settings.py         # Scanner health check, enable/disable
-│       ├── ollama.py           # Ollama model management
-│       └── docreview.py        # Document Review API (upload, review, versioning)
-│   ├── docreview_models.py     # DB models: Document, DocumentVersion, ReviewFinding
-│   └── docreview_schemas.py    # Pydantic schemas cho Document Review
+│       ├── auth.py          # Đăng nhập, RBAC, quản lý user
+│       ├── ai.py            # Cloud AI (Claude/Bedrock) config + reanalyze
+│       ├── projects.py scans.py vulns.py compare.py report.py settings.py ollama.py
+│       ├── webscans.py      # Web scan (Nuclei)
+│       ├── domains.py       # Domain sitemap / crawl (katana)
+│       ├── pentest.py       # Pentest Agent: engagement/run/approval/traffic/proxy
+│       ├── assets.py intel.py connectors.py   # Asset inventory, EPSS/KEV, XDR/EDR/NAC
+│       ├── dashboard.py     # Dashboard rủi ro tổng hợp
+│       └── docreview.py coworker.py file_assistant.py
 ├── scanner/
-│   ├── orchestrator.py         # Chạy song song, live callback, dedup
-│   ├── ai_analyzer.py          # Ollama integration, tiếng Việt
-│   ├── doc_checklist.py        # Checklist OWASP ASVS/SAMM theo loại tài liệu
-│   ├── doc_extractor.py        # Extract text từ PDF/DOCX/MD/TXT
-│   ├── doc_reviewer.py         # AI review tài liệu qua Ollama
-│   ├── doc_review_report.py    # HTML report cho Document Review
-│   └── scanners/
-│       ├── base.py             # BaseScanner abstract class
-│       ├── sast.py             # Semgrep (bundled rules + online), Bandit
-│       ├── sca.py              # Trivy SCA, pip-audit
-│       ├── container.py        # Trivy container, Grype
-│       ├── iac.py              # Checkov, TrivyIaC, Hadolint
-│       ├── secrets.py          # Gitleaks, detect-secrets
-│       └── rules/
-│           └── python-security.yaml  # Bundled Semgrep rules (offline)
-├── web/
-│   └── index.html              # Single-page Web Dashboard
-└── storage/                    # Persistent data (Docker volume)
-    ├── db/                     # SQLite database
-    ├── scanner_config.json     # Scanner enable/disable config
-    └── documents/              # File tài liệu Document Review (không commit)
+│   ├── orchestrator.py  ai_analyzer.py  cloud_ai.py   # scan engine + AI (local/cloud)
+│   ├── scanners/        # sast, sca, container, iac, secrets (+ rules offline)
+│   ├── crawler/         # katana_runner, nuclei_runner, waf_export
+│   ├── intel/feeds.py   # EPSS (FIRST) + KEV (CISA), cache offline
+│   ├── assets/          # scoring.py (risk), service.py (dedup/upsert/recompute)
+│   ├── connectors/      # base + trellix / trendmicro / fortinac + registry + sync + MITM proxy
+│   └── pentest/         # agent, toolbelt, gating, scope, traffic, proxy (Pentest Agent)
+├── mcp_server/server.py              # MCP server (expose asset/intel cho agent/Claude Desktop)
+├── scripts/                          # seed_demo.py, bootstrap_admin.py
+├── web/                              # index.html (SPA), login.html, agent.html, brand.css
+├── docs/                             # PENTEST_AGENT.md, CONNECTORS_MCP.md, BRAND.md, screenshots
+└── storage/                          # SQLite, config, secret.key, pentest_ca, intel cache
 ```
-
----
 
 ## 📡 API Endpoints
 
@@ -297,6 +338,41 @@ PATCH  /api/docreview/versions/{id}/send-back  Gửi lại bên viết tài li�
 PATCH  /api/docreview/versions/{id}/accept     Chấp nhận tài liệu
 GET    /api/docreview/versions/{id}/export     Xuất báo cáo HTML
 
+# ── Auth & RBAC ──
+GET    /api/auth/status                        setup_required / auth_enabled
+POST   /api/auth/setup | /api/auth/login | /api/auth/logout | GET /api/auth/me
+GET/POST/PATCH/DELETE /api/auth/users          Quản lý user (ADMIN)
+
+# ── Cloud AI (Claude / Bedrock) ──
+GET/PUT /api/ai/config                         Cấu hình provider (ADMIN)
+POST   /api/ai/test                            Kiểm tra kết nối cloud
+POST   /api/vulns/{id}/reanalyze               Phân tích lại 1 vuln bằng Claude
+
+# ── Web Scan (Nuclei) ──
+POST/GET /api/domains/{id}/webscans | GET /api/webscans/{id}[/findings]
+PATCH  /api/webscans/findings/{id}/status
+
+# ── Pentest Agent ──
+CRUD   /api/pentest/engagements                Scope + uỷ quyền
+POST/GET /api/pentest/engagements/{id}/runs    Khởi chạy / liệt kê run
+GET    /api/pentest/runs/{id}[/steps|/findings|/approvals|/traffic]
+POST   /api/pentest/approvals/{id}/decision    Duyệt/từ chối hành động
+POST   /api/pentest/runs/{id}/stop             Kill switch
+POST   /api/pentest/findings/{id}/evidence | /api/pentest/traffic/{id}/replay
+*      /api/pentest/engagements/{id}/proxy/{start,stop} | GET /api/pentest/proxy/ca.crt
+
+# ── Asset inventory + Risk + Threat intel ──
+GET    /api/assets[?sort=risk] | /api/assets/summary | /api/assets/{id}
+PATCH  /api/assets/{id}  (criticality/exposure) | POST /api/assets/recompute
+GET    /api/intel/status | POST /api/intel/refresh   (EPSS/KEV)
+
+# ── Connectors (XDR/EDR/NAC) ── (ADMIN)
+GET    /api/connectors/kinds | CRUD /api/connectors
+POST   /api/connectors/{id}/test | /api/connectors/{id}/sync
+
+# ── Dashboard ──
+GET    /api/dashboard/overview                 Tổng hợp rủi ro toàn hệ thống
+
 # Swagger UI: http://localhost:8080/docs
 ```
 
@@ -342,16 +418,36 @@ OLLAMA_TIMEOUT=120            # Timeout AI analysis (giây)
 # Scan limits
 MAX_SCANS_PER_PROJECT=5       # Rolling: tự xóa scan cũ nhất
 BLOCK_SEVERITY_THRESHOLD=HIGH # Block approve nếu còn OPEN >= mức này
+
+# ── Auth (đăng nhập Web UI) ──
+AUTH_ENABLED=true            # false chỉ cho dev 1 người
+VULNGUARD_SECRET_KEY=        # trống = tự sinh storage/secret.key (ký session + mã hoá secret)
+SESSION_TTL_HOURS=12
+COOKIE_SECURE=false          # true khi chạy sau HTTPS
+
+# ── Web Scan (Nuclei) ──
+MAX_WEBSCANS_PER_DOMAIN=5
+NUCLEI_TIMEOUT_MINUTES=60
+
+# ── Pentest proxy (bắt bằng chứng) ──
+PENTEST_PROXY_PORT=8788
+
+# Native (run.sh/setup.sh tự đặt): DEPLOY_MODE=native, DATABASE_URL, AI_CONFIG_FILE
 ```
+
+> **Cloud AI** (Claude API key / WIF / Bedrock) cấu hình trong **Settings → AI Provider** (mã hoá at-rest), không qua `.env`.
 
 ---
 
 ## 🔒 Bảo mật & Privacy
 
-- VulnGuard và Ollama chạy **hoàn toàn local** — không gửi code hay kết quả ra ngoài
-- Không cần account, không cần API key nào
-- Database SQLite lưu tại `./storage/db/` — tự backup khi cần
-- Docker socket mount chỉ dùng để scan container images
+- **Mặc định hoàn toàn local**: Ollama + scanner chạy tại chỗ, không gửi code/kết quả ra ngoài.
+- **Đăng nhập + RBAC** (ADMIN/ANALYST/VIEWER); `setup.sh` tự sinh mật khẩu ADMIN. Session JWT cookie HttpOnly.
+- **Secret mã hoá at-rest** (Fernet): API key cloud AI, credential connector XDR/NAC — chỉ hiện hint, không lộ raw.
+- **Cloud AI là tuỳ chọn** (opt-in). Khi bật hybrid/cloud, chỉ gửi finding + ngữ cảnh code đã **redact secret** lên Claude/Bedrock; chế độ local-only không gửi gì ra ngoài.
+- **Pentest Agent** chỉ chạy trong **scope đã uỷ quyền**; hành động phá huỷ qua người duyệt; có audit trail đầy đủ.
+- Database SQLite + `storage/secret.key` (chmod 600) + `storage/admin_credentials.txt` — nhớ backup & bảo vệ.
+- Docker socket mount chỉ dùng để scan container images.
 
 ---
 
