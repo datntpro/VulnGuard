@@ -40,6 +40,15 @@ TOOL_REGISTRY = [
         "icon": "🐍",
     },
     {
+        "tool": "sonar-scanner",
+        "label": "SonarQube",
+        "description": "SAST sâu theo data-flow (Community) — giảm false positive; cần SONARQUBE_URL + token (server sẵn có hoặc docker compose --profile sonar).",
+        "scan_type": "SAST",
+        "check_cmd": ["sonar-scanner", "--version"],
+        "install_hint": "docker compose --profile sonar up -d  (hoặc trỏ SONARQUBE_URL tới server sẵn có)",
+        "icon": "📡",
+    },
+    {
         "tool": "semgrep",
         "label": "Semgrep",
         "description": "Multi-language SAST scanner — Python, JS, Java, Go, C... dùng bundled rules + online registry.",

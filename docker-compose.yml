@@ -29,11 +29,56 @@ services:
       - COWORKER_TIMEOUT=${COWORKER_TIMEOUT:-30}
       - MAX_SCANS_PER_PROJECT=${MAX_SCANS_PER_PROJECT:-5}
       - APP_ENV=${APP_ENV:-production}
+      # SonarQube (tuỳ chọn) — trỏ server sẵn có, hoặc dùng service bundled bên dưới
+      - SONARQUBE_URL=${SONARQUBE_URL:-}
+      - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
     # Cần extra_hosts để container resolve host.docker.internal trên Linux
     # macOS/Windows Docker Desktop tự xử lý, không cần dòng này
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # SonarQube Community (TUỲ CHỌN) — bật bằng:  docker compose --profile sonar up -d
+  # Mặc định KHÔNG chạy (nặng RAM). Sau khi lên, tạo token rồi đặt vào .env:
+  #   SONARQUBE_URL=http://sonarqube:9000   SONARQUBE_TOKEN=<token>
+  # Lưu ý host Linux cần: sysctl -w vm.max_map_count=524288
+  # ─────────────────────────────────────────────
+  sonarqube:
+    image: sonarqube:community
+    container_name: vulnguard-sonarqube
+    profiles: ["sonar"]
+    depends_on:
+      - sonarqube-db
+    ports:
+      - "${SONARQUBE_PORT:-9000}:9000"
+    environment:
+      - SONAR_JDBC_URL=jdbc:postgresql://sonarqube-db:5432/sonar
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=${SONARQUBE_DB_PASSWORD:-sonar}
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    restart: unless-stopped
+
+  sonarqube-db:
+    image: postgres:16-alpine
+    container_name: vulnguard-sonarqube-db
+    profiles: ["sonar"]
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=${SONARQUBE_DB_PASSWORD:-sonar}
+      - POSTGRES_DB=sonar
+    volumes:
+      - sonarqube_db:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_db:
 
 networks:
   default:

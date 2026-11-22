@@ -86,6 +86,19 @@ RUN ARCH=${TARGETARCH:-amd64} \
     && tar -xzf /tmp/ffuf.tgz -C /usr/local/bin ffuf \
     && rm -f /tmp/ffuf.tgz && chmod +x /usr/local/bin/ffuf \
     || echo "⚠ ffuf install failed — skipping (chỉ ảnh hưởng content_discovery của Pentest Agent)"
+
+# 8. SonarScanner CLI (kèm JRE) — cho tính năng SonarQube (SAST sâu). Tuỳ chọn.
+#    Chỉ hữu dụng khi SONARQUBE_URL/TOKEN được cấu hình (server bundled hoặc sẵn có).
+ARG SONAR_SCANNER_VERSION=6.2.1.4610
+RUN ARCH=${TARGETARCH:-amd64} \
+    && if [ "$ARCH" = "arm64" ]; then SC_ARCH="aarch64"; else SC_ARCH="x64"; fi \
+    && curl -sL \
+        "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-${SC_ARCH}.zip" \
+        -o /tmp/sonar.zip \
+    && unzip -q /tmp/sonar.zip -d /opt \
+    && ln -s /opt/sonar-scanner-${SONAR_SCANNER_VERSION}-linux-${SC_ARCH}/bin/sonar-scanner /usr/local/bin/sonar-scanner \
+    && rm -f /tmp/sonar.zip \
+    || echo "⚠ sonar-scanner install failed — skipping (chỉ ảnh hưởng tính năng SonarQube)"
 RUN git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists 2>/dev/null \
     || echo "⚠ SecLists clone failed — content_discovery cần chỉ định wordlist thủ công"
 
