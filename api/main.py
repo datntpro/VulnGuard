@@ -51,6 +51,7 @@ def _run_migrations():
             "ALTER TABLE vulnerabilities ADD COLUMN ai_provider VARCHAR(120)",
             "ALTER TABLE pentest_findings ADD COLUMN evidence_traffic_id VARCHAR",
             "ALTER TABLE pentest_runs ADD COLUMN todolist TEXT",
+            "ALTER TABLE pentest_engagements ADD COLUMN max_parallel INTEGER DEFAULT 3",
         ):
             try:
                 conn.execute(text(ddl))

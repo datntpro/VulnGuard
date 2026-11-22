@@ -197,6 +197,16 @@ else
     log "nmap đã có — bỏ qua"
 fi
 
+# 2.8 sqlmap — kiểm thử SQLi cho Pentest Agent (DESTRUCTIVE, luôn qua approval)
+if ! command -v sqlmap >/dev/null 2>&1; then
+    log "Cài sqlmap..."
+    if command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y sqlmap || warn "sqlmap install thất bại";
+    elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y sqlmap || warn "sqlmap install thất bại";
+    else pip install sqlmap 2>/dev/null || warn "Cài sqlmap thủ công cho Pentest Agent"; fi
+else
+    log "sqlmap đã có — bỏ qua"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # 3. Python virtualenv + dependencies
 # ─────────────────────────────────────────────────────────────

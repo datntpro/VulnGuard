@@ -11,7 +11,7 @@ ARG TARGETARCH
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget git unzip ca-certificates gnupg apt-transport-https \
-    nmap dnsutils \
+    nmap dnsutils sqlmap \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
