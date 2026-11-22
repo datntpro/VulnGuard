@@ -385,6 +385,9 @@
   <div class="nav-item" onclick="navigate('coworker')" id="nav-coworker"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7.5 9.5 3 2.5-3 2.5"/><path d="M13 15h4"/></svg><span>Co-work</span></div>
   <div class="nav-section">Pentest</div>
   <div class="nav-item" onclick="navigate('pentest')" id="nav-pentest"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="2"/></svg><span>Pentest Agent</span></div>
+  <div class="nav-section">Tài sản &amp; Rủi ro</div>
+  <div class="nav-item" onclick="navigate('assets')" id="nav-assets"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h0M7 16.5h0"/></svg><span>Asset Inventory</span></div>
+  <div class="nav-item" onclick="navigate('connectors')" id="nav-connectors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3M15 7V3M8 7h8v4a4 4 0 0 1-8 0z"/><path d="M12 15v3a3 3 0 0 0 3 3h1"/></svg><span>Kết nối (XDR/NAC)</span></div>
   <div class="nav-section">Hệ thống</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Settings</span></div>
   <div class="sidebar-footer">
@@ -617,6 +620,55 @@
     </div>
     <div id="pentest-run-content">
       <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- ASSET INVENTORY PAGE -->
+  <div class="page" id="page-assets">
+    <div class="flex-between mb-16">
+      <h1>🖥️ Asset Inventory</h1>
+      <div class="flex" style="flex-wrap:wrap;">
+        <span id="intel-chip" class="chip" title="Trạng thái feed threat intel"><span class="vg-skeleton" style="width:150px;height:14px;display:inline-block;border-radius:4px;"></span></span>
+        <button class="btn btn-ghost btn-sm" id="intel-refresh-btn" onclick="refreshIntel()">↻ Cập nhật feed</button>
+        <button class="btn btn-ghost btn-sm" onclick="recomputeAssets()">🧮 Tính lại điểm</button>
+      </div>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      Điểm rủi ro tổng hợp từ <strong>CVSS × EPSS/KEV × độ quan trọng × mức phơi bày</strong>, cộng thêm khi có
+      <strong>cảnh báo EDR đang hoạt động</strong> (đang bị tấn công thực tế). Nhấp một dòng để xem phân tích chi tiết.
+    </div>
+    <div id="assets-stats" class="mb-16 vg-stagger" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;"></div>
+    <div class="filter-bar">
+      <select id="asset-minrisk" onchange="loadAssets()" title="Lọc theo điểm rủi ro tối thiểu">
+        <option value="0">Mọi mức rủi ro</option>
+        <option value="80">≥ 80 — Nguy hiểm</option>
+        <option value="60">≥ 60 — Cao</option>
+        <option value="35">≥ 35 — Trung bình</option>
+      </select>
+      <select id="asset-source" onchange="loadAssets()" title="Lọc theo nguồn dữ liệu"><option value="">Mọi nguồn</option></select>
+      <select id="asset-sort" onchange="loadAssets()" title="Sắp xếp">
+        <option value="risk">Sắp xếp: Rủi ro ↓</option>
+        <option value="hostname">Sắp xếp: Hostname A→Z</option>
+      </select>
+    </div>
+    <div id="assets-table" class="card" style="padding:0;overflow-x:auto;">
+      <div style="padding:16px;" class="sk-list" aria-busy="true"><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- CONNECTORS PAGE -->
+  <div class="page" id="page-connectors">
+    <div class="flex-between mb-16">
+      <h1>🔌 Kết nối (XDR / NAC)</h1>
+      <button class="btn btn-primary" id="conn-add-btn" onclick="openConnectorModal()">+ Thêm kết nối</button>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      Kết nối tới nền tảng <strong>EDR/XDR</strong> (Trellix, Trend Micro) và <strong>NAC</strong> (FortiNAC) để
+      đồng bộ tài sản, phần mềm và cảnh báo. <strong>Secret được mã hoá, không bao giờ hiển thị lại</strong> —
+      chỉ nhập khi muốn đặt/đổi. Đường dẫn endpoint có thể chỉnh theo phiên bản thiết bị.
+    </div>
+    <div id="connectors-list">
+      <div class="sk-list" aria-busy="true"><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -1467,6 +1519,43 @@
   <div class="drawer-body" id="ptt-body"></div>
 </aside>
 
+<!-- Asset detail drawer -->
+<div class="drawer-overlay" id="asset-drawer-overlay" onclick="closeAssetDrawer()"></div>
+<aside class="drawer" id="asset-drawer" aria-hidden="true">
+  <div class="drawer-header">
+    <div style="min-width:0;">
+      <div id="asset-drawer-band"></div>
+      <div id="asset-drawer-host" style="font-size:16px;font-weight:700;margin-top:6px;word-break:break-word;"></div>
+      <div id="asset-drawer-ip" class="text-mono text-sm" style="margin-top:2px;"></div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="closeAssetDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="asset-drawer-body"></div>
+</aside>
+
+<!-- Connector modal (add / edit) -->
+<div class="modal-overlay" id="connector-modal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header"><strong id="conn-modal-title">Thêm kết nối</strong><button class="btn btn-ghost btn-sm" onclick="closeConnectorModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Tên kết nối *</label><input id="conn-name" placeholder="VD: Trellix EDR production"></div>
+      <div class="form-group"><label>Loại thiết bị *</label>
+        <select id="conn-kind" onchange="renderConnectorFields()"></select>
+      </div>
+      <div class="form-group"><label>Base URL</label><input id="conn-baseurl" placeholder="https://api.vendor.example.com"></div>
+      <div id="conn-dynamic-fields"></div>
+      <div class="form-group" style="margin-top:12px;"><label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+        <span class="toggle"><input type="checkbox" id="conn-enabled" checked><span class="toggle-slider"></span></span>
+        <span>Bật kết nối (cho phép đồng bộ)</span></label></div>
+      <div id="conn-error" class="text-sm" style="color:var(--critical);"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeConnectorModal()">Hủy</button>
+      <button class="btn btn-primary" id="conn-save-btn" onclick="saveConnector()">Lưu</button>
+    </div>
+  </div>
+</div>
+
 <!-- User Modal (add) -->
 <div class="modal-overlay" id="user-modal">
   <div class="modal" style="max-width:480px;">
@@ -1531,13 +1620,14 @@ function navigate(page) {
   toggleSidebar(false);
   if (page !== 'domain-crawls') stopWebScanPoll();
   if (page !== 'pentest-run') stopPentestPoll();
+  if (page !== 'connectors') stopConnectorPoll();
 
   // Sub-pages (vd. domain-crawls) không có nav item riêng — highlight nav cha thay vào đó
   const navParent = { 'domain-crawls': 'domains', 'docreview-detail': 'docreview', 'pentest-engagement': 'pentest', 'pentest-run': 'pentest' }[page] || page;
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors };
   if (loaders[page]) loaders[page]();
 }
 
@@ -4962,6 +5052,499 @@ async function bindTrafficToFinding(trafficId) {
     closeTrafficDrawer();
     loadRunDetail(false);
   } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── ASSET INVENTORY / RISK ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+let assetsCache = [];
+let assetSourcesSeen = new Set();
+let assetEditId = null;
+
+const RISK_BAND_LABEL = { CRITICAL: 'Nguy hiểm', HIGH: 'Cao', MEDIUM: 'Trung bình', LOW: 'Thấp', INFO: 'Thông tin' };
+const CRITICALITY_LABEL = { CRITICAL: 'Rất quan trọng', HIGH: 'Quan trọng', MEDIUM: 'Trung bình', LOW: 'Thấp' };
+const EXPOSURE_LABEL = { INTERNET: 'Internet', INTERNAL: 'Nội bộ', ISOLATED: 'Cô lập', UNKNOWN: 'Chưa rõ' };
+
+function riskBandBadge(band) {
+  const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
+  return `<span class="badge ${cls[band] || 'badge-info'}">${RISK_BAND_LABEL[band] || band}</span>`;
+}
+function riskScoreCell(score, band) {
+  const color = { CRITICAL: 'var(--critical)', HIGH: 'var(--high)', MEDIUM: 'var(--medium)', LOW: 'var(--low)', INFO: 'var(--text3)' }[band] || 'var(--text3)';
+  return `<div class="flex" style="gap:8px;"><strong style="font-size:15px;color:${color};font-variant-numeric:tabular-nums;min-width:34px;">${(score ?? 0).toFixed(1)}</strong>${riskBandBadge(band)}</div>`;
+}
+
+async function loadAssets() {
+  loadIntelStatus();
+  const minRisk = document.getElementById('asset-minrisk').value;
+  const source = document.getElementById('asset-source').value;
+  const sort = document.getElementById('asset-sort').value;
+  const statsEl = document.getElementById('assets-stats');
+  const tableEl = document.getElementById('assets-table');
+  try {
+    const qs = new URLSearchParams({ sort, min_risk: minRisk });
+    if (source) qs.set('source', source);
+    const [summary, rows] = await Promise.all([
+      api('/api/assets/summary'),
+      api('/api/assets?' + qs.toString()),
+    ]);
+    assetsCache = rows;
+    rows.forEach(a => (a.sources || []).forEach(s => assetSourcesSeen.add(s)));
+    renderAssetStats(summary);
+    renderAssetSourceOptions();
+    renderAssetsTable(rows);
+  } catch (e) {
+    tableEl.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Không tải được asset</p><p class="text-sm">${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderAssetStats(s) {
+  const b = s.by_band || {};
+  const tile = (num, label, tone) => `<div class="stat-card"><div class="stat-num" style="color:${tone};">${num}</div><div class="stat-label">${label}</div></div>`;
+  document.getElementById('assets-stats').innerHTML =
+    tile(b.CRITICAL || 0, 'Nguy hiểm (≥80)', 'var(--critical)') +
+    tile(b.HIGH || 0, 'Cao (≥60)', 'var(--high)') +
+    tile(b.MEDIUM || 0, 'Trung bình (≥35)', 'var(--medium)') +
+    tile(b.LOW || 0, 'Thấp', 'var(--low)') +
+    tile(s.with_active_alerts || 0, '⚠ Có cảnh báo EDR', 'var(--critical)') +
+    tile(s.total || 0, 'Tổng tài sản', 'var(--text)');
+}
+
+function renderAssetSourceOptions() {
+  const sel = document.getElementById('asset-source');
+  const cur = sel.value;
+  const opts = ['<option value="">Mọi nguồn</option>'].concat(
+    [...assetSourcesSeen].sort().map(s => `<option value="${escHtml(s)}">${escHtml(s)}</option>`));
+  sel.innerHTML = opts.join('');
+  sel.value = cur;
+}
+
+function renderAssetsTable(rows) {
+  const el = document.getElementById('assets-table');
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">🖥️</div><p>Chưa có tài sản nào</p><p class="text-sm">Tài sản được đồng bộ từ các kết nối XDR/NAC. Thêm một kết nối rồi bấm “Đồng bộ”.</p><button class="btn btn-primary mt-16" onclick="navigate('connectors')">Tới trang Kết nối</button></div>`;
+    return;
+  }
+  el.innerHTML = `<table>
+    <thead><tr>
+      <th>Host / IP</th><th>OS</th><th>Rủi ro</th><th>Phơi bày</th><th>Quan trọng</th>
+      <th style="text-align:center;">Cảnh báo</th><th>Nguồn</th><th>Thấy lần cuối</th>
+    </tr></thead>
+    <tbody>${rows.map(a => `
+      <tr class="vuln-row" style="cursor:pointer;" onclick="openAssetDrawer('${escHtml(a.id)}')">
+        <td><div style="font-weight:600;">${escHtml(a.hostname || '—')}</div><div class="text-mono text-sm">${escHtml(a.ip || '')}</div></td>
+        <td class="text-sm">${escHtml(a.os || '—')}${a.os_version ? ' <span style="color:var(--text3)">' + escHtml(a.os_version) + '</span>' : ''}</td>
+        <td>${riskScoreCell(a.risk_score, a.risk_band)}</td>
+        <td class="text-sm">${escHtml(EXPOSURE_LABEL[a.exposure] || a.exposure || '—')}</td>
+        <td class="text-sm">${escHtml(CRITICALITY_LABEL[a.criticality] || a.criticality || '—')}</td>
+        <td style="text-align:center;">${a.active_alert_count > 0 ? `<span style="color:var(--critical);font-weight:700;">⚠ ${a.active_alert_count}</span>` : '<span style="color:var(--text3)">0</span>'}</td>
+        <td>${(a.sources || []).map(s => `<span class="chip" style="margin:1px;">${escHtml(s)}</span>`).join('') || '—'}</td>
+        <td class="text-sm" style="color:var(--text2);">${fmtDate(a.last_seen)}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function openAssetDrawer(id) {
+  assetEditId = id;
+  const overlay = document.getElementById('asset-drawer-overlay');
+  const d = document.getElementById('asset-drawer');
+  overlay.classList.add('open'); d.classList.add('open'); d.setAttribute('aria-hidden', 'false');
+  document.getElementById('asset-drawer-body').innerHTML = SKELETON_HTML;
+  document.getElementById('asset-drawer-band').innerHTML = '';
+  document.getElementById('asset-drawer-host').textContent = 'Đang tải...';
+  document.getElementById('asset-drawer-ip').textContent = '';
+  try {
+    const a = await api('/api/assets/' + id);
+    renderAssetDrawer(a);
+  } catch (e) {
+    document.getElementById('asset-drawer-body').innerHTML = `<div class="notice warn">Lỗi: ${escHtml(e.message)}</div>`;
+  }
+}
+function closeAssetDrawer() {
+  document.getElementById('asset-drawer-overlay')?.classList.remove('open');
+  const d = document.getElementById('asset-drawer');
+  if (d) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
+  assetEditId = null;
+}
+
+function renderAssetDrawer(a) {
+  document.getElementById('asset-drawer-band').innerHTML = riskScoreCell(a.risk_score, a.risk_band);
+  document.getElementById('asset-drawer-host').textContent = a.hostname || a.ip || 'Asset';
+  document.getElementById('asset-drawer-ip').textContent = [a.ip, a.mac].filter(Boolean).join('  ·  ');
+  const rf = a.risk_factors || {};
+  const num = (v, dp = 1) => (v === undefined || v === null) ? '—' : (typeof v === 'number' ? v.toFixed(dp) : v);
+  const vulns = a.vulns || [], alerts = a.alerts || [], software = a.software || [];
+
+  const rfRow = (label, val) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--border);"><span style="color:var(--text3);">${label}</span><strong style="font-variant-numeric:tabular-nums;">${val}</strong></div>`;
+
+  document.getElementById('asset-drawer-body').innerHTML = `
+    <!-- Identity -->
+    <dl class="kv">
+      <dt>Hostname</dt><dd class="text-mono">${escHtml(a.hostname || '—')}</dd>
+      <dt>IP</dt><dd class="text-mono">${escHtml(a.ip || '—')}</dd>
+      <dt>MAC</dt><dd class="text-mono">${escHtml(a.mac || '—')}</dd>
+      <dt>OS</dt><dd>${escHtml([a.os, a.os_version].filter(Boolean).join(' ') || '—')}</dd>
+      <dt>Loại</dt><dd>${escHtml(a.asset_type || '—')}</dd>
+      <dt>VLAN</dt><dd>${escHtml(a.vlan || '—')}</dd>
+      <dt>NAC</dt><dd>${escHtml(a.nac_status || '—')}</dd>
+      <dt>EDR agent</dt><dd>${a.edr_agent_present ? '<span style="color:var(--low)">✓ Có</span>' + (a.edr_health ? ' · ' + escHtml(a.edr_health) : '') : '<span style="color:var(--high)">✗ Không</span>'}</dd>
+      <dt>Nguồn</dt><dd>${(a.sources || []).map(s => `<span class="chip">${escHtml(s)}</span>`).join(' ') || '—'}</dd>
+      <dt>Thấy lần cuối</dt><dd class="text-sm">${fmtDate(a.last_seen)}</dd>
+    </dl>
+
+    <!-- Editable fields -->
+    <div class="separator"></div>
+    <label>Thuộc tính (sửa → tính lại điểm)</label>
+    <div class="grid2" style="gap:10px;margin-top:8px;">
+      <div class="form-group" style="margin:0;"><label>Độ quan trọng</label>
+        <select id="ad-criticality">${['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(v => `<option value="${v}" ${a.criticality === v ? 'selected' : ''}>${CRITICALITY_LABEL[v]}</option>`).join('')}</select></div>
+      <div class="form-group" style="margin:0;"><label>Mức phơi bày</label>
+        <select id="ad-exposure">${['INTERNET', 'INTERNAL', 'ISOLATED', 'UNKNOWN'].map(v => `<option value="${v}" ${a.exposure === v ? 'selected' : ''}>${EXPOSURE_LABEL[v]}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-group" style="margin-top:10px;"><label>Chủ sở hữu</label><input id="ad-owner" value="${escHtml(a.owner || '')}" placeholder="VD: team-hạ-tầng"></div>
+    <div class="form-group"><label>Tags (phân cách bởi dấu phẩy)</label><input id="ad-tags" value="${escHtml((a.tags || []).join(', '))}" placeholder="pci, db, prod"></div>
+    <div class="flex">
+      <button class="btn btn-primary btn-sm" onclick="saveAssetEdit()">💾 Lưu & tính lại</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteAsset('${escHtml(a.id)}')">🗑️ Xoá asset</button>
+    </div>
+
+    <!-- Risk breakdown -->
+    <div class="separator"></div>
+    <label>Phân tích điểm rủi ro</label>
+    <div class="card" style="padding:14px;margin-top:8px;margin-bottom:0;">
+      <div class="flex-between" style="margin-bottom:8px;"><span>Điểm tổng</span>${riskScoreCell(a.risk_score, a.risk_band)}</div>
+      ${rfRow('Điểm vuln cao nhất', num(rf.base_max_vuln))}
+      ${rfRow('Cộng do nhiều vuln', '+' + num(rf.volume_bump))}
+      ${rfRow('Cảnh báo EDR đang hoạt động', num(rf.active_alert_count, 0))}
+      ${rfRow('Cộng do bị tấn công (EDR)', '+' + num(rf.alert_bump))}
+      ${rf.threat_mult !== undefined ? rfRow('Hệ số mối đe doạ (EPSS/KEV)', '×' + num(rf.threat_mult, 3)) : ''}
+      ${rf.context_mult !== undefined ? rfRow('Hệ số ngữ cảnh (quan trọng/phơi bày)', '×' + num(rf.context_mult, 3)) : ''}
+      <div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;"><span style="color:var(--text3);">Số lỗ hổng</span><strong>${num(rf.vuln_count, 0)}</strong></div>
+    </div>
+    <div class="field-hint" style="margin-top:6px;"><strong>KEV</strong> = đang bị khai thác thực tế (CISA KEV). <strong>EPSS</strong> = xác suất bị khai thác trong 30 ngày.</div>
+
+    <!-- Vulns -->
+    <div class="separator"></div>
+    <label>Lỗ hổng (${vulns.length})</label>
+    ${vulns.length ? `<div class="table-wrap" style="margin-top:8px;"><table>
+      <thead><tr><th>CVE</th><th>CVSS</th><th>EPSS</th><th>KEV</th><th>Điểm</th><th>Mức</th></tr></thead>
+      <tbody>${vulns.map(v => `<tr>
+        <td class="text-mono" style="color:var(--info);">${escHtml(v.cve)}</td>
+        <td>${v.cvss_score ?? '—'}</td>
+        <td>${v.epss != null ? (v.epss * 100).toFixed(1) + '%' : '—'}</td>
+        <td>${v.kev ? '<span class="badge badge-critical" title="Đang bị khai thác thực tế (CISA KEV)">KEV</span>' : '—'}</td>
+        <td><strong style="font-variant-numeric:tabular-nums;">${(v.risk_score ?? 0).toFixed(1)}</strong></td>
+        <td>${v.severity ? sevBadge(String(v.severity).toUpperCase()) : '—'}</td>
+      </tr>`).join('')}</tbody></table></div>` : '<div class="field-hint">Không có lỗ hổng.</div>'}
+
+    <!-- Alerts -->
+    <div class="separator"></div>
+    <label>Cảnh báo EDR/XDR (${alerts.length})</label>
+    ${alerts.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:8px;">${alerts.map(al => `
+      <div class="card" style="padding:10px 12px;margin:0;">
+        <div class="flex-between"><strong style="font-size:13px;">${escHtml(al.title || '—')}</strong>${al.severity ? sevBadge(String(al.severity).toUpperCase()) : ''}</div>
+        <div class="flex text-sm" style="margin-top:4px;color:var(--text2);flex-wrap:wrap;gap:6px;">
+          ${al.technique ? `<span class="chip" title="Kỹ thuật MITRE ATT&CK">ATT&CK ${escHtml(al.technique)}</span>` : ''}
+          <span>Nguồn: ${escHtml(al.source || '—')}</span>
+          <span>· ${escHtml(al.status || '—')}</span>
+          ${al.detected_at ? '<span>· ' + fmtDate(al.detected_at) + '</span>' : ''}
+        </div>
+      </div>`).join('')}</div>` : '<div class="field-hint">Không có cảnh báo đang hoạt động.</div>'}
+
+    <!-- Software -->
+    <div class="separator"></div>
+    <label>Phần mềm (${software.length})</label>
+    ${software.length ? `<div class="table-wrap" style="margin-top:8px;"><table>
+      <thead><tr><th>Tên</th><th>Phiên bản</th><th>Nhà cung cấp</th><th>Nguồn</th></tr></thead>
+      <tbody>${software.map(sw => `<tr>
+        <td>${escHtml(sw.name || '—')}</td><td class="text-mono text-sm">${escHtml(sw.version || '—')}</td>
+        <td class="text-sm">${escHtml(sw.vendor || '—')}</td><td class="text-sm">${escHtml(sw.source || '—')}</td>
+      </tr>`).join('')}</tbody></table></div>` : '<div class="field-hint">Không có dữ liệu phần mềm.</div>'}
+  `;
+}
+
+async function saveAssetEdit() {
+  if (!assetEditId) return;
+  const tags = document.getElementById('ad-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+  const body = {
+    criticality: document.getElementById('ad-criticality').value,
+    exposure: document.getElementById('ad-exposure').value,
+    owner: document.getElementById('ad-owner').value.trim(),
+    tags,
+  };
+  try {
+    const a = await api('/api/assets/' + assetEditId, { method: 'PATCH', body });
+    toast('Đã lưu — điểm rủi ro đã tính lại', 'success');
+    renderAssetDrawer(a);
+    loadAssets();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function deleteAsset(id) {
+  if (!confirm('Xoá asset này khỏi inventory?')) return;
+  try {
+    await api('/api/assets/' + id, { method: 'DELETE' });
+    toast('Đã xoá asset', 'success');
+    closeAssetDrawer();
+    loadAssets();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function recomputeAssets() {
+  try {
+    const r = await api('/api/assets/recompute', { method: 'POST' });
+    toast(`Đã tính lại điểm cho ${r.recomputed} tài sản`, 'success');
+    loadAssets();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function loadIntelStatus() {
+  const chip = document.getElementById('intel-chip');
+  try {
+    const s = await api('/api/intel/status');
+    const upd = s.epss?.updated_at || s.kev?.updated_at;
+    chip.innerHTML = `🛰️ EPSS ${s.epss?.count ?? 0} · KEV ${s.kev?.count ?? 0}${upd ? ' · ' + fmtDate(upd * 1000) : ' · chưa cập nhật'}`;
+  } catch (e) { chip.textContent = '🛰️ Feed: lỗi tải'; }
+}
+async function refreshIntel() {
+  const btn = document.getElementById('intel-refresh-btn');
+  btn.disabled = true; btn.textContent = '↻ Đang cập nhật...';
+  try {
+    const r = await api('/api/intel/refresh', { method: 'POST' });
+    const ok = (r.epss?.ok ? 1 : 0) + (r.kev?.ok ? 1 : 0);
+    toast(`Cập nhật feed: EPSS ${r.epss?.ok ? 'OK' : 'lỗi'}, KEV ${r.kev?.ok ? 'OK' : 'lỗi'}`, ok === 2 ? 'success' : 'warn');
+    loadIntelStatus();
+  } catch (e) {
+    toast(e.message.includes('403') || /quyền|admin|forbidden/i.test(e.message) ? 'Chỉ ADMIN mới cập nhật được feed' : 'Lỗi: ' + e.message, 'error');
+  } finally { btn.disabled = false; btn.textContent = '↻ Cập nhật feed'; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── CONNECTORS (XDR / NAC) ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+let connectorsCache = [];
+let connKindsCache = null;
+let connEditId = null;
+let connectorPollTimer = null;
+
+function stopConnectorPoll() { clearInterval(connectorPollTimer); connectorPollTimer = null; }
+function startConnectorPoll() {
+  stopConnectorPoll();
+  connectorPollTimer = setInterval(async () => {
+    try {
+      const rows = await api('/api/connectors');
+      connectorsCache = rows;
+      renderConnectors(rows);
+      if (!rows.some(c => c.last_sync_status === 'running')) stopConnectorPoll();
+    } catch { stopConnectorPoll(); }
+  }, 3000);
+}
+
+async function loadConnectors() {
+  const el = document.getElementById('connectors-list');
+  try {
+    const rows = await api('/api/connectors');
+    connectorsCache = rows;
+    renderConnectors(rows);
+    if (rows.some(c => c.last_sync_status === 'running')) startConnectorPoll();
+  } catch (e) {
+    const forbidden = e.message.includes('403') || /quyền|admin|forbidden|chưa đăng/i.test(e.message);
+    el.innerHTML = `<div class="empty-state"><div class="icon">${forbidden ? '🔒' : '⚠️'}</div><p>${forbidden ? 'Chỉ ADMIN mới quản lý kết nối' : 'Không tải được kết nối'}</p><p class="text-sm">${escHtml(e.message)}</p></div>`;
+    document.getElementById('conn-add-btn').style.display = forbidden ? 'none' : '';
+  }
+}
+
+function connStatusBadge(status) {
+  const map = {
+    ok: '<span class="badge badge-low">✓ OK</span>',
+    error: '<span class="badge badge-critical">✗ Lỗi</span>',
+    running: '<span class="badge badge-medium">⟳ Đang đồng bộ</span>',
+  };
+  return map[status] || '<span class="badge badge-info">Chưa đồng bộ</span>';
+}
+function connKindLabel(kind) {
+  const d = (connKindsCache || []).find(k => k.kind === kind);
+  return d ? d.label : kind;
+}
+
+function renderConnectors(rows) {
+  const el = document.getElementById('connectors-list');
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">🔌</div><p>Chưa có kết nối nào</p><p class="text-sm">Thêm kết nối tới EDR/XDR hoặc NAC để đồng bộ tài sản và cảnh báo.</p><button class="btn btn-primary mt-16" onclick="openConnectorModal()">+ Thêm kết nối</button></div>`;
+    return;
+  }
+  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;">${rows.map(c => {
+    const st = c.last_sync_stats || {};
+    return `<div class="card vg-lift" style="margin:0;">
+      <div class="flex-between" style="align-items:flex-start;">
+        <div style="min-width:0;">
+          <div class="flex" style="gap:8px;flex-wrap:wrap;">
+            <strong style="font-size:15px;">${escHtml(c.name)}</strong>
+            ${connStatusBadge(c.last_sync_status)}
+            ${c.enabled ? '' : '<span class="badge badge-info">Đã tắt</span>'}
+          </div>
+          <div class="text-sm" style="color:var(--text2);margin-top:3px;">${escHtml(connKindLabel(c.kind))}${c.base_url ? ' · <span class="text-mono">' + escHtml(c.base_url) + '</span>' : ''}</div>
+        </div>
+        <label class="toggle" title="Bật/tắt kết nối"><input type="checkbox" ${c.enabled ? 'checked' : ''} onchange="toggleConnectorEnabled('${escHtml(c.id)}', this.checked)"><span class="toggle-slider"></span></label>
+      </div>
+      ${c.last_sync_message ? `<div class="notice ${c.last_sync_status === 'error' ? 'warn' : ''}" style="margin:10px 0 0;">${escHtml(c.last_sync_message)}</div>` : ''}
+      <div class="flex text-sm" style="margin-top:10px;flex-wrap:wrap;gap:12px;color:var(--text2);">
+        <span>📦 Tài sản: <strong style="color:var(--text);">${st.assets ?? 0}</strong></span>
+        <span>🚨 Cảnh báo: <strong style="color:var(--text);">${st.alerts ?? 0}</strong></span>
+        <span>🧩 Phần mềm: <strong style="color:var(--text);">${st.software ?? 0}</strong></span>
+        ${c.last_sync_at ? `<span>· Đồng bộ lần cuối: ${fmtDate(c.last_sync_at)}</span>` : ''}
+      </div>
+      <div class="flex" style="margin-top:12px;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" onclick="testConnector('${escHtml(c.id)}')">🔍 Kiểm tra</button>
+        <button class="btn btn-primary btn-sm" onclick="syncConnector('${escHtml(c.id)}')" ${c.enabled ? '' : 'disabled title="Bật kết nối trước"'}>🔄 Đồng bộ</button>
+        <button class="btn btn-ghost btn-sm" onclick="openConnectorModal('${escHtml(c.id)}')">✏️ Sửa</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteConnector('${escHtml(c.id)}')">🗑️ Xoá</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+async function toggleConnectorEnabled(id, enabled) {
+  try {
+    await api('/api/connectors/' + id, { method: 'PATCH', body: { enabled } });
+    toast(enabled ? 'Đã bật kết nối' : 'Đã tắt kết nối', 'success');
+    loadConnectors();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); loadConnectors(); }
+}
+async function testConnector(id) {
+  toast('Đang kiểm tra kết nối...', 'info');
+  try {
+    const r = await api('/api/connectors/' + id + '/test', { method: 'POST' });
+    toast((r.ok ? '✓ ' : '✗ ') + (r.message || (r.ok ? 'Kết nối OK' : 'Thất bại')), r.ok ? 'success' : 'error');
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function syncConnector(id) {
+  try {
+    await api('/api/connectors/' + id + '/sync', { method: 'POST' });
+    toast('Đã bắt đầu đồng bộ — đang cập nhật trạng thái...', 'info');
+    loadConnectors();
+    startConnectorPoll();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function deleteConnector(id) {
+  const c = connectorsCache.find(x => x.id === id);
+  if (!confirm(`Xoá kết nối "${c ? c.name : id}"?`)) return;
+  try {
+    await api('/api/connectors/' + id, { method: 'DELETE' });
+    toast('Đã xoá kết nối', 'success');
+    loadConnectors();
+  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+
+async function ensureKinds() {
+  if (!connKindsCache) connKindsCache = await api('/api/connectors/kinds');
+  return connKindsCache;
+}
+
+async function openConnectorModal(id = null) {
+  connEditId = id;
+  try { await ensureKinds(); } catch (e) { toast('Lỗi tải loại kết nối: ' + e.message, 'error'); return; }
+  const kindSel = document.getElementById('conn-kind');
+  kindSel.innerHTML = connKindsCache.map(k => `<option value="${k.kind}">${escHtml(k.label)}</option>`).join('');
+  document.getElementById('conn-error').textContent = '';
+  const c = id ? connectorsCache.find(x => x.id === id) : null;
+  document.getElementById('conn-modal-title').textContent = c ? 'Sửa kết nối' : 'Thêm kết nối';
+  document.getElementById('conn-save-btn').textContent = c ? 'Cập nhật' : 'Tạo kết nối';
+  document.getElementById('conn-name').value = c ? c.name : '';
+  document.getElementById('conn-baseurl').value = c ? (c.base_url || '') : '';
+  document.getElementById('conn-enabled').checked = c ? c.enabled : true;
+  kindSel.value = c ? c.kind : connKindsCache[0].kind;
+  kindSel.disabled = !!c;  // không đổi loại khi sửa
+  renderConnectorFields();
+  document.getElementById('connector-modal').classList.add('open');
+}
+function closeConnectorModal() { document.getElementById('connector-modal').classList.remove('open'); connEditId = null; }
+
+function renderConnectorFields() {
+  const kind = document.getElementById('conn-kind').value;
+  const def = (connKindsCache || []).find(k => k.kind === kind);
+  if (!def) return;
+  const c = connEditId ? connectorsCache.find(x => x.id === connEditId) : null;
+  const cfg = c ? (c.config || {}) : {};
+  const hints = c ? (c.secret_hints || {}) : {};
+  const setFields = c ? (c.secret_fields_set || []) : [];
+
+  let html = '';
+  if (def.secret_fields.length) {
+    html += '<div class="separator"></div><label style="display:block;margin-bottom:4px;">🔐 Secret (mã hoá, không hiển thị lại)</label>';
+    html += def.secret_fields.map(f => {
+      const hasVal = setFields.includes(f);
+      return `<div class="form-group" style="margin-bottom:10px;">
+        <label style="text-transform:none;">${escHtml(f)}</label>
+        <input type="password" id="conn-secret-${escHtml(f)}" autocomplete="new-password" placeholder="${hasVal ? 'Đã lưu (' + escHtml(hints[f] || '••••') + ') — bỏ trống để giữ nguyên' : 'Nhập ' + escHtml(f)}">
+        ${hasVal ? `<label class="field-hint" style="display:flex;align-items:center;gap:6px;margin-top:4px;cursor:pointer;"><input type="checkbox" id="conn-clear-${escHtml(f)}" style="width:auto;"> Xoá secret đã lưu</label>` : ''}
+      </div>`;
+    }).join('');
+  }
+  if (def.config_fields.length) {
+    html += '<div class="separator"></div><label style="display:block;margin-bottom:4px;">⚙️ Cấu hình</label>';
+    html += def.config_fields.map(f => {
+      const val = cfg[f];
+      if (f === 'verify_tls') {
+        const checked = (val === undefined) ? true : !!val;
+        return `<div class="form-group" style="margin-bottom:10px;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;">
+          <input type="checkbox" id="conn-cfg-${escHtml(f)}" ${checked ? 'checked' : ''} style="width:auto;"> Xác thực TLS (verify_tls)</label></div>`;
+      }
+      if (f.endsWith('_vlans')) {
+        const list = Array.isArray(val) ? val.join(', ') : (val || '');
+        return `<div class="form-group" style="margin-bottom:10px;"><label style="text-transform:none;">${escHtml(f)} <span class="field-hint" style="display:inline;">(danh sách, phân cách dấu phẩy)</span></label>
+          <input id="conn-cfg-${escHtml(f)}" value="${escHtml(list)}" placeholder="VD: 10, 20, 30"></div>`;
+      }
+      return `<div class="form-group" style="margin-bottom:10px;"><label style="text-transform:none;">${escHtml(f)}</label>
+        <input id="conn-cfg-${escHtml(f)}" value="${escHtml(val != null ? val : '')}" placeholder="${escHtml(f)}"></div>`;
+    }).join('');
+  }
+  html += `<div class="field-hint" style="margin-top:8px;">Secret được mã hoá, không hiển thị lại; đường dẫn endpoint có thể chỉnh theo phiên bản thiết bị.${def.supports_isolate ? ' · Thiết bị này hỗ trợ cô lập host.' : ''}</div>`;
+  document.getElementById('conn-dynamic-fields').innerHTML = html;
+}
+
+async function saveConnector() {
+  const kind = document.getElementById('conn-kind').value;
+  const def = (connKindsCache || []).find(k => k.kind === kind);
+  const errEl = document.getElementById('conn-error');
+  errEl.textContent = '';
+  const name = document.getElementById('conn-name').value.trim();
+  if (!name) { errEl.textContent = 'Vui lòng nhập tên kết nối.'; return; }
+
+  const config = {};
+  (def.config_fields || []).forEach(f => {
+    const node = document.getElementById('conn-cfg-' + f);
+    if (!node) return;
+    if (f === 'verify_tls') config[f] = node.checked;
+    else if (f.endsWith('_vlans')) config[f] = node.value.split(',').map(x => x.trim()).filter(Boolean);
+    else if (node.value.trim() !== '') config[f] = node.value.trim();
+  });
+
+  const secrets = {};
+  const clear_secrets = [];
+  (def.secret_fields || []).forEach(f => {
+    const node = document.getElementById('conn-secret-' + f);
+    if (node && node.value) secrets[f] = node.value;
+    const clr = document.getElementById('conn-clear-' + f);
+    if (clr && clr.checked) clear_secrets.push(f);
+  });
+
+  const base_url = document.getElementById('conn-baseurl').value.trim() || null;
+  const enabled = document.getElementById('conn-enabled').checked;
+  const btn = document.getElementById('conn-save-btn');
+  btn.disabled = true;
+  try {
+    if (connEditId) {
+      const body = { name, base_url, enabled, config };
+      if (Object.keys(secrets).length) body.secrets = secrets;
+      if (clear_secrets.length) body.clear_secrets = clear_secrets;
+      await api('/api/connectors/' + connEditId, { method: 'PATCH', body });
+      toast('Đã cập nhật kết nối', 'success');
+    } else {
+      await api('/api/connectors', { method: 'POST', body: { name, kind, base_url, enabled, config, secrets } });
+      toast('Đã tạo kết nối', 'success');
+    }
+    closeConnectorModal();
+    loadConnectors();
+  } catch (e) { errEl.textContent = e.message; }
+  finally { btn.disabled = false; }
 }
 
 // ─── Init ──────────────────────────────────────────────────────

@@ -150,6 +150,7 @@ def recompute_asset_risk(db: Session, asset: Asset) -> float:
     ).count()
     asset.active_alert_count = active_alerts
     scores = []
+    top = None   # factors của vuln rủi ro cao nhất — để giải thích threat/context trên asset
     for v in asset.vulns:
         if v.epss is None:
             v.epss = epss_for(v.cve)
@@ -158,9 +159,19 @@ def recompute_asset_risk(db: Session, asset: Asset) -> float:
         r = score_vuln_row(v, asset)
         v.risk_score = r["score"]
         scores.append(r["score"])
+        if top is None or r["score"] > top[0]:
+            top = (r["score"], v.cve, r["factors"])
     agg = asset_risk(scores, active_alerts)
     asset.risk_score = agg["score"]
-    asset.risk_factors = {**agg["factors"], "band": band(agg["score"]), "vuln_count": len(scores)}
+    factors = {**agg["factors"], "band": band(agg["score"]), "vuln_count": len(scores)}
+    if top:
+        factors["top_cve"] = top[1]
+        factors["threat_mult"] = top[2].get("threat_mult")
+        factors["context_mult"] = top[2].get("context_mult")
+        factors["top_cvss"] = top[2].get("cvss")
+        factors["top_epss"] = top[2].get("epss")
+        factors["top_kev"] = top[2].get("kev")
+    asset.risk_factors = factors
     db.flush()
     return asset.risk_score
 
