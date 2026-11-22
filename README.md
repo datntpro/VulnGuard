@@ -174,6 +174,12 @@ Sau đó vào Web UI → **Co-work** → "+ Thêm Folder", nhập absolute path 
 - **Giải thích tiếng Việt**: Developer dễ hiểu, không cần đọc CVE gốc
 - **Hướng dẫn fix chi tiết**: Kèm code snippet, tên file, số dòng
 
+### ☁️ Cloud AI — giảm false positive (tuỳ chọn)
+- Ngoài Ollama local: **Claude API** (API key / **Workload Identity Federation** cho tenant doanh nghiệp / environment) và **Amazon Bedrock** (IAM — nền tảng Kiro dùng).
+- 3 chế độ: **local-only** (không gửi gì ra ngoài) · **hybrid** (Ollama chấm trước; finding nặng hoặc FP% không chắc chắn mới gửi Claude xác minh) · **cloud-only**.
+- Chính xác hơn nhờ **structured output** + gửi **ngữ cảnh code thật** quanh dòng lỗi; **redact secret** trước khi gửi; API key **mã hoá Fernet**.
+- Nút **"Phân tích lại bằng Claude"** cho từng vuln. Cấu hình: **Settings → AI Provider** (chỉ ADMIN).
+
 ### 📄 Báo cáo AI (HTML)
 - Tạo báo cáo HTML hoàn chỉnh sau scan
 - **Dedup cross-tool**: Cùng vuln tìm thấy bởi nhiều tools → gộp lại
@@ -204,6 +210,37 @@ Sau đó vào Web UI → **Co-work** → "+ Thêm Folder", nhập absolute path 
 - **Gửi lại bên viết tài liệu**: đính kèm ghi chú yêu cầu sửa, track trạng thái `UPLOADED → SENT_FOR_REVISION → ACCEPTED`
 - **Compare 2 version**: xem tiêu chí nào cải thiện / regress / vẫn chưa đáp ứng
 - Xuất báo cáo HTML để gửi email cho author tài liệu
+
+### 🔑 Đăng nhập & phân quyền (RBAC)
+- 3 vai trò: **ADMIN** (cấu hình AI/scanner/connector, quản lý user) · **ANALYST** (chạy scan, đổi trạng thái vuln, waiver) · **VIEWER** (chỉ xem).
+- Session **JWT cookie HttpOnly**; tạo ADMIN đầu tiên khi mở app, hoặc `setup.sh` **tự sinh mật khẩu**.
+- Tất cả `/api/*` yêu cầu đăng nhập; thao tác ADMIN enforce ở middleware.
+
+### 🌐 Web Scan (Nuclei)
+- Quét lỗ hổng web bằng **Nuclei** (10k+ template CVE/misconfig/exposure) trên các URL **katana** đã crawl.
+- Stream finding realtime; **bắt buộc xác nhận quyền quét** domain; bảng finding + curl tái hiện.
+
+### 🎯 Pentest Agent — tự động hoá pentest *có kiểm soát*
+- Vòng lặp **planner/worker** do Claude lái, chạy công cụ thật (nmap, nuclei, ffuf, sqlmap).
+- **Lan can bắt buộc**: scope gate (chặn ngoài phạm vi, loopback) · risk gate (recon/quét an toàn tự chạy; **xâm lấn/phá huỷ cần người duyệt**) · uỷ quyền + hạn · budget bước/token · **kill switch** · audit trail (ai/cái gì quyết định).
+- **Chuỗi tấn công bền (todolist)**; **chạy tool song song** (`max_parallel`).
+- **Bằng chứng**: gắn request/response thật vào finding; **recording MITM proxy** (CA tự sinh) bắt traffic của tool & trình duyệt; **replay** trong scope.
+- Chi tiết: `docs/PENTEST_AGENT.md`.
+
+### 🗂️ Asset Inventory + Risk Scoring theo ngữ cảnh
+- Gộp tài sản theo **mac / hostname / ip** (NAC + EDR thấy cùng máy → 1 asset).
+- **Điểm rủi ro giải thích được** (kiểu Tenable VPR / Nexpose): `CVSS × EPSS × KEV × độ quan trọng × mức phơi bày`, cộng thêm khi có **cảnh báo EDR đang hoạt động**. Cùng 1 CVE: máy critical/internet có thể 100đ, máy isolated chỉ vài điểm.
+- Feed **EPSS** (FIRST) + **CISA KEV**, cache offline; sửa criticality/exposure → tự tính lại.
+
+### 🔌 Connectors XDR/EDR/NAC + MCP
+- **Trellix XDR** (OAuth2), **Trend Micro Vision One** (Bearer), **FortiNAC** (token) — kéo asset/alert/software về inventory; secret **mã hoá at-rest**; đường dẫn endpoint cấu hình được.
+- Thêm vendor khác = 1 adapter kế thừa `BaseConnector`.
+- **MCP server** expose dữ liệu (asset, EPSS/KEV, ngữ cảnh EDR) cho **Pentest Agent / Claude Desktop** (read-only; cô lập host phải qua duyệt).
+- Chi tiết: `docs/CONNECTORS_MCP.md`.
+
+### 📊 Dashboard rủi ro toàn hệ thống
+- Gom **code + web + pentest + tài sản** thành một **điểm tư thế rủi ro** + nhãn.
+- Findings theo nguồn, donut rủi ro tài sản, **top rủi ro**, hàng chờ (chờ duyệt / scan đang chạy), độ phủ, xu hướng scan 14 ngày.
 
 ---
 
