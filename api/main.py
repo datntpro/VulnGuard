@@ -50,6 +50,7 @@ def _run_migrations():
             "ALTER TABLE domain_crawls ADD COLUMN ai_error TEXT",
             "ALTER TABLE vulnerabilities ADD COLUMN ai_provider VARCHAR(120)",
             "ALTER TABLE pentest_findings ADD COLUMN evidence_traffic_id VARCHAR",
+            "ALTER TABLE pentest_runs ADD COLUMN todolist TEXT",
         ):
             try:
                 conn.execute(text(ddl))
