@@ -27,15 +27,29 @@ VulnGuard không còn chỉ quét code — nay là nền tảng bảo mật hợ
 
 ## 🚀 Quick Start
 
-### Cách nhanh nhất — trình cài đặt tương tác (chọn công cụ)
+### Cách nhanh nhất — trình cài đặt tương tác
 
 ```bash
-bash setup.sh      # chọn Docker hoặc Native; nếu Native: tự chọn nhóm công cụ cần cài
+bash setup.sh
 ```
-- Chạy production tại **http://localhost:8080**; lần đầu tạo tài khoản ADMIN trên trang đăng nhập.
-- `bash setup.sh --check` — xem công cụ nào đã cài.
-- `bash setup.sh --tools "sast sca web pentest" --no-run` — cài không tương tác.
-- Cài xong chạy lại: `bash run.sh` (production) · Demo có dữ liệu mẫu: `bash run_demo.sh`.
+Trình cài đặt sẽ:
+1. Hỏi **Docker** hay **Native** (Python venv).
+2. Nếu Native: cho **chọn nhóm công cụ** cần cài — SAST · SCA · Secrets · IaC · Container · Web/DAST · Pentest · AI (Ollama). Tự phát hiện `apt/dnf/yum/brew`, tải binary theo kiến trúc.
+3. **Tự sinh mật khẩu ADMIN** và tạo tài khoản — mật khẩu hiện trên màn hình và lưu `storage/admin_credentials.txt` (chmod 600). *Đổi mật khẩu sau khi đăng nhập rồi xoá file này.*
+4. Chạy production tại **http://localhost:8080**.
+
+| Lệnh | Tác dụng |
+|---|---|
+| `bash setup.sh` | Cài tương tác + tạo ADMIN + chạy production |
+| `bash setup.sh --check` | Liệt kê công cụ đã/chưa cài |
+| `bash setup.sh --tools "sast sca web pentest" --no-run` | Cài không tương tác, không chạy |
+| `bash setup.sh --admin-email you@corp.vn` | Đặt email ADMIN (vẫn tự sinh mật khẩu) |
+| `bash run.sh` | Chạy lại **production** (đã cài rồi) |
+| `bash run_demo.sh` | Chạy **demo** có sẵn dữ liệu mẫu mọi trang |
+
+**Yêu cầu Native:** Python 3.11+. Công cụ quét (nmap/nuclei/…) chỉ cần khi quét thật — có thể bỏ qua nếu chỉ dùng Document Review/xem UI. AI local cần Ollama (tuỳ chọn); hoặc dùng Claude/Bedrock trong Settings → AI Provider.
+
+> Bản **demo**: đăng nhập `demo@vulnguard.local` / `VulnGuardDemo!` (dữ liệu mẫu, không chạy scan thật).
 
 <details><summary>Cách thủ công (Docker Compose)</summary>
 
