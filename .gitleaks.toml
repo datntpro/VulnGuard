@@ -1,0 +1,22 @@
+# Gitleaks — allowlist cho VulnGuard: bỏ qua giá trị mẫu/demo (không phải secret thật).
+title = "VulnGuard gitleaks config"
+[extend]
+useDefault = true
+
+[allowlist]
+description = "File mẫu, demo, tài liệu, test — chứa giá trị placeholder, không phải secret thật"
+paths = [
+  '''\.env\.example''',
+  '''\.env\.native\.example''',
+  '''scripts/seed_demo\.py''',
+  '''tests/.*''',
+  '''docs/.*''',
+  '''README\.md''',
+]
+regexes = [
+  '''VulnGuardDemo!''',
+  '''sk-ant-testkey.*''',
+  '''ProdPassword123''',
+  '''changeme''',
+  '''your-api-key''',
+]

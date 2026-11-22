@@ -93,6 +93,10 @@ The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sq
 - **Cloud AI is opt-in**; in hybrid/cloud mode only findings + redacted code context are sent.
 - The **Pentest Agent** operates only within an authorized scope; destructive actions require approval.
 
+## CI/CD (DevSecOps)
+
+GitHub Actions close the loop: **`ci.yml`** runs the test suite and a **Bandit security gate** (fails the build on un-triaged HIGH findings) on every push/PR; **`security.yml`** dogfoods VulnGuard's own scanners (Bandit, Semgrep, pip-audit, Gitleaks, Trivy) and publishes a report artifact. Add VulnGuard to your pipeline by running `bash setup.sh --tools "..." --no-run` then your scan step, or wire the CLI into a job that fails on policy.
+
 ## Documentation
 
 `docs/PENTEST_AGENT.md` · `docs/CONNECTORS_MCP.md` · `docs/BRAND.md` · `docs/NATIVE_INSTALL.md` · screenshots in `docs/screenshots/`.
@@ -153,6 +157,10 @@ Pentest Agent dùng thêm **katana** (crawl), **nmap**, **ffuf**, **sqlmap**.
 ## API (tóm tắt)
 
 `/api/auth/*` (đăng nhập, RBAC, user) · `/api/ai/config` + `/api/vulns/{id}/reanalyze` · `/api/projects|scans|vulns|compare|report` · `/api/domains/{id}/webscans` · `/api/pentest/*` (engagement, run, approval, traffic, proxy) · `/api/assets` + `/api/intel` · `/api/connectors/*` · `/api/dashboard/overview`. Swagger đầy đủ tại **http://localhost:8080/docs**.
+
+## CI/CD (DevSecOps)
+
+GitHub Actions khép vòng: **`ci.yml`** chạy bộ test + **gate bảo mật Bandit** (fail build nếu có lỗ hổng HIGH chưa triage) ở mỗi push/PR; **`security.yml`** tự quét chính dự án bằng đúng bộ công cụ VulnGuard tích hợp (Bandit, Semgrep, pip-audit, Gitleaks, Trivy) và xuất báo cáo artifact. Nhúng vào pipeline của bạn: `bash setup.sh --tools "..." --no-run` rồi thêm bước scan, hoặc dùng CLI trả exit-code theo policy.
 
 ## Bảo mật & Privacy
 
