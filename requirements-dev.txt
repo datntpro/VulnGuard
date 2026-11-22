@@ -1,0 +1,4 @@
+# Dev/CI — test + security self-scan
+-r api/requirements.txt
+pytest>=8.0
+bandit>=1.7

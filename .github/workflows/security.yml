@@ -1,0 +1,68 @@
+# Security self-scan (dogfood) — VulnGuard tự quét chính mình bằng đúng bộ công cụ
+# mà nó tích hợp. Báo cáo dạng artifact (không chặn), demo giá trị DevSecOps.
+# Teams có thể siết thành gate bằng cách bỏ "|| true" / continue-on-error.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 2 * * 1"   # mỗi thứ Hai 02:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  sast-deps-secrets:
+    name: SAST / SCA / Secrets self-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: pip install -q bandit semgrep pip-audit
+
+      - name: Bandit (full report)
+        run: bandit -r api scanner mcp_server scripts -f txt -o bandit-report.txt || true
+
+      - name: Semgrep (OWASP + security-audit + secrets)
+        run: semgrep scan --config p/python --config p/security-audit --config p/secrets --sarif --output semgrep.sarif || true
+
+      - name: pip-audit (dependencies)
+        run: pip-audit -r api/requirements.txt -f columns -o pip-audit.txt || true
+
+      - name: Gitleaks (secrets in code + git history)
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy filesystem (vuln + misconfig + secret)
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          format: table
+          output: trivy.txt
+          exit-code: "0"
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.txt
+            semgrep.sarif
+            pip-audit.txt
+            trivy.txt
+          if-no-files-found: ignore
