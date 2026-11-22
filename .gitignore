@@ -71,3 +71,4 @@ env/
 storage/pentest_ca/
 .venv-demo/
 storage/demo/
+storage/admin_credentials.txt

@@ -86,11 +86,14 @@ check_tools(){
 }
 
 # ── Parse args ──
-MODE=""; TOOLS=""; RUN=1; INTERACTIVE=1
+MODE=""; TOOLS=""; RUN=1; INTERACTIVE=1; SKIP_ADMIN=0; ADMIN_EMAIL="${ADMIN_EMAIL:-}"
 while [ $# -gt 0 ]; do case "$1" in
   --mode) MODE="$2"; INTERACTIVE=0; shift 2;;
   --tools) TOOLS="$2"; INTERACTIVE=0; shift 2;;
   --no-run) RUN=0; shift;;
+  --admin-email) ADMIN_EMAIL="$2"; shift 2;;
+  --admin-password) ADMIN_PASSWORD="$2"; export ADMIN_PASSWORD; shift 2;;
+  --skip-admin) SKIP_ADMIN=1; shift;;
   --check) check_tools; exit 0;;
   *) shift;;
 esac; done
@@ -116,6 +119,12 @@ fi
 
 # ── Native ──
 command -v python3 >/dev/null || { c_r "❌ Cần Python 3.11+"; exit 1; }
+# Env production (khớp run.sh) để bootstrap admin ghi đúng DB
+[ -f .env ] && set -a && . ./.env && set +a || true
+export DATABASE_URL="${DATABASE_URL:-sqlite:///$PWD/storage/db/vulnguard.db}"
+export AI_CONFIG_FILE="${AI_CONFIG_FILE:-$PWD/storage/ai_config.json}"
+export AUTH_ENABLED="${AUTH_ENABLED:-true}"; export APP_ENV="${APP_ENV:-production}"; export DEPLOY_MODE="${DEPLOY_MODE:-native}"
+mkdir -p "$PWD/storage/db"
 if [ ! -d .venv ]; then c_g "Tạo virtualenv + cài API deps…"; python3 -m venv .venv; .venv/bin/pip install -q --upgrade pip; fi
 .venv/bin/pip install -q -r api/requirements.txt && c_g "✓ Python dependencies"
 
@@ -137,6 +146,17 @@ fi
 
 [ -f .env ] || { [ -f .env.native.example ] && cp .env.native.example .env && c_y "Đã tạo .env (sửa nếu cần)."; }
 check_tools
+
+# ── Tạo tài khoản ADMIN + sinh mật khẩu (nếu chưa có user) ──
+if [ "$SKIP_ADMIN" != "1" ]; then
+  ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+  if [ -z "$ADMIN_EMAIL" ] && [ "$INTERACTIVE" = 1 ]; then
+    read -rp "Email ADMIN [admin@vulnguard.local]: " ADMIN_EMAIL
+  fi
+  export ADMIN_EMAIL="${ADMIN_EMAIL:-admin@vulnguard.local}"
+  c_g "Tạo tài khoản ADMIN (sinh mật khẩu ngẫu nhiên nếu chưa có)…"
+  .venv/bin/python -m scripts.bootstrap_admin "$ADMIN_EMAIL" || c_y "⚠ Không tạo được ADMIN tự động — tạo qua trang đăng nhập."
+fi
 
 if [ "$RUN" = 1 ]; then
   c_g "Khởi động production…"; exec bash run.sh
