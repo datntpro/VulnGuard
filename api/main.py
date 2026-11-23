@@ -7,7 +7,7 @@ import os
 from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
-from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard
+from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard, scm
 # domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
 # đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
 from api import domain_models  # noqa: F401
@@ -19,6 +19,7 @@ from api import webscan_models  # noqa: F401
 from api import pentest_models  # noqa: F401
 from api import asset_models  # noqa: F401
 from api import connector_models  # noqa: F401
+from api import scm_models  # noqa: F401
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -210,6 +211,17 @@ app.include_router(coworker.router)
 app.include_router(coworker_agent.router)
 app.include_router(docreview.router)
 app.include_router(file_assistant.router)
+app.include_router(scm.router)
+
+
+@app.on_event("startup")
+async def _start_scheduler():
+    try:
+        from api.services import scheduler
+        scheduler.start()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[scheduler] không khởi động được: {e}")
 
 
 @app.get("/api/health")

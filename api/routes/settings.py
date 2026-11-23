@@ -347,6 +347,51 @@ async def test_sonarqube():
         raise HTTPException(503, f"Không kết nối được SonarQube tại {url}: {e}")
 
 
+@router.get("/smtp")
+def get_smtp_settings():
+    from api.services import runtime_settings as rt
+    from api.security import mask_secret
+    c = rt.smtp_config()
+    return {"host": c["host"], "port": c["port"], "username": c["username"],
+            "from_addr": c["from_addr"], "use_tls": c["use_tls"],
+            "password_set": bool(c["password"]),
+            "password_hint": mask_secret(c["password"]) if c["password"] else "",
+            "configured": rt.smtp_is_configured()}
+
+
+class SmtpUpdate(BaseModel):
+    host: str | None = None
+    port: int | None = None
+    username: str | None = None
+    password: str | None = None
+    from_addr: str | None = None
+    use_tls: bool | None = None
+    clear_password: bool = False
+
+
+@router.put("/smtp")
+def update_smtp_settings(body: SmtpUpdate):
+    from api.services import runtime_settings as rt
+    rt.set_smtp(host=body.host, port=body.port, username=body.username, password=body.password,
+               from_addr=body.from_addr, use_tls=body.use_tls, clear_password=body.clear_password)
+    return get_smtp_settings()
+
+
+class SmtpTest(BaseModel):
+    to: str
+
+
+@router.post("/smtp/test")
+def test_smtp(body: SmtpTest):
+    from api.services.mailer import send_email
+    try:
+        send_email(body.to, "[VulnGuard] Email kiểm tra",
+                   "Đây là email kiểm tra cấu hình SMTP của VulnGuard. Nếu bạn nhận được, cấu hình đã đúng.")
+        return {"ok": True, "message": f"Đã gửi email kiểm tra tới {body.to}"}
+    except Exception as e:
+        raise HTTPException(502, f"Gửi thất bại: {str(e)[:200]}")
+
+
 @router.get("/report-branding/logo-image")
 def get_report_logo_image():
     """Trả về logo hiện dùng (tùy chỉnh hoặc mặc định) để preview."""

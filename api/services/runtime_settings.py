@@ -105,3 +105,43 @@ def set_sonarqube(url: Optional[str] = None, token: Optional[str] = None,
     elif token:
         upd["sonarqube_token_enc"] = encrypt_secret(token.strip())
     return save(upd)
+
+
+# ── SMTP (gửi report tự động cho owner) ──
+def smtp_config() -> Dict[str, Any]:
+    from api.security import decrypt_secret
+    d = load()
+    return {
+        "host": d.get("smtp_host") or "",
+        "port": int(d.get("smtp_port") or 587),
+        "username": d.get("smtp_user") or "",
+        "password": decrypt_secret(d.get("smtp_pass_enc")) if d.get("smtp_pass_enc") else "",
+        "from_addr": d.get("smtp_from") or (d.get("smtp_user") or ""),
+        "use_tls": bool(d.get("smtp_tls", True)),
+    }
+
+
+def smtp_is_configured() -> bool:
+    c = smtp_config()
+    return bool(c["host"] and c["from_addr"])
+
+
+def set_smtp(host=None, port=None, username=None, password=None, from_addr=None,
+             use_tls=None, clear_password=False) -> Dict[str, Any]:
+    from api.security import encrypt_secret
+    upd: Dict[str, Any] = {}
+    if host is not None:
+        upd["smtp_host"] = host.strip() or None
+    if port is not None:
+        upd["smtp_port"] = int(port)
+    if username is not None:
+        upd["smtp_user"] = username.strip() or None
+    if from_addr is not None:
+        upd["smtp_from"] = from_addr.strip() or None
+    if use_tls is not None:
+        upd["smtp_tls"] = bool(use_tls)
+    if clear_password:
+        upd["smtp_pass_enc"] = None
+    elif password:
+        upd["smtp_pass_enc"] = encrypt_secret(password.strip())
+    return save(upd)

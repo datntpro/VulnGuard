@@ -483,6 +483,7 @@
   <div class="nav-item" onclick="navigate('assets')" id="nav-assets"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h0M7 16.5h0"/></svg><span>Asset Inventory</span></div>
   <div class="nav-item" onclick="navigate('connectors')" id="nav-connectors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3M15 7V3M8 7h8v4a4 4 0 0 1-8 0z"/><path d="M12 15v3a3 3 0 0 0 3 3h1"/></svg><span>Kết nối (XDR/NAC)</span></div>
   <div class="nav-item" onclick="navigate('compliance')" id="nav-compliance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="m9 12 2 2 4-4"/></svg><span>Tuân thủ</span></div>
+  <div class="nav-item" onclick="navigate('scm')" id="nav-scm"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H14a2 2 0 0 1 2 2v1.5M8.5 18H14a2 2 0 0 0 2-2v-1.5"/></svg><span>Nguồn mã (SCM)</span></div>
   <div class="nav-section">Hệ thống</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Settings</span></div>
   <div class="sidebar-footer">
@@ -786,6 +787,55 @@
     </div>
     <div id="compliance-body">
       <div class="sk-list" aria-busy="true"><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- SCM PAGE -->
+  <div class="page" id="page-scm">
+    <div class="flex-between mb-16"><h1>🔗 Nguồn mã (SCM)</h1></div>
+    <div class="notice" style="margin-bottom:16px;">
+      Kết nối <strong>GitHub</strong> và <strong>GitLab</strong> (cloud hoặc self-managed/onprem) để quét repo,
+      đặt <strong>lịch quét định kỳ</strong> và <strong>gửi báo cáo tự động cho owner</strong>. Token được mã hoá, không hiển thị lại.
+    </div>
+
+    <!-- Connections -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:12px;"><h2 style="margin:0;">Kết nối</h2></div>
+      <div class="grid2" style="align-items:flex-end;">
+        <div class="form-group" style="margin:0;"><label>Tên</label><input id="scm-name" placeholder="GitLab nội bộ"></div>
+        <div class="form-group" style="margin:0;"><label>Loại</label>
+          <select id="scm-provider"><option value="GITHUB">GitHub</option><option value="GITLAB">GitLab</option></select></div>
+        <div class="form-group" style="margin:0;"><label>Base URL (trống = cloud)</label><input id="scm-baseurl" class="text-mono" placeholder="https://gitlab.corp.vn"></div>
+        <div class="form-group" style="margin:0;"><label>Token (PAT)</label><input id="scm-token" type="password" autocomplete="new-password" class="text-mono" placeholder="ghp_... / glpat-..."></div>
+      </div>
+      <div class="mt-16"><button class="btn btn-primary btn-sm" onclick="scmAddConnection()">+ Thêm kết nối</button> <span id="scm-conn-msg" class="text-sm"></span></div>
+      <div id="scm-conn-list" class="mt-16"></div>
+    </div>
+
+    <!-- Repos -->
+    <div class="card">
+      <h2 style="margin:0 0 12px;">Repository được quét</h2>
+      <div id="scm-repo-list"><div class="text-sm" style="color:var(--text2);">Chưa có repo nào.</div></div>
+    </div>
+
+    <!-- SMTP -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:6px;"><h2 style="margin:0;">✉️ SMTP (gửi báo cáo)</h2><span id="smtp-badge" class="text-sm" style="color:var(--text2);"></span></div>
+      <div class="notice" style="margin-bottom:12px;">Cấu hình SMTP để gửi báo cáo PDF tự động cho owner sau mỗi lần quét theo lịch. Mật khẩu được mã hoá.</div>
+      <div class="grid2">
+        <div class="form-group"><label>SMTP host</label><input id="smtp-host" class="text-mono" placeholder="smtp.gmail.com"></div>
+        <div class="form-group"><label>Port</label><input id="smtp-port" type="number" placeholder="587"></div>
+        <div class="form-group"><label>Username</label><input id="smtp-user" class="text-mono" placeholder="bot@corp.vn"></div>
+        <div class="form-group"><label>Password</label><input id="smtp-pass" type="password" autocomplete="new-password" class="text-mono"><div class="field-hint"><span id="smtp-pass-hint"></span></div></div>
+        <div class="form-group"><label>From</label><input id="smtp-from" class="text-mono" placeholder="VulnGuard <bot@corp.vn>"></div>
+        <div class="form-group"><label><input type="checkbox" id="smtp-tls" style="width:auto;"> Dùng STARTTLS (587)</label></div>
+      </div>
+      <div class="flex" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="saveSmtp()">💾 Lưu</button>
+        <input id="smtp-test-to" placeholder="email nhận thử" style="max-width:220px;">
+        <button class="btn btn-ghost btn-sm" onclick="testSmtp()">✉️ Gửi thử</button>
+        <span id="smtp-msg" class="text-sm"></span>
+      </div>
     </div>
   </div>
 
@@ -1908,7 +1958,7 @@ function navigate(page) {
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance, scm: loadScm };
   if (loaders[page]) loaders[page]();
 }
 
@@ -6112,6 +6162,159 @@ function renderComplianceCard(fw) {
     </div>
     ${body}
   </div>`;
+}
+
+// ─── SCM (GitHub/GitLab) ─────────────────────────────────────
+let scmConnections = [], scmRepos = [], scmSchedules = [];
+async function loadScm() {
+  try {
+    [scmConnections, scmRepos, scmSchedules] = await Promise.all([
+      api('/api/scm/connections'), api('/api/scm/repos'), api('/api/scm/schedules')]);
+    renderScmConnections(); renderScmRepos(); loadSmtp();
+  } catch (e) {
+    document.getElementById('scm-conn-list').innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderScmConnections() {
+  const el = document.getElementById('scm-conn-list');
+  if (!scmConnections.length) { el.innerHTML = '<div class="text-sm" style="color:var(--text2);">Chưa có kết nối.</div>'; return; }
+  el.innerHTML = `<table><thead><tr><th>Tên</th><th>Loại</th><th>Endpoint</th><th>Token</th><th></th></tr></thead><tbody>${
+    scmConnections.map(c => `<tr>
+      <td>${escHtml(c.name)}</td>
+      <td>${c.provider === 'GITHUB' ? '🐙 GitHub' : '🦊 GitLab'}${c.cloud ? ' <span class="text-sm" style="color:var(--text2);">cloud</span>' : ''}</td>
+      <td class="text-mono text-sm">${escHtml(c.base_url || (c.provider === 'GITHUB' ? 'github.com' : 'gitlab.com'))}</td>
+      <td>${c.token_set ? '🔒 ' + escHtml(c.token_hint) : '—'}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-ghost btn-sm" onclick="scmTestConn('${c.id}')">🔌 Test</button>
+        <button class="btn btn-ghost btn-sm" onclick="scmBrowse('${c.id}')">📂 Repo</button>
+        <button class="btn btn-ghost btn-sm" onclick="scmDeleteConn('${c.id}')">🗑️</button>
+      </td></tr>
+      <tr id="scm-browse-${c.id}" style="display:none;"><td colspan="5"></td></tr>`).join('')}</tbody></table>`;
+}
+async function scmAddConnection() {
+  const msg = document.getElementById('scm-conn-msg');
+  const body = { name: val('scm-name').trim(), provider: val('scm-provider'),
+                 base_url: val('scm-baseurl').trim(), token: val('scm-token').trim() };
+  if (!body.name || !body.token) { msg.textContent = 'Nhập tên và token'; return; }
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try {
+    await api('/api/scm/connections', { method: 'POST', body });
+    ['scm-name','scm-baseurl','scm-token'].forEach(id => setVal(id, ''));
+    msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã thêm';
+    loadScm();
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function scmTestConn(id) {
+  const msg = document.getElementById('scm-conn-msg');
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra...';
+  try { const r = await api(`/api/scm/connections/${id}/test`, { method: 'POST' });
+    msg.style.color = 'var(--low)'; msg.textContent = `✅ OK — user: ${r.user || ''}`;
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function scmDeleteConn(id) {
+  if (!confirm('Xóa kết nối này (kèm repo & lịch liên quan)?')) return;
+  try { await api(`/api/scm/connections/${id}`, { method: 'DELETE' }); loadScm(); } catch (e) { toast(e.message, 'error'); }
+}
+async function scmBrowse(id) {
+  const row = document.getElementById('scm-browse-' + id);
+  const cell = row.querySelector('td');
+  if (row.style.display === 'table-row') { row.style.display = 'none'; return; }
+  row.style.display = 'table-row'; cell.innerHTML = 'Đang tải danh sách repo...';
+  try {
+    const repos = await api(`/api/scm/connections/${id}/remote-repos`);
+    cell.innerHTML = repos.length ? `<div style="max-height:260px;overflow:auto;">${repos.map(r => `
+      <div class="flex-between" style="padding:4px 0;border-bottom:1px solid var(--border);">
+        <span class="text-mono text-sm">${escHtml(r.full_name)} <span style="color:var(--text2);">(${escHtml(r.default_branch)})</span></span>
+        <button class="btn btn-ghost btn-sm" onclick="scmAddRepo('${id}','${escHtml(r.full_name)}','${escHtml(r.default_branch)}')">+ Thêm</button>
+      </div>`).join('')}</div>` : '<span class="text-sm">Không có repo.</span>';
+  } catch (e) { cell.innerHTML = '<span class="text-sm" style="color:var(--critical);">' + escHtml(e.message) + '</span>'; }
+}
+async function scmAddRepo(connId, fullName, branch) {
+  const email = prompt(`Email owner nhận báo cáo cho ${fullName} (có thể bỏ trống):`, '');
+  try {
+    await api('/api/scm/repos', { method: 'POST', body: {
+      connection_id: connId, repo_full_name: fullName, default_branch: branch || 'main',
+      owner_email: email || '', scan_types: [], run_ai: false } });
+    toast('Đã thêm repo ' + fullName, 'success'); loadScm();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function renderScmRepos() {
+  const el = document.getElementById('scm-repo-list');
+  if (!scmRepos.length) { el.innerHTML = '<div class="text-sm" style="color:var(--text2);">Chưa có repo nào. Dùng "📂 Repo" ở kết nối để thêm.</div>'; return; }
+  el.innerHTML = scmRepos.map(r => {
+    const sch = scmSchedules.find(s => s.repo_id === r.id);
+    const last = sch && sch.last_run_at ? `· lần chạy gần nhất: ${fmtDate(sch.last_run_at)} (${sch.last_status || '—'})` : '';
+    return `<div class="card" style="margin-bottom:12px;background:var(--bg2);">
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+        <div><strong class="text-mono">${escHtml(r.repo_full_name)}</strong>
+          <span class="text-sm" style="color:var(--text2);">· ${escHtml(r.default_branch)} ${r.owner_email ? '· 📧 ' + escHtml(r.owner_email) : '· (chưa có owner email)'}</span></div>
+        <div style="white-space:nowrap;">
+          <button class="btn btn-primary btn-sm" onclick="scmScanNow('${r.id}')">▶ Quét ngay</button>
+          <button class="btn btn-ghost btn-sm" onclick="scmDeleteRepo('${r.id}')">🗑️</button>
+        </div>
+      </div>
+      <div class="flex" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <span class="text-sm">Lịch quét mỗi</span>
+        <input type="number" id="sch-int-${r.id}" value="${sch ? sch.interval_minutes : 1440}" min="5" style="width:90px;"><span class="text-sm">phút</span>
+        <label class="text-sm"><input type="checkbox" id="sch-email-${r.id}" ${!sch || sch.email_report ? 'checked' : ''} style="width:auto;"> gửi report owner</label>
+        <label class="text-sm"><input type="checkbox" id="sch-en-${r.id}" ${sch && sch.enabled ? 'checked' : ''} style="width:auto;"> bật lịch</label>
+        <button class="btn btn-ghost btn-sm" onclick="scmSaveSchedule('${r.id}','${sch ? sch.id : ''}')">💾 Lưu lịch</button>
+        ${sch ? `<button class="btn btn-ghost btn-sm" onclick="scmDeleteSchedule('${sch.id}')">Xóa lịch</button>` : ''}
+        <span class="text-sm" style="color:var(--text2);">${last}</span>
+      </div>
+      ${sch && sch.last_error ? `<div class="text-sm" style="color:var(--critical);margin-top:6px;">Lỗi: ${escHtml(sch.last_error)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+async function scmScanNow(id) {
+  try { const r = await api(`/api/scm/repos/${id}/scan-now`, { method: 'POST' }); toast(r.message || 'Đã kích hoạt', 'success'); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function scmDeleteRepo(id) {
+  if (!confirm('Xóa repo này khỏi danh sách quét?')) return;
+  try { await api(`/api/scm/repos/${id}`, { method: 'DELETE' }); loadScm(); } catch (e) { toast(e.message, 'error'); }
+}
+async function scmSaveSchedule(repoId, schId) {
+  const body = { repo_id: repoId,
+    interval_minutes: parseInt(document.getElementById('sch-int-' + repoId).value, 10) || 1440,
+    email_report: document.getElementById('sch-email-' + repoId).checked,
+    enabled: document.getElementById('sch-en-' + repoId).checked };
+  try {
+    if (schId) await api(`/api/scm/schedules/${schId}`, { method: 'PUT', body });
+    else await api('/api/scm/schedules', { method: 'POST', body });
+    toast('Đã lưu lịch', 'success'); loadScm();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function scmDeleteSchedule(id) {
+  try { await api(`/api/scm/schedules/${id}`, { method: 'DELETE' }); loadScm(); } catch (e) { toast(e.message, 'error'); }
+}
+// SMTP
+async function loadSmtp() {
+  try {
+    const s = await api('/api/settings/smtp');
+    setVal('smtp-host', s.host); setVal('smtp-port', s.port); setVal('smtp-user', s.username);
+    setVal('smtp-from', s.from_addr); setVal('smtp-pass', '');
+    document.getElementById('smtp-tls').checked = !!s.use_tls;
+    document.getElementById('smtp-pass-hint').textContent = s.password_set ? `Đã lưu: ${s.password_hint}` : 'Chưa có mật khẩu.';
+    document.getElementById('smtp-badge').textContent = s.configured ? 'đã cấu hình' : 'chưa cấu hình';
+  } catch (e) { /* bỏ qua */ }
+}
+async function saveSmtp() {
+  const msg = document.getElementById('smtp-msg');
+  const body = { host: val('smtp-host').trim(), port: parseInt(val('smtp-port'), 10) || 587,
+    username: val('smtp-user').trim(), from_addr: val('smtp-from').trim(),
+    use_tls: document.getElementById('smtp-tls').checked };
+  const p = val('smtp-pass').trim(); if (p) body.password = p;
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try { await api('/api/settings/smtp', { method: 'PUT', body }); msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã lưu'; loadSmtp(); }
+  catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function testSmtp() {
+  const to = val('smtp-test-to').trim(); const msg = document.getElementById('smtp-msg');
+  if (!to) { msg.textContent = 'Nhập email nhận thử'; return; }
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang gửi...';
+  try { const r = await api('/api/settings/smtp/test', { method: 'POST', body: { to } }); msg.style.color = 'var(--low)'; msg.textContent = '✅ ' + r.message; }
+  catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
 }
 
 function connStatusBadge(status) {
