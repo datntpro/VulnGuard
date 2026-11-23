@@ -1358,7 +1358,7 @@
           <div><label>Tool</label><div id="modal-tool" class="text-mono"></div></div>
           <div><label>Scan Type</label><div id="modal-scan-type"></div></div>
           <div><label>Rule/CVE</label><div id="modal-rule" class="text-mono"></div></div>
-          <div><label>Status</label><div id="modal-status"></div></div>
+          <div><label>Trạng thái</label><div id="modal-status"></div><span id="modal-new-badge"></span></div>
           <div><label>File</label><div id="modal-file" class="text-mono text-sm"></div></div>
           <div><label>Line</label><div id="modal-line" class="text-mono"></div></div>
         </div>
@@ -1376,9 +1376,29 @@
           <label>Code snippet</label>
           <div id="modal-code" class="code-block"></div>
         </div>
-        <div class="mt-16 flex gap-8">
-          <button class="btn btn-ghost btn-sm" onclick="markFP()">Mark False Positive</button>
-          <button class="btn btn-ghost btn-sm" onclick="markOpen()">Reset to Open</button>
+        <!-- Triage panel (Checkmarx-style) -->
+        <div class="separator" style="margin:18px 0 12px;"></div>
+        <div class="flex-between" style="margin-bottom:8px;">
+          <h3 style="margin:0;font-size:14px;">🏷️ Triage</h3>
+          <span class="text-sm" style="color:var(--text2);" id="modal-triage-meta"></span>
+        </div>
+        <div class="grid2" style="align-items:flex-end;">
+          <div class="form-group" style="margin:0;">
+            <label>Đổi trạng thái</label>
+            <select id="triage-state"></select>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label>Ghi chú (bắt buộc với "Không khai thác được / Chấp nhận")</label>
+            <input id="triage-note" placeholder="Lý do / bằng chứng...">
+          </div>
+        </div>
+        <div class="mt-16 flex gap-8" style="align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="applyTriage()">💾 Cập nhật trạng thái</button>
+          <span id="triage-msg" class="text-sm"></span>
+        </div>
+        <div class="mt-16">
+          <label style="display:block;margin-bottom:6px;">Lịch sử triage (xuyên scan)</label>
+          <div id="triage-history" class="text-sm" style="color:var(--text2);">—</div>
         </div>
       </div>
       <div class="tab-content" id="tab-ai">
@@ -1929,10 +1949,20 @@ function sevBadge(s) {
   const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
   return `<span class="badge ${cls[s] || 'badge-info'}">${s}</span>`;
 }
+// Trạng thái triage kiểu Checkmarx
+const TRIAGE_STATES = [
+  { v: 'OPEN', lbl: 'Cần xác minh', cls: 'badge-open' },
+  { v: 'CONFIRMED', lbl: 'Đã xác nhận', cls: 'badge-high' },
+  { v: 'URGENT', lbl: 'Khẩn cấp', cls: 'badge-critical' },
+  { v: 'PROPOSED_NE', lbl: 'Đề xuất: Không khai thác được', cls: 'badge-medium' },
+  { v: 'NOT_EXPLOITABLE', lbl: 'Không khai thác được', cls: 'badge-fp' },
+  { v: 'ACCEPTED', lbl: 'Chấp nhận rủi ro', cls: 'badge-accepted' },
+  { v: 'FIXED', lbl: 'Đã sửa', cls: 'badge-fixed' },
+];
+const STATUS_LABEL = Object.fromEntries(TRIAGE_STATES.map(s => [s.v, s.lbl]).concat([['FALSE_POSITIVE', 'False Positive']]));
+const STATUS_CLS = Object.fromEntries(TRIAGE_STATES.map(s => [s.v, s.cls]).concat([['FALSE_POSITIVE', 'badge-fp']]));
 function statusBadge(s) {
-  const cls = { OPEN: 'badge-open', ACCEPTED: 'badge-accepted', FALSE_POSITIVE: 'badge-fp', FIXED: 'badge-fixed' };
-  const lbl = { OPEN: 'Open', ACCEPTED: 'Accepted', FALSE_POSITIVE: 'False Positive', FIXED: 'Fixed' };
-  return `<span class="badge ${cls[s] || ''}">${lbl[s] || s}</span>`;
+  return `<span class="badge ${STATUS_CLS[s] || ''}">${STATUS_LABEL[s] || s}</span>`;
 }
 function fmtDate(d) { return d ? new Date(d).toLocaleString('vi-VN') : '—'; }
 
@@ -2749,10 +2779,9 @@ function renderVulnTable() {
         <option value="LOW" ${sevFilter==='LOW'?'selected':''}>Low</option>
       </select>
       <select id="filter-status" onchange="renderVulnTable()">
-        <option value="">All Status</option>
-        <option value="OPEN" ${statusFilter==='OPEN'?'selected':''}>Open</option>
-        <option value="ACCEPTED" ${statusFilter==='ACCEPTED'?'selected':''}>Accepted</option>
-        <option value="FALSE_POSITIVE" ${statusFilter==='FALSE_POSITIVE'?'selected':''}>False Positive</option>
+        <option value="">Tất cả trạng thái</option>
+        ${TRIAGE_STATES.map(s => `<option value="${s.v}" ${statusFilter===s.v?'selected':''}>${s.lbl}</option>`).join('')}
+        <option value="FALSE_POSITIVE" ${statusFilter==='FALSE_POSITIVE'?'selected':''}>False Positive (cũ)</option>
       </select>
       <select id="filter-type" onchange="renderVulnTable()">
         <option value="">All Types</option>
@@ -2834,6 +2863,7 @@ function openVulnDetail(vulnId) {
   document.getElementById('modal-scan-type').innerHTML = `<span class="tag">${v.scan_type}</span>`;
   document.getElementById('modal-rule').textContent = v.rule_id || '—';
   document.getElementById('modal-status').innerHTML = statusBadge(v.status);
+  renderTriagePanel(v);
   document.getElementById('modal-file').textContent = v.file_path || '—';
   document.getElementById('modal-line').textContent = v.line_start ? `${v.line_start}${v.line_end && v.line_end !== v.line_start ? '–'+v.line_end : ''}` : '—';
   document.getElementById('modal-desc').textContent = v.description || '—';
@@ -2901,11 +2931,51 @@ function switchTab(el, tabId) {
   document.getElementById(tabId)?.classList.add('active');
 }
 
-async function markFP() {
-  try { await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status: 'FALSE_POSITIVE' }}); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+function isNewFinding(v) {
+  return !v.first_seen_scan_id || v.first_seen_scan_id === v.scan_id;
 }
-async function markOpen() {
-  try { await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status: 'OPEN' }}); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+function renderTriagePanel(v) {
+  // badge Mới / Tái xuất hiện
+  const nb = document.getElementById('modal-new-badge');
+  nb.innerHTML = isNewFinding(v)
+    ? ' <span class="badge badge-high">Mới</span>'
+    : ' <span class="badge badge-info">Tái xuất hiện</span>';
+  // select trạng thái
+  const sel = document.getElementById('triage-state');
+  sel.innerHTML = TRIAGE_STATES.map(s => `<option value="${s.v}"${s.v === v.status ? ' selected' : ''}>${s.lbl}</option>`).join('');
+  document.getElementById('triage-note').value = '';
+  // meta người triage
+  const meta = document.getElementById('modal-triage-meta');
+  meta.textContent = v.triage_by ? `Triage gần nhất: ${v.triage_by} · ${fmtDate(v.triage_at)}` : 'Chưa triage';
+  document.getElementById('triage-msg').textContent = '';
+  loadTriageHistory(v.id);
+}
+async function loadTriageHistory(vulnId) {
+  const el = document.getElementById('triage-history');
+  el.textContent = 'Đang tải...';
+  try {
+    const rows = await api(`/api/vulns/${vulnId}/triage-history`);
+    if (!rows.length) { el.textContent = 'Chưa có thay đổi nào.'; return; }
+    el.innerHTML = rows.map(r => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);">
+        ${statusBadge(r.from_status || '—')} → ${statusBadge(r.to_status)}
+        <span style="color:var(--text2);">· ${escHtml(r.actor || 'hệ thống')} · ${fmtDate(r.created_at)}</span>
+        ${r.note ? `<div style="margin-top:2px;">📝 ${escHtml(r.note)}</div>` : ''}
+      </div>`).join('');
+  } catch (e) { el.textContent = 'Không tải được lịch sử: ' + e.message; }
+}
+async function applyTriage() {
+  const status = document.getElementById('triage-state').value;
+  const note = document.getElementById('triage-note').value.trim();
+  const msg = document.getElementById('triage-msg');
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try {
+    await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status, note } });
+    msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã cập nhật';
+    await refreshCurrentVuln();
+  } catch (e) {
+    msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message;
+  }
 }
 async function refreshCurrentVuln() {
   const idx = allVulns.findIndex(v => v.id === currentVulnId);

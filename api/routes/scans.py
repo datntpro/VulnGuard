@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from api.database import get_db, SessionLocal
-from api.models import Project, Scan, Vulnerability, ScanStatus, Severity
+from api.models import Project, Scan, Vulnerability, ScanStatus, Severity, ACTIVE_VULN_STATUS_VALUES
 from api.schemas import ScanCreate, ScanOut, VulnOut
 from api.config import settings
 
@@ -33,7 +33,7 @@ def _compute_summary(vulns: List[Vulnerability]) -> dict:
     for v in vulns:
         summary[v.severity.value] += 1
         summary["total"] += 1
-        if v.status.value == "OPEN":
+        if v.status.value in ACTIVE_VULN_STATUS_VALUES:
             summary["open"] += 1
         elif v.status.value == "ACCEPTED":
             summary["accepted"] += 1
@@ -169,6 +169,18 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
 
         db.commit()
         db.refresh(scan)
+
+        # ── Kế thừa triage từ scan trước (Checkmarx-style): finding đã đánh
+        #    "Không khai thác được / Đã xác nhận / Chấp nhận" không phải triage lại ──
+        try:
+            import logging as _lg
+            from api.services.triage import inherit_triage
+            n_inherited = inherit_triage(db, scan)
+            if n_inherited:
+                _lg.getLogger(__name__).info(f"[triage] kế thừa {n_inherited} finding từ scan trước")
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(f"[triage] kế thừa lỗi (bỏ qua): {e}")
 
         # ── Phase 1 DONE: Đánh dấu scan COMPLETED ngay (không đợi AI) ────
         # UI sẽ thấy kết quả scan ngay lập tức

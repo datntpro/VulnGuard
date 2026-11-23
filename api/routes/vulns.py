@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from datetime import datetime
 
 from api.database import get_db
-from api.models import Vulnerability, Waiver, VulnStatus
-from api.schemas import VulnOut, VulnStatusUpdate, WaiverCreate, WaiverOut
+from api.models import Vulnerability, Waiver, VulnStatus, TriageEvent
+from api.auth_models import UserRole
+from api.schemas import VulnOut, VulnStatusUpdate, WaiverCreate, WaiverOut, TriageEventOut
 from api.config import settings
 
 router = APIRouter(prefix="/api/vulns", tags=["vulnerabilities"])
@@ -28,15 +31,41 @@ def get_vuln(vuln_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{vuln_id}/status", response_model=VulnOut)
-def update_vuln_status(vuln_id: str, payload: VulnStatusUpdate, db: Session = Depends(get_db)):
+def update_vuln_status(vuln_id: str, payload: VulnStatusUpdate, request: Request,
+                       db: Session = Depends(get_db)):
+    """Đổi trạng thái triage (Checkmarx-style) — kiểm tra quyền, note bắt buộc, ghi audit."""
+    from api.services.triage import apply_triage, TriageError
+    from api.routes.auth import current_user
+
     vuln = db.query(Vulnerability).filter(Vulnerability.id == vuln_id).first()
     if not vuln:
         raise HTTPException(status_code=404, detail="Vulnerability không tồn tại")
 
-    vuln.status = payload.status
-    db.commit()
-    db.refresh(vuln)
-    return vuln
+    try:
+        user = current_user(request)
+        actor = user.email or user.name
+        is_admin = user.role == UserRole.ADMIN
+    except Exception:
+        actor, is_admin = None, True  # auth tắt (dev) → coi như admin
+
+    try:
+        return apply_triage(db, vuln, payload.status, payload.note, actor, is_admin)
+    except TriageError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.get("/{vuln_id}/triage-history", response_model=List[TriageEventOut])
+def triage_history(vuln_id: str, db: Session = Depends(get_db)):
+    """Change log triage của finding — gồm cả lịch sử xuyên scan (theo fingerprint)."""
+    vuln = db.query(Vulnerability).filter(Vulnerability.id == vuln_id).first()
+    if not vuln:
+        raise HTTPException(status_code=404, detail="Vulnerability không tồn tại")
+    q = db.query(TriageEvent)
+    if vuln.fingerprint:
+        q = q.filter(TriageEvent.fingerprint == vuln.fingerprint)
+    else:
+        q = q.filter(TriageEvent.vulnerability_id == vuln_id)
+    return q.order_by(TriageEvent.created_at.desc()).all()
 
 
 @router.post("/{vuln_id}/waiver", response_model=WaiverOut, status_code=201)

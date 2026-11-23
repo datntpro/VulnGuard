@@ -52,6 +52,12 @@ def _run_migrations():
             "ALTER TABLE pentest_findings ADD COLUMN evidence_traffic_id VARCHAR",
             "ALTER TABLE pentest_runs ADD COLUMN todolist TEXT",
             "ALTER TABLE pentest_engagements ADD COLUMN max_parallel INTEGER DEFAULT 3",
+            # GĐ1 triage (Checkmarx-style) — cột mới trên vulnerabilities
+            "ALTER TABLE vulnerabilities ADD COLUMN triage_note TEXT",
+            "ALTER TABLE vulnerabilities ADD COLUMN triage_by VARCHAR(200)",
+            "ALTER TABLE vulnerabilities ADD COLUMN triage_at DATETIME",
+            "ALTER TABLE vulnerabilities ADD COLUMN first_seen_at DATETIME",
+            "ALTER TABLE vulnerabilities ADD COLUMN first_seen_scan_id VARCHAR",
         ):
             try:
                 conn.execute(text(ddl))

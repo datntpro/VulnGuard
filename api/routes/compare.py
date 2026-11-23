@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from api.database import get_db
-from api.models import Scan, Vulnerability, VulnStatus
+from api.models import Scan, Vulnerability, VulnStatus, ACTIVE_VULN_STATUS_VALUES
 from api.schemas import CompareResult, VulnDiff, VulnOut, ScanOut
 from api.config import settings
 
@@ -78,7 +78,7 @@ def compare_scans(
     blocked_vulns = [
         v for v in new_vulns
         if SEVERITY_ORDER.get(v.severity.value, 99) <= threshold_level
-        and v.status.value == "OPEN"
+        and v.status.value in ACTIVE_VULN_STATUS_VALUES
     ]
 
     summary = {
@@ -119,7 +119,7 @@ def approve_check(project_id: str, scan_id: str, db: Session = Depends(get_db)):
 
     blocked_vulns = db.query(Vulnerability).filter(
         Vulnerability.scan_id == scan_id,
-        Vulnerability.status == "OPEN"
+        Vulnerability.status.in_(ACTIVE_VULN_STATUS_VALUES)
     ).all()
 
     blocked_vulns = [
