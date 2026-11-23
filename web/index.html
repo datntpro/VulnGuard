@@ -2661,9 +2661,11 @@ async function loadScans(projectId) {
       <div class="flex mb-16">
         <button class="btn btn-primary" onclick="openScanModal('${projectId}')">🚀 Scan mới</button>
       </div>
+      <div id="scan-history-block"></div>
       <div style="display:flex;flex-direction:column;gap:12px;">
         ${scans.map(sc => renderScanCard(sc, projectId)).join('')}
       </div>`;
+    renderScanHistory(projectId);
 
     // Auto-poll running scans (2s interval for fresh progress data)
     const running = scans.find(s => s.status === 'RUNNING' || s.status === 'PENDING');
@@ -2676,6 +2678,67 @@ async function loadScans(projectId) {
   } catch(e) {
     el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
   }
+}
+
+// ─── Scan History + Trend (GĐ2) ──────────────────────────────
+// Status palette (cố định 2 theme) — dùng hex vì --sev-* chỉ scope trong .vg-dash
+const SEV_BAR = { CRITICAL: '#d03b3b', HIGH: '#ec835a', MEDIUM: '#fab219', LOW: '#0ca30c', INFO: '#3987e5' };
+async function renderScanHistory(projectId) {
+  const box = document.getElementById('scan-history-block');
+  if (!box) return;
+  let data;
+  try { data = await api(`/api/projects/${projectId}/scan-trend`); } catch { return; }
+  const pts = data.points || [];
+  if (pts.length < 1) return;
+  const maxTotal = Math.max(1, ...pts.map(p => p.total));
+  const sevs = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+  const bars = pts.map(p => {
+    const segs = sevs.filter(s => p[s] > 0).map(s =>
+      `<span title="${DASH_SEV_LABEL[s]}: ${p[s]}" style="width:${(p[s]/maxTotal*320)}px;background:${SEV_BAR[s]};height:14px;display:inline-block;"></span>`).join('');
+    return `<div style="display:flex;align-items:center;gap:10px;margin:4px 0;">
+      <span class="text-mono text-sm" style="width:92px;color:var(--text2);">#${p.scan_number}</span>
+      <span style="display:inline-flex;border-radius:3px;overflow:hidden;background:var(--bg3);min-width:2px;">${segs}</span>
+      <span class="text-sm" style="color:var(--text2);">${p.total} (${p.active} mở)</span>
+    </div>`;
+  }).join('');
+  const opts = pts.map(p => `<option value="${p.scan_id}">#${p.scan_number} · ${fmtDate(p.started_at)}</option>`).join('');
+  const last2 = pts.length >= 2 ? [pts[pts.length-2].scan_id, pts[pts.length-1].scan_id] : [pts[0].scan_id, pts[0].scan_id];
+  box.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin:0 0 10px;">📊 Lịch sử & xu hướng</h2>
+      <div style="margin-bottom:14px;">${bars}</div>
+      <div class="flex" style="gap:8px;align-items:flex-end;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px;">
+        <div class="form-group" style="margin:0;"><label>Scan cũ</label><select id="hist-old">${opts}</select></div>
+        <div class="form-group" style="margin:0;"><label>Scan mới</label><select id="hist-new">${opts}</select></div>
+        <button class="btn btn-primary btn-sm" onclick="runInlineCompare('${projectId}')">⇄ So sánh</button>
+      </div>
+      <div id="hist-compare" class="mt-16"></div>
+    </div>`;
+  document.getElementById('hist-old').value = last2[0];
+  document.getElementById('hist-new').value = last2[1];
+}
+async function runInlineCompare(projectId) {
+  const oldId = document.getElementById('hist-old').value;
+  const newId = document.getElementById('hist-new').value;
+  const el = document.getElementById('hist-compare');
+  if (oldId === newId) { el.innerHTML = '<div class="notice warn">Chọn 2 scan khác nhau.</div>'; return; }
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>Đang so sánh...</div>';
+  try {
+    const r = await api(`/api/projects/${projectId}/compare?scan_old_id=${oldId}&scan_new_id=${newId}`);
+    const { diff, summary } = r;
+    const note = summary.settings_changed ? `<div class="notice warn" style="margin-bottom:12px;">⚠️ Scan settings đổi (${(summary.old_types||[]).join(',')||'—'} → ${(summary.new_types||[]).join(',')||'—'}) — có mục "Chưa đánh giá".</div>` : '';
+    el.innerHTML = `${note}
+      <div class="grid4 mb-16">
+        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 Mới</div></div>
+        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">🔁 Tái xuất hiện</div></div>
+        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Đã khắc phục</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--text2)">${summary.not_evaluated_count||0}</div><div class="stat-label">➖ Chưa đánh giá</div></div>
+      </div>
+      ${renderCompareSection('🆕 Mới (New)', diff.new, 'compare-new')}
+      ${renderCompareSection('🔁 Tái xuất hiện (Recurring)', diff.persisted, 'compare-persisted')}
+      ${renderCompareSection('✅ Đã khắc phục (Resolved)', diff.fixed, 'compare-fixed')}
+      ${renderCompareSection('➖ Chưa đánh giá (Not Evaluated)', diff.not_evaluated || [], '')}`;
+  } catch (e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`; }
 }
 
 function renderScanCard(sc, projectId) {
@@ -3403,19 +3466,26 @@ async function runCompare() {
     const r = await api(`/api/projects/${projectId}/compare?scan_old_id=${scanOld}&scan_new_id=${scanNew}`);
     const { diff, summary } = r;
 
+    const settingsNote = summary.settings_changed ? `
+      <div class="notice warn" style="margin-bottom:16px;">
+        ⚠️ Scan settings đã thay đổi giữa 2 lần quét (cũ: ${(summary.old_types||[]).join(', ')||'—'} → mới: ${(summary.new_types||[]).join(', ')||'—'}).
+        Các finding thuộc loại quét không chạy lại được xếp vào <strong>Chưa đánh giá</strong> để không báo nhầm "đã khắc phục".
+      </div>` : '';
     el.innerHTML = `
+      ${settingsNote}
       <div class="${summary.approve_status === 'BLOCKED' ? 'approve-blocked' : 'approve-ok'}" style="margin-bottom:16px;font-weight:600;">
         ${summary.approve_message}
       </div>
       <div class="grid4 mb-16 vg-stagger">
-        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 New</div></div>
-        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Fixed</div></div>
-        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">⏳ Persisted</div></div>
-        <div class="stat-card"><div class="stat-num c">${summary.blocked_count}</div><div class="stat-label">⛔ Blocked</div></div>
+        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 Mới</div></div>
+        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">🔁 Tái xuất hiện</div></div>
+        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Đã khắc phục</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--text2)">${summary.not_evaluated_count||0}</div><div class="stat-label">➖ Chưa đánh giá</div></div>
       </div>
-      ${renderCompareSection('🆕 New Vulnerabilities', diff.new, 'compare-new')}
-      ${renderCompareSection('✅ Fixed Vulnerabilities', diff.fixed, 'compare-fixed')}
-      ${renderCompareSection('⏳ Persisted (chưa fix)', diff.persisted, 'compare-persisted')}
+      ${renderCompareSection('🆕 Mới (New)', diff.new, 'compare-new')}
+      ${renderCompareSection('🔁 Tái xuất hiện (Recurring)', diff.persisted, 'compare-persisted')}
+      ${renderCompareSection('✅ Đã khắc phục (Resolved)', diff.fixed, 'compare-fixed')}
+      ${renderCompareSection('➖ Chưa đánh giá (Not Evaluated)', diff.not_evaluated || [], '')}
     `;
   } catch(e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`; }
 }

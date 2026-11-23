@@ -165,9 +165,10 @@ class WaiverCreate(BaseModel):
 # Compare Schemas
 # ─────────────────────────────────────────────
 class VulnDiff(BaseModel):
-    new: List[VulnOut] = []        # Xuất hiện lần đầu trong scan mới
-    fixed: List[VulnOut] = []      # Có trong scan cũ, không còn trong scan mới
-    persisted: List[VulnOut] = []  # Vẫn còn trong cả hai
+    new: List[VulnOut] = []            # Xuất hiện lần đầu trong scan mới
+    fixed: List[VulnOut] = []          # Có trong scan cũ, không còn trong scan mới (đã resolve)
+    persisted: List[VulnOut] = []      # Vẫn còn trong cả hai (recurring)
+    not_evaluated: List[VulnOut] = []  # Không đánh giá lại được do đổi scan settings
 
 
 class CompareResult(BaseModel):
