@@ -16,6 +16,7 @@ class ConnectorKind(str, enum.Enum):
     TRELLIX_XDR = "TRELLIX_XDR"
     TRENDMICRO_VISION_ONE = "TRENDMICRO_VISION_ONE"
     FORTINAC = "FORTINAC"
+    WAZUH = "WAZUH"                      # open-source SIEM/XDR/HIDS
 
 
 class ConnectorConfig(Base):

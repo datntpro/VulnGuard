@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
@@ -386,36 +386,81 @@ async def trigger_scan(
     if not project:
         raise HTTPException(status_code=404, detail="Project không tồn tại")
 
+    scan = await _create_and_run_scan(
+        db, project_id, payload.scan_path,
+        [t.value for t in payload.scan_types], payload.run_ai_analysis, background_tasks)
+    return scan
+
+
+async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, background_tasks):
+    """Tạo Scan (rolling) + chạy nền. Dùng chung cho scan theo path và scan file upload."""
     async with _get_project_lock(project_id):
-        # Rolling scan (max 5)
         scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.scan_number).all()
         if len(scans) >= settings.max_scans_per_project:
-            oldest = scans[0]
-            db.delete(oldest)
-            db.commit()
-            scans = scans[1:]
-
+            db.delete(scans[0]); db.commit(); scans = scans[1:]
         next_number = (scans[-1].scan_number + 1) if scans else 1
+        scan = Scan(project_id=project_id, scan_number=next_number, scan_path=scan_path,
+                    scan_types=scan_types, status=ScanStatus.PENDING)
+        db.add(scan); db.commit(); db.refresh(scan)
+    background_tasks.add_task(_run_scan_background, scan.id, scan_path, scan_types, run_ai)
+    return scan
 
-        scan = Scan(
-            project_id=project_id,
-            scan_number=next_number,
-            scan_path=payload.scan_path,
-            scan_types=[t.value for t in payload.scan_types],
-            status=ScanStatus.PENDING,
-        )
-        db.add(scan)
-        db.commit()
-        db.refresh(scan)
 
-    background_tasks.add_task(
-        _run_scan_background,
-        scan.id,
-        payload.scan_path,
-        [t.value for t in payload.scan_types],
-        payload.run_ai_analysis,
-    )
+def _safe_extract_zip(zip_bytes: bytes, dest_dir: str) -> int:
+    """Giải nén zip vào dest_dir, CHỐNG zip-slip (bỏ member có path tuyệt đối/.. thoát ra ngoài).
+    Trả số file đã giải nén."""
+    import zipfile
+    os.makedirs(dest_dir, exist_ok=True)
+    root = os.path.realpath(dest_dir)
+    n = 0
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for info in zf.infolist():
+            name = info.filename
+            if name.endswith("/"):
+                continue
+            target = os.path.realpath(os.path.join(dest_dir, name))
+            if not (target == root or target.startswith(root + os.sep)):
+                continue   # zip-slip: bỏ qua
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                out.write(src.read())
+            n += 1
+    return n
 
+
+@router.post("/{project_id}/scan-upload", response_model=ScanOut, status_code=202)
+async def scan_upload(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    scan_types: str = Form("SAST,SCA,IAC,SECRETS"),
+    run_ai_analysis: bool = Form(True),
+    db: Session = Depends(get_db),
+):
+    """Upload 1 file .zip mã nguồn → giải nén an toàn → tạo scan trên đó."""
+    from api.models import ScanType
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project không tồn tại")
+    if not (file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .zip")
+    raw = await file.read()
+    if len(raw) > 300 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File quá lớn (tối đa 300MB)")
+    # validate scan_types
+    valid = {t.value for t in ScanType}
+    types = [t.strip().upper() for t in scan_types.split(",") if t.strip().upper() in valid] or ["SAST"]
+
+    import uuid as _uuid
+    dest = os.path.join(settings.storage_dir, "scan_uploads", project_id, _uuid.uuid4().hex)
+    try:
+        count = _safe_extract_zip(raw, dest)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Không giải nén được zip: {str(e)[:200]}")
+    if count == 0:
+        raise HTTPException(status_code=400, detail="Zip rỗng hoặc mọi file bị chặn (zip-slip)")
+
+    scan = await _create_and_run_scan(db, project_id, dest, types, run_ai_analysis, background_tasks)
     return scan
 
 

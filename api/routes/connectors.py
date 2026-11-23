@@ -51,7 +51,7 @@ def _out(c: ConnectorConfig) -> dict:
 @router.get("/kinds")
 def list_kinds():
     labels = {"TRELLIX_XDR": "Trellix XDR (EDR)", "TRENDMICRO_VISION_ONE": "Trend Micro Vision One (XDR)",
-              "FORTINAC": "FortiNAC"}
+              "FORTINAC": "FortiNAC", "WAZUH": "Wazuh (SIEM/XDR – open source)"}
     return [{**d, "label": labels.get(d["kind"], d["kind"])} for d in describe()]
 
 

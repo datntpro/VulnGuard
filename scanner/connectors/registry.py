@@ -5,11 +5,13 @@ from scanner.connectors.base import BaseConnector
 from scanner.connectors.fortinac import FortiNACConnector
 from scanner.connectors.trellix import TrellixConnector
 from scanner.connectors.trendmicro import TrendMicroConnector
+from scanner.connectors.wazuh import WazuhConnector
 
 REGISTRY: Dict[str, Type[BaseConnector]] = {
     "TRELLIX_XDR": TrellixConnector,
     "TRENDMICRO_VISION_ONE": TrendMicroConnector,
     "FORTINAC": FortiNACConnector,
+    "WAZUH": WazuhConnector,
 }
 
 

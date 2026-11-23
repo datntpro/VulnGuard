@@ -472,7 +472,6 @@
   <div class="nav-item active" onclick="navigate('dashboard')" id="nav-dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>Dashboard</span></div>
   <div class="nav-item" onclick="navigate('projects')" id="nav-projects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2.2h7.5A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg><span>Projects</span></div>
   <div class="nav-item" onclick="navigate('scans')" id="nav-scans"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/><path d="M8 11h6"/></svg><span>Scans</span></div>
-  <div class="nav-item" onclick="navigate('compare')" id="nav-compare"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h5.5"/><path d="M18 15.5V10a4 4 0 0 0-4-4H8.5"/></svg><span>Compare</span></div>
   <div class="nav-section">Hạ tầng & tài liệu</div>
   <div class="nav-item" onclick="navigate('domains')" id="nav-domains"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>Domains</span></div>
   <div class="nav-item" onclick="navigate('docreview')" id="nav-docreview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9 14 2 2 4-4"/></svg><span>Document Review</span></div>
@@ -588,30 +587,7 @@
   </div>
 
   <!-- COMPARE PAGE -->
-  <div class="page" id="page-compare">
-    <h1>So sánh Scans</h1>
-    <div class="card">
-      <div class="grid2">
-        <div class="form-group">
-          <label>Project</label>
-          <select id="compare-project" onchange="loadCompareScans()">
-            <option value="">— Chọn project —</option>
-          </select>
-        </div>
-        <div></div>
-        <div class="form-group">
-          <label>Scan cũ (baseline)</label>
-          <select id="compare-scan-old"><option value="">— Chọn scan —</option></select>
-        </div>
-        <div class="form-group">
-          <label>Scan mới (current)</label>
-          <select id="compare-scan-new"><option value="">— Chọn scan —</option></select>
-        </div>
-      </div>
-      <button class="btn btn-primary" onclick="runCompare()">So sánh</button>
-    </div>
-    <div id="compare-result"></div>
-  </div>
+  <!-- Trang Compare độc lập đã gỡ: so sánh scan nay nằm trong từng Project (Lịch sử & xu hướng) -->
 
   <!-- DOMAINS PAGE -->
   <div class="page" id="page-domains">
@@ -1568,8 +1544,23 @@
   <div class="modal" style="max-width:560px;">
     <div class="modal-header"><strong>Trigger Scan</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('scan-modal').classList.remove('open')">✕</button></div>
     <div class="modal-body">
-      <div class="notice" id="scan-path-notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).</div>
-      <div class="form-group mt-16"><label>Scan path *</label><input id="scan-path" value="/workspace" placeholder="/workspace/my-app"></div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nguồn mã nguồn</label>
+        <div class="opt-grid" style="grid-template-columns:1fr 1fr;gap:8px;">
+          <label class="opt-card" style="padding:10px;"><input type="radio" name="scan-src" value="path" checked onchange="onScanSrcChange()">
+            <div class="opt-title" style="font-size:13px;">📁 Đường dẫn</div><div class="opt-desc" style="font-size:12px;">Code có sẵn trên máy/container</div></label>
+          <label class="opt-card" style="padding:10px;"><input type="radio" name="scan-src" value="upload" onchange="onScanSrcChange()">
+            <div class="opt-title" style="font-size:13px;">⬆️ Upload .zip</div><div class="opt-desc" style="font-size:12px;">Tải file nén mã nguồn lên</div></label>
+        </div>
+      </div>
+      <div id="scan-src-path">
+        <div class="notice" id="scan-path-notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).</div>
+        <div class="form-group mt-16"><label>Scan path *</label><input id="scan-path" value="/workspace" placeholder="/workspace/my-app"></div>
+      </div>
+      <div id="scan-src-upload" style="display:none;">
+        <div class="notice">Tải lên file <strong>.zip</strong> chứa mã nguồn (≤ 300MB). Hệ thống giải nén an toàn rồi quét.</div>
+        <div class="form-group mt-16"><label>File .zip *</label><input type="file" id="scan-zip" accept=".zip"></div>
+      </div>
       <div class="form-group"><label>Scan types</label>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
           <label style="display:flex;align-items:center;gap:4px;width:auto;"><input type="checkbox" class="scan-type-cb" value="SAST" checked style="width:auto;"> SAST</label>
@@ -1963,7 +1954,7 @@ function navigate(page) {
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance, scm: loadScm };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance, scm: loadScm };
   if (loaders[page]) loaders[page]();
 }
 
@@ -3207,12 +3198,38 @@ function openScanModal(projectId) {
   document.getElementById('scan-modal').classList.add('open');
 }
 
+function onScanSrcChange() {
+  const src = document.querySelector('input[name="scan-src"]:checked')?.value || 'path';
+  document.getElementById('scan-src-path').style.display = src === 'path' ? 'block' : 'none';
+  document.getElementById('scan-src-upload').style.display = src === 'upload' ? 'block' : 'none';
+}
+
 async function triggerScan() {
-  const path = document.getElementById('scan-path').value.trim();
-  if (!path) return alert('Nhập scan path');
+  const src = document.querySelector('input[name="scan-src"]:checked')?.value || 'path';
   const types = [...document.querySelectorAll('.scan-type-cb:checked')].map(c => c.value);
   if (!types.length) return alert('Chọn ít nhất 1 scan type');
   const runAI = document.getElementById('scan-run-ai').checked;
+
+  if (src === 'upload') {
+    const f = document.getElementById('scan-zip').files[0];
+    if (!f) return alert('Chọn file .zip');
+    document.getElementById('scan-modal').classList.remove('open');
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      fd.append('scan_types', types.join(','));
+      fd.append('run_ai_analysis', runAI);
+      const r = await fetch(`${API}/api/projects/${currentProjectId}/scan-upload`, { method: 'POST', body: fd });
+      if (!r.ok) throw new Error(errText(await r.text()));
+      const scan = await r.json();
+      openProgressModal(scan.id, '📦 ' + f.name, types);
+      loadScans(currentProjectId);
+    } catch (e) { alert('Lỗi: ' + e.message); }
+    return;
+  }
+
+  const path = document.getElementById('scan-path').value.trim();
+  if (!path) return alert('Nhập scan path');
   document.getElementById('scan-modal').classList.remove('open');
   try {
     const scan = await api(`/api/projects/${currentProjectId}/scans`, {
