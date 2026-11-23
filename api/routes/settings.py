@@ -7,6 +7,7 @@ Settings API:
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from typing import Dict, Any
 
@@ -294,6 +295,56 @@ def reset_report_logo():
     """Về logo mặc định VulnGuard."""
     rb.save_branding({"logo_path": ""})
     return {"ok": True}
+
+
+@router.get("/sonarqube")
+def get_sonarqube_settings():
+    """Cấu hình SonarQube hiện tại (token ẩn, chỉ hint)."""
+    from api.services import runtime_settings as rt
+    from api.security import mask_secret
+    tok = rt.sonarqube_token()
+    return {
+        "url": rt.sonarqube_url(),
+        "token_set": bool(tok),
+        "token_hint": mask_secret(tok) if tok else "",
+        "custom": rt.sonarqube_is_custom(),
+    }
+
+
+class SonarQubeUpdate(BaseModel):
+    url: str | None = None
+    token: str | None = None          # write-only
+    clear_token: bool = False
+
+
+@router.put("/sonarqube")
+def update_sonarqube_settings(body: SonarQubeUpdate):
+    from api.services import runtime_settings as rt
+    rt.set_sonarqube(url=body.url, token=body.token, clear_token=body.clear_token)
+    return get_sonarqube_settings()
+
+
+@router.post("/sonarqube/test")
+async def test_sonarqube():
+    """Kiểm tra kết nối + token tới SonarQube (gọi /api/system/status + /api/authentication/validate)."""
+    import httpx
+    from api.services import runtime_settings as rt
+    url, token = rt.sonarqube_url(), rt.sonarqube_token()
+    if not url:
+        raise HTTPException(400, "Chưa nhập SonarQube URL")
+    try:
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as c:
+            st = await c.get(f"{url}/api/system/status")
+            status = st.json().get("status") if st.status_code == 200 else None
+            auth_ok = None
+            if token:
+                r = await c.get(f"{url}/api/authentication/validate",
+                                headers={"Authorization": f"Bearer {token}"})
+                auth_ok = bool(r.status_code == 200 and r.json().get("valid"))
+        return {"ok": status == "UP", "status": status, "token_valid": auth_ok,
+                "has_scanner": bool(shutil.which("sonar-scanner"))}
+    except Exception as e:
+        raise HTTPException(503, f"Không kết nối được SonarQube tại {url}: {e}")
 
 
 @router.get("/report-branding/logo-image")

@@ -1047,6 +1047,36 @@
       </div>
     </div>
 
+    <!-- SonarQube server config -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:6px;">
+        <h2 style="margin-bottom:0;">📡 SonarQube (SAST sâu)</h2>
+        <span id="sonar-badge" class="text-sm" style="color:var(--text2);"></span>
+      </div>
+      <div class="notice" style="margin-bottom:12px;">
+        Trỏ tới SonarQube server (Community) để chạy SAST theo data-flow, giảm false positive.
+        Dùng server sẵn có hoặc bật bundled: <span class="text-mono">docker compose --profile sonar up -d</span>.
+        Tạo token tại SonarQube → <em>My Account → Security</em>. Token được <strong>mã hoá</strong>, không hiển thị lại.
+      </div>
+      <div class="grid2">
+        <div class="form-group">
+          <label>SonarQube URL</label>
+          <input id="sonar-url" class="text-mono" placeholder="http://sonarqube:9000 hoặc https://sonar.corp.vn">
+        </div>
+        <div class="form-group">
+          <label>Token</label>
+          <input id="sonar-token" type="password" autocomplete="new-password" class="text-mono" placeholder="squ_...">
+          <div class="field-hint"><span id="sonar-token-hint">Chưa có token nào được lưu.</span>
+            <a href="#" id="sonar-clear-token" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearSonarToken();return false;">Xóa token</a></div>
+        </div>
+      </div>
+      <div class="flex" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="saveSonarConfig()">💾 Lưu</button>
+        <button class="btn btn-ghost" onclick="testSonarConfig()">🔌 Kiểm tra kết nối</button>
+      </div>
+      <div id="sonar-msg" class="text-sm" style="margin-top:8px;"></div>
+    </div>
+
     <!-- Severity Threshold Info -->
     <div class="card">
       <h2>⚙️ Severity Threshold (Block Approve)</h2>
@@ -3288,9 +3318,49 @@ function renderCompareSection(title, vulns, cls) {
 let pullAbortController = null;
 
 async function loadSettings() {
-  await Promise.all([loadOllamaStatus(), loadOllamaEndpoint(), loadInstalledModels(), loadScannerHealth()]);
+  await Promise.all([loadOllamaStatus(), loadOllamaEndpoint(), loadInstalledModels(), loadScannerHealth(), loadSonarConfig()]);
   document.getElementById('threshold-info').textContent =
     '🔒 Severity threshold: HIGH — Vuln CRITICAL hoặc HIGH còn OPEN sẽ block approve. Chỉnh BLOCK_SEVERITY_THRESHOLD trong .env để thay đổi.';
+}
+
+async function loadSonarConfig() {
+  try {
+    const r = await api('/api/settings/sonarqube');
+    document.getElementById('sonar-url').value = r.url || '';
+    document.getElementById('sonar-token').value = '';
+    document.getElementById('sonar-token-hint').textContent = r.token_set
+      ? `Đã lưu: ${r.token_hint || '••••'} — để trống để giữ nguyên.` : 'Chưa có token nào được lưu.';
+    document.getElementById('sonar-clear-token').style.display = (r.token_set && canAdmin()) ? 'inline' : 'none';
+    document.getElementById('sonar-badge').textContent = r.url ? (r.custom ? 'đã cấu hình' : 'từ .env') : 'chưa cấu hình';
+  } catch (e) { /* bỏ qua */ }
+}
+async function saveSonarConfig() {
+  const msg = document.getElementById('sonar-msg');
+  const body = { url: document.getElementById('sonar-url').value.trim() };
+  const tok = document.getElementById('sonar-token').value.trim();
+  if (tok) body.token = tok;
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try {
+    await api('/api/settings/sonarqube', { method: 'PUT', body });
+    msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã lưu cấu hình SonarQube';
+    loadSonarConfig(); loadScannerHealth();
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function clearSonarToken() {
+  if (!confirm('Xóa token SonarQube đã lưu?')) return;
+  try { await api('/api/settings/sonarqube', { method: 'PUT', body: { clear_token: true } }); loadSonarConfig(); }
+  catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function testSonarConfig() {
+  const msg = document.getElementById('sonar-msg');
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra...';
+  try {
+    const r = await api('/api/settings/sonarqube/test', { method: 'POST' });
+    msg.style.color = r.ok ? 'var(--low)' : 'var(--sev-med)';
+    msg.innerHTML = `${r.ok ? '✅' : '⚠️'} Server: <strong>${escHtml(r.status || '—')}</strong>`
+      + ` · Token: ${r.token_valid == null ? '(chưa nhập)' : (r.token_valid ? '✅ hợp lệ' : '❌ không hợp lệ')}`
+      + ` · sonar-scanner: ${r.has_scanner ? '✅ đã cài' : '❌ chưa cài'}`;
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
 }
 
 async function loadOllamaEndpoint() {

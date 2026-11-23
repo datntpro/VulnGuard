@@ -74,3 +74,34 @@ def set_ollama(url: Optional[str] = None, model: Optional[str] = None,
     if vision_model is not None:
         upd["ollama_vision_model"] = vision_model.strip() or None
     return save(upd)
+
+
+# ── SonarQube (server URL + token mã hoá) ──
+def sonarqube_url() -> str:
+    from api.config import settings
+    return ((load().get("sonarqube_url") or "").strip() or settings.sonarqube_url or "").rstrip("/")
+
+
+def sonarqube_token() -> str:
+    from api.security import decrypt_secret
+    from api.config import settings
+    enc = load().get("sonarqube_token_enc")
+    return (decrypt_secret(enc) if enc else None) or settings.sonarqube_token or ""
+
+
+def sonarqube_is_custom() -> bool:
+    d = load()
+    return bool((d.get("sonarqube_url") or "").strip() or d.get("sonarqube_token_enc"))
+
+
+def set_sonarqube(url: Optional[str] = None, token: Optional[str] = None,
+                  clear_token: bool = False) -> Dict[str, Any]:
+    from api.security import encrypt_secret
+    upd: Dict[str, Any] = {}
+    if url is not None:
+        upd["sonarqube_url"] = url.strip().rstrip("/") or None
+    if clear_token:
+        upd["sonarqube_token_enc"] = None
+    elif token:
+        upd["sonarqube_token_enc"] = encrypt_secret(token.strip())
+    return save(upd)
