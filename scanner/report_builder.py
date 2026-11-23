@@ -264,7 +264,7 @@ def _navy_heading():
     return FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=_NAVY)
 
 
-def build_pdf(scan, vulns, project_name):
+def build_pdf(scan, vulns, project_name, scope_note=None):
     from fpdf.fonts import FontFace
 
     counts = _counts(vulns)
@@ -312,6 +312,8 @@ def build_pdf(scan, vulns, project_name):
         ("Tổng phát hiện", str(len(vulns))),
         ("Tiêu chuẩn tham chiếu", "OWASP Top 10; CWE; EPSS/CISA KEV"),
     ]
+    if scope_note:
+        info.append(("Phạm vi báo cáo", scope_note))
     label_face = FontFace(emphasis="BOLD", fill_color=_LIGHT)
     pdf.set_font("DejaVu", "", 9.5)
     pdf.set_draw_color(205, 205, 205)

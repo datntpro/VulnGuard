@@ -54,6 +54,17 @@ def update_vuln_status(vuln_id: str, payload: VulnStatusUpdate, request: Request
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
+@router.get("/{vuln_id}/dataflow")
+def vuln_dataflow(vuln_id: str, db: Session = Depends(get_db)):
+    """Đường đi data-flow source→sink (nếu scanner có cung cấp, vd Semgrep taint)."""
+    from scanner import dataflow
+    vuln = db.query(Vulnerability).filter(Vulnerability.id == vuln_id).first()
+    if not vuln:
+        raise HTTPException(status_code=404, detail="Vulnerability không tồn tại")
+    nodes = dataflow.extract(vuln.raw_output)
+    return {"vuln_id": vuln_id, "available": bool(nodes), "nodes": nodes}
+
+
 @router.get("/{vuln_id}/triage-history", response_model=List[TriageEventOut])
 def triage_history(vuln_id: str, db: Session = Depends(get_db)):
     """Change log triage của finding — gồm cả lịch sử xuyên scan (theo fingerprint)."""

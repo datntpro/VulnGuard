@@ -90,6 +90,7 @@ class SemgrepScanner(BaseScanner):
             "semgrep",
             *config_args,
             "--json",
+            "--dataflow-traces",   # xuất đường đi source→sink (đồ thị data-flow GĐ3)
             "--metrics=off",
             "--timeout", "30",
             "--max-memory", "1500",

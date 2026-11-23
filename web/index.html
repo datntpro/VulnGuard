@@ -1426,6 +1426,11 @@
           <label>Code snippet</label>
           <div id="modal-code" class="code-block"></div>
         </div>
+        <!-- Data-flow (attack vector source→sink) -->
+        <div id="modal-dataflow-row" style="display:none;">
+          <label>🧭 Luồng dữ liệu (source → sink)</label>
+          <div id="modal-dataflow"></div>
+        </div>
         <!-- Triage panel (Checkmarx-style) -->
         <div class="separator" style="margin:18px 0 12px;"></div>
         <div class="flex-between" style="margin-bottom:8px;">
@@ -2871,7 +2876,13 @@ function renderVulnTable() {
         <button class="btn btn-ghost btn-sm" onclick="loadScans('${currentProjectId}')">← Về Scans</button>
         <span style="margin-left:12px;font-size:14px;">${filtered.length}/${allVulns.length} vulnerabilities</span>
       </div>
-      <div class="flex" style="gap:6px;">
+      <div class="flex" style="gap:6px;align-items:center;flex-wrap:wrap;">
+        <select id="export-diff" class="btn-sm" title="Phạm vi báo cáo" style="height:30px;">
+          <option value="all">Phạm vi: Tất cả</option>
+          <option value="new">Chỉ lỗ hổng Mới</option>
+          <option value="recurrent">Chỉ Tái xuất hiện</option>
+        </select>
+        <label class="text-sm" title="Chỉ gồm lỗ hổng còn mở (loại Không khai thác được / Đã sửa)"><input type="checkbox" id="export-scope" style="width:auto;"> chỉ còn mở</label>
         <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo AI dạng file .html">⬇ Tải .html</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','pdf')" title="Xuất báo cáo PDF (tiếng Việt)">⬇ PDF</button>
@@ -2947,10 +2958,15 @@ function exportScan(scanId, format, newTab) {
   const status = document.getElementById('filter-status')?.value || '';
   const type   = document.getElementById('filter-type')?.value   || '';
 
+  const diff  = document.getElementById('export-diff')?.value  || 'all';
+  const scope = document.getElementById('export-scope')?.checked ? 'active' : 'all';
+
   const params = new URLSearchParams({ format });
   if (sev)    params.append('severity',  sev);
   if (status) params.append('status',    status);
   if (type)   params.append('scan_type', type);
+  if (diff !== 'all')  params.append('diff', diff);
+  if (scope === 'active') params.append('scope', 'active');
 
   const url = `${API}/api/projects/scans/${scanId}/export?${params.toString()}`;
 
@@ -2977,6 +2993,7 @@ function openVulnDetail(vulnId) {
   document.getElementById('modal-rule').textContent = v.rule_id || '—';
   document.getElementById('modal-status').innerHTML = statusBadge(v.status);
   renderTriagePanel(v);
+  loadDataflow(v.id);
   document.getElementById('modal-file').textContent = v.file_path || '—';
   document.getElementById('modal-line').textContent = v.line_start ? `${v.line_start}${v.line_end && v.line_end !== v.line_start ? '–'+v.line_end : ''}` : '—';
   document.getElementById('modal-desc').textContent = v.description || '—';
@@ -3046,6 +3063,30 @@ function switchTab(el, tabId) {
 
 function isNewFinding(v) {
   return !v.first_seen_scan_id || v.first_seen_scan_id === v.scan_id;
+}
+async function loadDataflow(vulnId) {
+  const row = document.getElementById('modal-dataflow-row');
+  const el = document.getElementById('modal-dataflow');
+  row.style.display = 'none';
+  try {
+    const r = await api(`/api/vulns/${vulnId}/dataflow`);
+    if (!r.available || !r.nodes.length) return;
+    const ICON = { source: '🟢', propagation: '🔵', sink: '🔴' };
+    const LBL = { source: 'Nguồn (source)', propagation: 'Lan truyền', sink: 'Đích (sink)' };
+    el.innerHTML = r.nodes.map((n, i) => `
+      <div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;">
+        <div style="display:flex;flex-direction:column;align-items:center;">
+          <span>${ICON[n.label] || '⚪'}</span>
+          ${i < r.nodes.length - 1 ? '<span style="flex:1;width:2px;background:var(--border);min-height:18px;margin:2px 0;"></span>' : ''}
+        </div>
+        <div style="flex:1;">
+          <div class="text-sm"><strong>${LBL[n.label] || n.label}</strong>
+            ${n.file ? `<span class="text-mono" style="color:var(--text2);"> · ${escHtml(n.file)}${n.line ? ':' + n.line : ''}</span>` : ''}</div>
+          ${n.content ? `<div class="code-block" style="margin-top:3px;padding:6px 8px;font-size:12px;">${escHtml(n.content)}</div>` : ''}
+        </div>
+      </div>`).join('');
+    row.style.display = 'block';
+  } catch (e) { /* không có dataflow → ẩn */ }
 }
 function renderTriagePanel(v) {
   // badge Mới / Tái xuất hiện

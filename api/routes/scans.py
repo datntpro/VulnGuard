@@ -538,6 +538,8 @@ def export_scan(
     severity: str = None,
     status: str = None,
     scan_type: str = None,
+    diff: str = Query(default="all", pattern="^(all|new|recurrent)$"),
+    scope: str = Query(default="all", pattern="^(all|active)$"),
     db: Session = Depends(get_db)
 ):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
@@ -560,6 +562,14 @@ def export_scan(
     # tránh JSON export trả vulns theo thứ tự Enum DB không liên quan tới mức độ nghiêm trọng.
     vulns = sorted(query.all(), key=lambda v: SEVERITY_ORDER.get(v.severity.value, 99))
 
+    # Lọc theo phạm vi báo cáo (Checkmarx-style): New/Recurrent + chỉ còn mở
+    if scope == "active":
+        vulns = [v for v in vulns if v.status.value in ACTIVE_VULN_STATUS_VALUES]
+    if diff == "new":
+        vulns = [v for v in vulns if (not v.first_seen_scan_id) or v.first_seen_scan_id == scan_id]
+    elif diff == "recurrent":
+        vulns = [v for v in vulns if v.first_seen_scan_id and v.first_seen_scan_id != scan_id]
+
     project = db.query(Project).filter(Project.id == scan.project_id).first()
     project_name = project.name if project else scan.project_id
     filename_base = f"vulnguard_{project_name}_{scan.scan_number}".replace(" ", "_")
@@ -568,10 +578,16 @@ def export_scan(
         return _export_json(scan, vulns, project_name, filename_base)
     if format == "csv":
         return _export_csv(scan, vulns, filename_base)
+    # Nhãn phạm vi báo cáo (Checkmarx-style)
+    _diff_lbl = {"all": "Tất cả", "new": "Chỉ lỗ hổng MỚI", "recurrent": "Chỉ lỗ hổng TÁI XUẤT HIỆN"}
+    scope_note = None
+    if diff != "all" or scope != "all":
+        scope_note = _diff_lbl[diff] + ("; chỉ còn mở (active)" if scope == "active" else "")
+
     # PDF / Markdown / AI-JSON — dùng scanner/report_builder
     from scanner import report_builder as rb
     if format == "pdf":
-        data = rb.build_pdf(scan, vulns, project_name)
+        data = rb.build_pdf(scan, vulns, project_name, scope_note=scope_note)
         return StreamingResponse(iter([data]), media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'})
     if format == "md":
