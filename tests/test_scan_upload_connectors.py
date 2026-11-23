@@ -48,3 +48,35 @@ def test_wazuh_parse_agent_and_vuln():
     v = parse_vuln({"cve": "CVE-2024-9", "title": "bash RCE", "severity": "Critical"},
                    {"name": "db-01", "ip": "10.0.0.9"})
     assert v.severity == "critical" and "CVE-2024-9" in v.title and v.hostname == "db-01"
+
+
+# ── OpenVAS / Tenable / Qualys parse ──
+def test_openvas_results_parse():
+    from scanner.connectors.openvas import parse_results_xml, parse_assets_xml
+    xml = '''<get_results_response><result id="r1"><name>OpenSSL</name>
+      <host>10.0.0.5<hostname>web-01</hostname></host><severity>9.8</severity><threat>High</threat>
+      <nvt oid="1"><name>OpenSSL RCE</name><cve>CVE-2022-1</cve></nvt></result></get_results_response>'''
+    al = parse_results_xml(xml)
+    assert len(al) == 1 and al[0].severity == "critical" and "CVE-2022-1" in al[0].title and al[0].ip == "10.0.0.5"
+    ax = '''<get_assets_response><asset id="a1"><name>10.0.0.5</name>
+      <host><identifier><name>hostname</name><value>web-01</value></identifier></host></asset></get_assets_response>'''
+    assets = parse_assets_xml(ax)
+    assert assets[0].ip == "10.0.0.5" and assets[0].hostname == "web-01" and "openvas" in assets[0].tags
+
+
+def test_tenable_parse():
+    from scanner.connectors.tenable import parse_asset, parse_vuln
+    a = parse_asset({"id": "x", "fqdn": ["web-01.corp"], "ipv4": ["10.0.0.5"], "operating_system": ["Linux"]})
+    assert a.hostname == "web-01.corp" and a.ip == "10.0.0.5"
+    v = parse_vuln({"plugin_id": 99, "plugin_name": "TLS weak", "severity": 4})
+    assert v.severity == "critical" and v.title == "TLS weak"
+
+
+def test_qualys_parse():
+    from scanner.connectors.qualys import parse_hosts_xml, parse_detections_xml
+    hx = '<HOST_LIST_OUTPUT><HOST><ID>1</ID><IP>10.0.0.5</IP><DNS>web-01</DNS><OS>Linux</OS></HOST></HOST_LIST_OUTPUT>'
+    h = parse_hosts_xml(hx)
+    assert h[0].ip == "10.0.0.5" and h[0].hostname == "web-01"
+    dx = '<OUTPUT><HOST><IP>10.0.0.5</IP><DNS>web-01</DNS><DETECTION_LIST><DETECTION><QID>38170</QID><SEVERITY>5</SEVERITY><STATUS>Active</STATUS></DETECTION></DETECTION_LIST></HOST></OUTPUT>'
+    d = parse_detections_xml(dx)
+    assert d[0].severity == "critical" and d[0].ip == "10.0.0.5" and "38170" in d[0].title
