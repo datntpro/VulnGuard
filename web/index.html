@@ -896,6 +896,7 @@
       <div class="tab active" id="st-tab-ollama" onclick="switchTab(this,'st-ollama')">🤖 Ollama &amp; Model</div>
       <div class="tab" id="st-tab-scanners" onclick="switchTab(this,'st-scanners')">🛠️ Scanner Tools</div>
       <div class="tab" id="st-tab-ai" onclick="switchTab(this,'st-ai');loadAIConfig()">☁️ AI Provider</div>
+      <div class="tab" id="st-tab-report" onclick="switchTab(this,'st-report');loadReportBranding()">📄 Báo cáo</div>
       <div class="tab" id="st-tab-users" onclick="switchTab(this,'st-users');loadUsers()" style="display:none;">👥 Người dùng</div>
     </div>
     <div class="tab-content active" id="st-ollama">
@@ -1158,6 +1159,44 @@
       </div>
       <div id="ai-test-result" class="test-result"></div>
     </div><!-- /st-ai -->
+
+    <!-- ── BÁO CÁO (branding PDF) ──────────────────────────── -->
+    <div class="tab-content" id="st-report">
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:14px;">
+          <h2 style="margin-bottom:0;">📄 Thương hiệu báo cáo PDF</h2>
+          <button class="btn btn-primary btn-sm" onclick="saveReportBranding()">💾 Lưu</button>
+        </div>
+        <div class="notice" style="margin-bottom:14px;">
+          Tùy chỉnh logo, tên tổ chức và nội dung header/footer trên file PDF báo cáo scan.
+          Áp dụng ngay cho các lần export PDF tiếp theo.
+        </div>
+        <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;">
+          <div style="flex:1;min-width:280px;">
+            <label>Tên tổ chức (góc phải bìa)</label>
+            <input id="rb-org-name" placeholder="VulnGuard">
+            <label style="margin-top:12px;">Dòng phụ dưới tên tổ chức</label>
+            <input id="rb-org-tagline" placeholder="DevSecOps Security Platform">
+            <label style="margin-top:12px;">Tiêu đề báo cáo (xuống dòng bằng Enter)</label>
+            <textarea id="rb-report-title" rows="2" placeholder="BÁO CÁO QUÉT BẢO MẬT&#10;MÃ NGUỒN &amp; THÀNH PHẦN"></textarea>
+            <label style="margin-top:12px;">Chữ footer (trái)</label>
+            <input id="rb-footer-text" placeholder="VulnGuard · Báo cáo quét bảo mật">
+            <label style="margin-top:12px;">Nhãn bảo mật (footer)</label>
+            <input id="rb-confidential" placeholder="BẢO MẬT / CONFIDENTIAL">
+          </div>
+          <div style="width:220px;">
+            <label>Logo (PNG/JPG, ≤ 2MB)</label>
+            <div style="border:1px dashed var(--border);border-radius:10px;padding:16px;text-align:center;background:var(--bg2);">
+              <img id="rb-logo-preview" alt="logo" style="max-width:120px;max-height:60px;object-fit:contain;margin-bottom:10px;">
+              <div><input type="file" id="rb-logo-file" accept="image/png,image/jpeg" style="display:none;" onchange="uploadReportLogo()"></div>
+              <button class="btn btn-ghost btn-sm" onclick="document.getElementById('rb-logo-file').click()">⬆️ Tải logo</button>
+              <button class="btn btn-ghost btn-sm" onclick="resetReportLogo()" style="margin-top:6px;">↩️ Logo mặc định</button>
+              <div id="rb-logo-msg" class="text-sm" style="margin-top:8px;color:var(--text2);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /st-report -->
 
     <!-- ── USERS (ADMIN) ───────────────────────────────────── -->
     <div class="tab-content" id="st-users">
@@ -3291,6 +3330,61 @@ async function saveScannerConfig() {
     btn.disabled = false;
     alert('Lỗi khi lưu: ' + e.message);
   }
+}
+
+// ─── Report branding (logo + header/footer PDF) ──────────────
+async function loadReportBranding() {
+  try {
+    const b = await api('/api/settings/report-branding');
+    document.getElementById('rb-org-name').value = b.org_name || '';
+    document.getElementById('rb-org-tagline').value = b.org_tagline || '';
+    document.getElementById('rb-report-title').value = b.report_title || '';
+    document.getElementById('rb-footer-text').value = b.footer_text || '';
+    document.getElementById('rb-confidential').value = b.confidential_label || '';
+    const img = document.getElementById('rb-logo-preview');
+    // thêm query ?t để tránh cache sau khi đổi logo
+    img.src = '/api/settings/report-branding/logo-image?t=' + Date.now();
+    img.onerror = () => { img.style.display = 'none'; };
+    img.style.display = '';
+    document.getElementById('rb-logo-msg').textContent = b.has_custom_logo ? 'Logo tùy chỉnh' : 'Logo mặc định VulnGuard';
+  } catch (e) { /* chưa đăng nhập / lỗi */ }
+}
+
+async function saveReportBranding() {
+  try {
+    await api('/api/settings/report-branding', { method: 'PUT', body: {
+      org_name: document.getElementById('rb-org-name').value,
+      org_tagline: document.getElementById('rb-org-tagline').value,
+      report_title: document.getElementById('rb-report-title').value,
+      footer_text: document.getElementById('rb-footer-text').value,
+      confidential_label: document.getElementById('rb-confidential').value,
+    }});
+    (typeof toast === 'function') ? toast('✅ Đã lưu thương hiệu báo cáo') : alert('Đã lưu thương hiệu báo cáo');
+  } catch (e) { alert('Lỗi khi lưu: ' + e.message); }
+}
+
+async function uploadReportLogo() {
+  const f = document.getElementById('rb-logo-file').files[0];
+  if (!f) return;
+  const msg = document.getElementById('rb-logo-msg');
+  msg.textContent = 'Đang tải...';
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch(API + '/api/settings/report-branding/logo', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    msg.textContent = '✅ Đã cập nhật logo';
+    const img = document.getElementById('rb-logo-preview');
+    img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
+  } catch (e) { msg.textContent = '❌ ' + e.message; }
+}
+
+async function resetReportLogo() {
+  try {
+    await api('/api/settings/report-branding/logo', { method: 'DELETE' });
+    document.getElementById('rb-logo-msg').textContent = 'Đã về logo mặc định';
+    const img = document.getElementById('rb-logo-preview');
+    img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
+  } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
 async function loadInstalledModels() {

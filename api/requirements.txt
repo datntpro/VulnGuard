@@ -27,3 +27,5 @@ cryptography>=42.0.0
 mcp>=2.0.0
 # Export PDF báo cáo scan (server-side, font tiếng Việt bundled)
 fpdf2>=2.8.0
+# Pillow — fpdf2 cần để nhúng logo PNG/JPG vào báo cáo
+Pillow>=10.0.0

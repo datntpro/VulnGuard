@@ -10,8 +10,11 @@ import os
 import subprocess
 from typing import Dict, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+from scanner import report_builder as rb
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -242,3 +245,62 @@ def update_scanner_settings(body: ScannerSettingsUpdate):
 def get_scanner_config():
     """Chỉ trả về enabled/disabled config (nhanh, không check binary)."""
     return {"enabled_tools": _load_config()}
+
+
+# ─────────────────────────────────────────────
+# Branding báo cáo PDF — logo + header/footer (Settings → Báo cáo)
+# ─────────────────────────────────────────────
+class ReportBranding(BaseModel):
+    org_name: str | None = None
+    org_tagline: str | None = None
+    report_title: str | None = None
+    footer_text: str | None = None
+    confidential_label: str | None = None
+
+
+@router.get("/report-branding")
+def get_report_branding():
+    """Branding hiện tại + cờ có logo tùy chỉnh hay không."""
+    b = rb.load_branding()
+    b["has_custom_logo"] = bool(b.get("logo_path") and os.path.exists(b["logo_path"]))
+    return b
+
+
+@router.put("/report-branding")
+def update_report_branding(body: ReportBranding):
+    """Lưu text branding (bỏ qua field None)."""
+    data = {k: v for k, v in body.model_dump().items() if isinstance(v, str)}
+    return rb.save_branding(data)
+
+
+@router.post("/report-branding/logo")
+async def upload_report_logo(file: UploadFile = File(...)):
+    """Upload logo PNG/JPG cho báo cáo (≤ 2MB)."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg"):
+        raise HTTPException(400, "Chỉ chấp nhận PNG/JPG")
+    raw = await file.read()
+    if len(raw) > 2 * 1024 * 1024:
+        raise HTTPException(400, "Logo quá lớn (tối đa 2MB)")
+    dest = os.path.join(rb.branding_dir(), "report_logo" + (".jpg" if ext in (".jpg", ".jpeg") else ".png"))
+    with open(dest, "wb") as f:
+        f.write(raw)
+    rb.save_branding({"logo_path": dest})
+    return {"ok": True, "logo_path": dest}
+
+
+@router.delete("/report-branding/logo")
+def reset_report_logo():
+    """Về logo mặc định VulnGuard."""
+    rb.save_branding({"logo_path": ""})
+    return {"ok": True}
+
+
+@router.get("/report-branding/logo-image")
+def get_report_logo_image():
+    """Trả về logo hiện dùng (tùy chỉnh hoặc mặc định) để preview."""
+    path = rb._logo_path(rb.load_branding())
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "Không có logo")
+    mt = "image/jpeg" if path.lower().endswith((".jpg", ".jpeg")) else "image/png"
+    return FileResponse(path, media_type=mt)
