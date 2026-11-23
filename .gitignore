@@ -35,6 +35,17 @@ storage/reports/*.csv
 # Scanner config (generated at runtime)
 storage/scanner_config.json
 
+# Runtime secrets & state sinh khi chạy app — TUYỆT ĐỐI KHÔNG commit
+storage/secret.key               # khóa Fernet/JWT — là credential
+storage/admin_credentials.txt    # mật khẩu admin khởi tạo
+storage/ai_config.json           # cấu hình AI (API key đã mã hoá)
+storage/runtime_settings.json    # endpoint Ollama/SonarQube/SMTP (có token mã hoá)
+storage/report_branding.json
+storage/branding/
+storage/intel/                   # cache EPSS/CISA KEV
+storage/*.log
+storage/report_logo.*
+
 # Document Review — file tài liệu user upload (lưu local, không commit)
 storage/documents/
 
