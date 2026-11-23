@@ -25,3 +25,5 @@ pyjwt>=2.8.0
 cryptography>=42.0.0
 # MCP server — expose asset/intel/connector cho agent (Claude Desktop / Pentest Agent)
 mcp>=2.0.0
+# Export PDF báo cáo scan (server-side, font tiếng Việt bundled)
+fpdf2>=2.8.0

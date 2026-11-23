@@ -2390,6 +2390,7 @@ async function loadEndpoints() {
 
 function exportCrawl(crawlId, format) {
   const url = `${API}/api/domains/crawls/${crawlId}/export?format=${format}`;
+  if (newTab) { window.open(url, '_blank'); return; }
   const a = document.createElement('a');
   a.href = url;
   a.style.display = 'none';
@@ -2569,8 +2570,11 @@ function renderVulnTable() {
       <div class="flex" style="gap:6px;">
         <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo AI dạng file .html">⬇ Tải .html</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','pdf')" title="Xuất báo cáo PDF (tiếng Việt)">⬇ PDF</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
-        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export toàn bộ kết quả scan ra CSV (mở được bằng Excel)">⬇ CSV</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export CSV (mở bằng Excel)">⬇ CSV</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','md')" title="Xuất Markdown — gọn cho AI đọc / commit repo">⬇ MD</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','ai',true)" title="JSON tối giản cho AI/agent đọc (mở tab mới)">🤖 AI</button>
       </div>
     </div>
     <div class="filter-bar">
@@ -2633,7 +2637,7 @@ function downloadAIReport(scanId) {
   a.click();
 }
 
-function exportScan(scanId, format) {
+function exportScan(scanId, format, newTab) {
   // Lấy giá trị filter hiện tại để export đúng những gì đang hiển thị
   const sev    = document.getElementById('filter-sev')?.value    || '';
   const status = document.getElementById('filter-status')?.value || '';
@@ -2647,6 +2651,7 @@ function exportScan(scanId, format) {
   const url = `${API}/api/projects/scans/${scanId}/export?${params.toString()}`;
 
   // Trigger download bằng cách tạo thẻ <a> ẩn
+  if (newTab) { window.open(url, '_blank'); return; }
   const a = document.createElement('a');
   a.href = url;
   a.style.display = 'none';

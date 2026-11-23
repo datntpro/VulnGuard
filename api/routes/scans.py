@@ -522,7 +522,7 @@ def get_scan_vulns(
 @router.get("/scans/{scan_id}/export", tags=["scans"])
 def export_scan(
     scan_id: str,
-    format: str = Query(default="json", pattern="^(json|csv)$"),
+    format: str = Query(default="json", pattern="^(json|csv|pdf|md|ai)$"),
     severity: str = None,
     status: str = None,
     scan_type: str = None,
@@ -554,8 +554,22 @@ def export_scan(
 
     if format == "json":
         return _export_json(scan, vulns, project_name, filename_base)
-    else:
+    if format == "csv":
         return _export_csv(scan, vulns, filename_base)
+    # PDF / Markdown / AI-JSON — dùng scanner/report_builder
+    from scanner import report_builder as rb
+    if format == "pdf":
+        data = rb.build_pdf(scan, vulns, project_name)
+        return StreamingResponse(iter([data]), media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'})
+    if format == "md":
+        text = rb.build_markdown(scan, vulns, project_name)
+        return StreamingResponse(iter([text.encode("utf-8")]), media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.md"'})
+    # ai — JSON tối giản cho LLM (mở xem được trên trình duyệt, không ép tải)
+    text = rb.build_ai_json(scan, vulns, project_name)
+    return StreamingResponse(iter([text.encode("utf-8")]), media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'inline; filename="{filename_base}.ai.json"'})
 
 
 def _export_json(scan: Scan, vulns: list, project_name: str, filename_base: str) -> StreamingResponse:

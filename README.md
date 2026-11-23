@@ -79,6 +79,7 @@ The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sq
 
 - **Cloud AI to reduce false positives** — structured output + real code context around each finding; secrets redacted before leaving the machine; API keys encrypted (Fernet). "Re-analyze with Claude" per finding. Configure in *Settings → AI Provider* (ADMIN only).
 - **Pentest Agent (controlled automation)** — **scope gate** (blocks out-of-scope & loopback), **risk gate** (recon/safe scans auto-run; intrusive/destructive need approval), authorization + expiry, step/token budgets, **kill switch**, audit trail. Durable attack chains (todolist), **parallel** tool execution. Evidence binding + recording **MITM proxy** (generated CA) + in-scope replay. → `docs/PENTEST_AGENT.md`
+- **Report exports** — after a scan: **PDF** (Vietnamese, server-side), **Markdown** & **AI-JSON** (for LLMs/agents to read), plus JSON/CSV and the AI HTML report.
 - **Context-aware risk** — the same CVE can score 100 on a critical/internet asset and ~6 on an isolated one. EPSS (FIRST) + CISA KEV feeds, cached offline. → `docs/CONNECTORS_MCP.md`
 - **Connectors + MCP** — pull assets/alerts/software from XDR/EDR/NAC; encrypted secrets; add a vendor by writing one adapter. MCP server is read-only (host isolation still requires approval).
 
@@ -153,6 +154,7 @@ Pentest Agent dùng thêm **katana** (crawl), **nmap**, **ffuf**, **sqlmap**.
 
 - **Cloud AI giảm false positive** — structured output + gửi ngữ cảnh code thật quanh dòng lỗi; **redact secret** trước khi gửi; API key **mã hoá Fernet**. Nút "Phân tích lại bằng Claude" cho từng vuln. Cấu hình ở *Settings → AI Provider* (chỉ ADMIN).
 - **Pentest Agent (tự động có kiểm soát)** — **scope gate** (chặn ngoài phạm vi & loopback), **risk gate** (recon/quét an toàn tự chạy; xâm lấn/phá huỷ cần duyệt), uỷ quyền + hạn, budget bước/token, **kill switch**, audit trail. Chuỗi tấn công bền (todolist), chạy tool **song song**. Gắn bằng chứng + recording **MITM proxy** (CA tự sinh) + replay trong scope. → `docs/PENTEST_AGENT.md`
+- **Xuất báo cáo** — sau khi scan: **PDF** (tiếng Việt, server-side), **Markdown** & **AI-JSON** (cho AI/agent đọc), kèm JSON/CSV và báo cáo HTML (AI).
 - **Risk theo ngữ cảnh** — cùng 1 CVE: máy critical/internet có thể 100đ, máy isolated chỉ ~6đ. Feed EPSS (FIRST) + CISA KEV, cache offline. → `docs/CONNECTORS_MCP.md`
 - **Connectors + MCP** — kéo asset/alert/software từ XDR/EDR/NAC; secret mã hoá; thêm vendor = 1 adapter. MCP server read-only (cô lập host vẫn phải qua duyệt).
 
