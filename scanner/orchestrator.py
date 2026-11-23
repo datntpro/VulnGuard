@@ -137,6 +137,17 @@ class Orchestrator:
             tool = getattr(scanner, "tool_name", scanner.__class__.__name__)
             count = len(findings) if findings else 0
 
+            if findings is None:
+                # P0.1: tool không chạy được (chưa cài / thiếu PATH) → "skipped", KHÔNG phải sạch
+                logger.warning(f"⊘ {tool}: BỎ QUA — {error}")
+                scanner_logs[tool] = {
+                    "status": "skipped",
+                    "error": error,
+                    "count": 0,
+                    "duration_s": round(duration, 1),
+                    "label": TOOL_LABELS.get(tool, tool),
+                }
+                continue
             if error:
                 logger.warning(f"⚠ {tool}: {error} ({duration:.1f}s)")
                 scanner_logs[tool] = {
@@ -179,6 +190,15 @@ class Orchestrator:
         start = time.monotonic()
         error = ""
         findings = []
+        # P0.1: tool chưa cài / không có trong PATH → KHÔNG được âm thầm trả 0 lỗi.
+        # Trả findings=None + lý do → orchestrator ghi status "skipped", không phải "ok 0".
+        try:
+            available = scanner.is_available()
+        except Exception:
+            available = True   # không chắc chắn thì cứ thử chạy
+        if not available:
+            tool = getattr(scanner, "tool_name", scanner.__class__.__name__)
+            return None, 0.0, f"Tool '{tool}' chưa cài hoặc không có trong PATH"
         try:
             findings = await scanner.scan()
         except Exception as e:

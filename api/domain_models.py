@@ -8,7 +8,7 @@ Tách riêng khỏi api/models.py (Project/Scan/Vulnerability) theo yêu cầu �
 không đụng vào schema scan source code hiện tại, dùng chung Base/engine.
 """
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Text, Enum, ForeignKey, JSON
+    Column, String, Integer, DateTime, Text, Enum, ForeignKey, JSON, Boolean
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -45,6 +45,11 @@ class Domain(Base):
     name = Column(String(200), nullable=False)               # Tên gợi nhớ, vd "Website chính"
     url = Column(String(500), nullable=False, unique=True)    # Root URL, vd https://example.com
     description = Column(Text, nullable=True)
+    # P0.4: xác minh quyền sở hữu trước khi cho quét/crawl/pentest
+    ownership_verified = Column(Boolean, default=False)
+    ownership_token = Column(String(80), nullable=True)
+    ownership_method = Column(String(20), nullable=True)      # dns_txt | well_known
+    ownership_verified_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

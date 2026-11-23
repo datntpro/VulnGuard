@@ -34,30 +34,38 @@ def main():
             print("ℹ️  Đã có tài khoản — bỏ qua tạo ADMIN. (Đổi mật khẩu trong Settings → Người dùng.)")
             return
         password = os.environ.get("ADMIN_PASSWORD") or gen_password()
+        # P0.3: bắt đổi mật khẩu ở lần đăng nhập đầu
         db.add(User(email=email, name="Administrator",
-                    password_hash=hash_password(password), role=UserRole.ADMIN))
+                    password_hash=hash_password(password), role=UserRole.ADMIN,
+                    must_change_password=True))
         db.commit()
     finally:
         db.close()
 
-    # Ghi file chmod 600 (gitignored)
+    # P0.3: KHÔNG in mật khẩu ra màn hình/log — chỉ ghi file chmod 600 (gitignored)
     cred_path = os.path.join(settings.storage_dir, "admin_credentials.txt")
+    saved = False
     try:
         os.makedirs(os.path.dirname(cred_path), exist_ok=True)
         fd = os.open(cred_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(f"VulnGuard ADMIN\nEmail: {email}\nMật khẩu: {password}\n"
-                    f"(Đổi mật khẩu sau khi đăng nhập, rồi xoá file này.)\n")
+                    f"(BẮT BUỘC đổi mật khẩu khi đăng nhập lần đầu, rồi XOÁ file này.)\n")
+        saved = True
     except Exception:
-        cred_path = None
+        saved = False
 
     bar = "═" * 52
     print(f"\n{bar}")
-    print("  🔐 TÀI KHOẢN ADMIN ĐÃ TẠO — LƯU LẠI NGAY")
-    print(f"  Email:    {email}")
-    print(f"  Mật khẩu: {password}")
-    if cred_path:
-        print(f"  (Đã lưu {cred_path} — chmod 600; đổi mật khẩu rồi xoá file.)")
+    print("  🔐 TÀI KHOẢN ADMIN ĐÃ TẠO")
+    print(f"  Email: {email}")
+    if saved:
+        print(f"  Mật khẩu đã lưu tại: {cred_path} (chmod 600)")
+        print("  → Mở file để lấy mật khẩu, đăng nhập, ĐỔI mật khẩu, rồi XOÁ file.")
+    else:
+        print("  ⚠️  Không ghi được file credential. Đặt ADMIN_PASSWORD rồi chạy lại,")
+        print("     hoặc tạo ADMIN qua trang đăng nhập lần đầu.")
+    print("  (Vì an toàn, mật khẩu KHÔNG được in ra màn hình/log.)")
     print(bar + "\n")
 
 

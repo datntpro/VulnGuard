@@ -142,17 +142,50 @@ def request_isolate_host(host_or_ip: str, reason: str) -> dict:
             "message": f"Yêu cầu cô lập {host_or_ip} ('{reason}') cần người duyệt trong VulnGuard — không tự thực thi qua MCP."}
 
 
+def _bearer_guard(asgi_app, token: str):
+    """ASGI middleware: bắt buộc Authorization: Bearer <token> (P0.10)."""
+    async def app(scope, receive, send):
+        if scope["type"] == "http":
+            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+            auth = headers.get("authorization", "")
+            import secrets as _s
+            expected = f"Bearer {token}"
+            if not (auth and _s.compare_digest(auth, expected)):
+                body = b'{"error":"unauthorized: thieu hoac sai bearer token"}'
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body", "body": body})
+                return
+        await asgi_app(scope, receive, send)
+    return app
+
+
 def main():
     import argparse
+    import os
+    import sys
     ap = argparse.ArgumentParser()
     ap.add_argument("--http", action="store_true", help="Chạy streamable HTTP thay vì stdio")
+    ap.add_argument("--host", default="127.0.0.1", help="Địa chỉ bind cho HTTP (mặc định localhost)")
     ap.add_argument("--port", type=int, default=8899)
     args = ap.parse_args()
-    if args.http:
-        mcp.settings.port = args.port
-        mcp.run(transport="streamable-http")
-    else:
+    if not args.http:
         mcp.run(transport="stdio")
+        return
+
+    # P0.10: HTTP mode BẮT BUỘC có token, nếu không thì từ chối chạy (fail-closed)
+    token = os.environ.get("VULNGUARD_MCP_TOKEN", "").strip()
+    if not token:
+        sys.exit("❌ MCP HTTP yêu cầu VULNGUARD_MCP_TOKEN. Đặt biến môi trường rồi chạy lại. "
+                 "(Mỗi request phải gửi header 'Authorization: Bearer <token>'.)")
+    try:
+        import uvicorn
+        asgi = mcp.streamable_http_app()           # SDK trả ASGI app
+        uvicorn.run(_bearer_guard(asgi, token), host=args.host, port=args.port)
+    except AttributeError:
+        # SDK không expose ASGI app để bọc auth → KHÔNG chạy HTTP không bảo vệ
+        sys.exit("❌ Phiên bản MCP SDK không cho bọc xác thực HTTP. Hãy dùng stdio, hoặc "
+                 "đặt reverse proxy có auth trước cổng MCP. (Từ chối chạy HTTP không token.)")
 
 
 if __name__ == "__main__":

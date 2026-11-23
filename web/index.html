@@ -2092,6 +2092,30 @@ async function deleteProject(id, name) {
 }
 
 // ─── DOMAINS / SITEMAP ──────────────────────────────────────────
+async function openOwnership(domainId) {
+  let info;
+  try { info = await api(`/api/domains/${domainId}/ownership`); }
+  catch (e) { alert('Lỗi: ' + e.message); return; }
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:400;display:flex;align-items:center;justify-content:center;';
+  ov.onclick = () => ov.remove();
+  ov.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:560px;width:92%;" onclick="event.stopPropagation()">
+    <h2 style="margin:0 0 10px;">Xác minh quyền sở hữu domain</h2>
+    <p class="text-sm" style="color:var(--text2);margin-bottom:12px;">Bắt buộc trước khi crawl/web scan — chứng minh bạn sở hữu domain (chống quét trái phép).</p>
+    <div class="notice" style="margin-bottom:10px;"><strong>Cách 1 — DNS TXT:</strong><br><span class="text-mono text-sm">${escHtml(info.instructions.dns_txt)}</span></div>
+    <div class="notice" style="margin-bottom:14px;"><strong>Cách 2 — File:</strong><br><span class="text-mono text-sm">${escHtml(info.instructions.well_known)}</span></div>
+    <div class="flex" style="gap:8px;align-items:center;"><button class="btn btn-primary" id="own-check">🔍 Kiểm tra ngay</button><span id="own-msg" class="text-sm"></span></div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#own-check').onclick = async () => {
+    const msg = ov.querySelector('#own-msg'); msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra...';
+    try {
+      const r = await api(`/api/domains/${domainId}/ownership/verify`, { method: 'POST' });
+      msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã xác minh (' + r.method + ')';
+      setTimeout(() => { ov.remove(); loadDomains(); }, 900);
+    } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+  };
+}
 async function loadDomains() {
   const el = document.getElementById('domains-list');
   try {
@@ -2103,13 +2127,15 @@ async function loadDomains() {
     el.innerHTML = `
       <div class="card" style="padding:0;overflow:hidden;">
         <table>
-          <thead><tr><th>Tên</th><th>URL</th><th>Mô tả</th><th>Số lần crawl</th><th></th></tr></thead>
+          <thead><tr><th>Tên</th><th>URL</th><th>Sở hữu</th><th>Số lần crawl</th><th></th></tr></thead>
           <tbody>
             ${domains.map(d => `
               <tr>
                 <td><strong>${escHtml(d.name)}</strong></td>
                 <td class="text-mono text-sm">${escHtml(d.url)}</td>
-                <td class="text-sm">${escHtml(d.description || '')}</td>
+                <td>${d.ownership_verified
+                     ? '<span class="badge badge-low">✅ Đã xác minh</span>'
+                     : `<button class="btn btn-ghost btn-sm" onclick="openOwnership('${d.id}')" title="Bắt buộc trước khi crawl/quét">⚠️ Xác minh</button>`}</td>
                 <td>${d.crawl_count}</td>
                 <td>
                   <button class="btn btn-ghost btn-sm" onclick="openDomainCrawls('${d.id}','${escHtml(d.name)}')">Xem Crawls →</button>
@@ -2472,11 +2498,13 @@ function renderScanCard(sc, projectId) {
   let scannerLogsHtml = '';
   if (sc.status === 'COMPLETED' && Object.keys(scannerLogs).length > 0) {
     const logRows = Object.entries(scannerLogs).map(([tool, log]) => {
-      const icon = log.status === 'ok' ? '✅' : '❌';
+      const icon = log.status === 'ok' ? '✅' : (log.status === 'skipped' ? '⊘' : '❌');
       const countColor = log.count > 0 ? 'color:var(--medium)' : 'color:var(--text3)';
+      const note = log.status === 'skipped' ? '<span style="color:var(--critical);font-weight:600;">BỎ QUA (chưa cài)</span>'
+        : log.status === 'error' ? '<span style="color:var(--critical);font-weight:600;">LỖI</span>'
+        : `<span style="${countColor};font-weight:600;">${log.count||0} findings</span>`;
       return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);">
-        <span>${icon} ${escHtml(log.label||tool)}</span>
-        <span style="${countColor};font-weight:600;">${log.count||0} findings</span>
+        <span>${icon} ${escHtml(log.label||tool)}</span>${note}
       </div>`;
     }).join('');
     scannerLogsHtml = `
@@ -2496,6 +2524,7 @@ function renderScanCard(sc, projectId) {
         </div>
         <span class="text-sm">${fmtDate(sc.started_at)}</span>
       </div>
+      ${s.scan_warning ? `<div class="notice warn" style="margin-top:8px;">⚠️ ${escHtml(s.scan_warning)} — "0 lỗi" KHÔNG có nghĩa là sạch.</div>` : ''}
       <div class="text-sm" style="margin-top:8px;">
         📂 <span class="text-mono">${escHtml(sc.scan_path)}</span> &nbsp;|&nbsp;
         ${(sc.scan_types||[]).map(t=>`<span class="tag">${t}</span>`).join('')}
@@ -4098,10 +4127,35 @@ async function initAuth() {
     }
     if (!r.ok) throw new Error('auth unavailable');
     currentUser = await r.json();
+    if (currentUser && currentUser.must_change_password) forceChangePassword();   // P0.3
   } catch {
     currentUser = null;   // backend chưa bật auth → ẩn khối người dùng
   }
   renderUserChip();
+}
+
+function forceChangePassword() {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;display:flex;align-items:center;justify-content:center;';
+  ov.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:420px;width:92%;">
+    <h2 style="margin:0 0 8px;">🔐 Đổi mật khẩu lần đầu</h2>
+    <p class="text-sm" style="color:var(--text2);margin-bottom:12px;">Tài khoản đang dùng mật khẩu khởi tạo — bắt buộc đổi trước khi tiếp tục.</p>
+    <div class="form-group"><label>Mật khẩu hiện tại</label><input id="cp-cur" type="password" autocomplete="current-password"></div>
+    <div class="form-group"><label>Mật khẩu mới (≥10 ký tự)</label><input id="cp-new" type="password" autocomplete="new-password"></div>
+    <div class="flex" style="gap:8px;align-items:center;"><button class="btn btn-primary" id="cp-go">Đổi mật khẩu</button><span id="cp-msg" class="text-sm"></span></div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#cp-go').onclick = async () => {
+    const cur = ov.querySelector('#cp-cur').value, nw = ov.querySelector('#cp-new').value;
+    const msg = ov.querySelector('#cp-msg');
+    if (nw.length < 10) { msg.style.color = 'var(--critical)'; msg.textContent = 'Mật khẩu mới ≥10 ký tự'; return; }
+    msg.style.color = 'var(--text2)'; msg.textContent = 'Đang đổi...';
+    try {
+      await api('/api/auth/change-password', { method: 'POST', body: { current_password: cur, new_password: nw } });
+      ov.remove(); if (currentUser) currentUser.must_change_password = false;
+      toast && toast('Đã đổi mật khẩu', 'success');
+    } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+  };
 }
 function canAdmin() { return !currentUser || currentUser.role === 'ADMIN'; }
 function initials(name) {
