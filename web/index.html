@@ -482,6 +482,7 @@
   <div class="nav-section">Tài sản &amp; Rủi ro</div>
   <div class="nav-item" onclick="navigate('assets')" id="nav-assets"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h0M7 16.5h0"/></svg><span>Asset Inventory</span></div>
   <div class="nav-item" onclick="navigate('connectors')" id="nav-connectors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3M15 7V3M8 7h8v4a4 4 0 0 1-8 0z"/><path d="M12 15v3a3 3 0 0 0 3 3h1"/></svg><span>Kết nối (XDR/NAC)</span></div>
+  <div class="nav-item" onclick="navigate('compliance')" id="nav-compliance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="m9 12 2 2 4-4"/></svg><span>Tuân thủ</span></div>
   <div class="nav-section">Hệ thống</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Settings</span></div>
   <div class="sidebar-footer">
@@ -769,6 +770,22 @@
     </div>
     <div id="connectors-list">
       <div class="sk-list" aria-busy="true"><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- COMPLIANCE PAGE -->
+  <div class="page" id="page-compliance">
+    <div class="flex-between mb-16">
+      <h1>🛡️ Tuân thủ (Compliance)</h1>
+      <div class="text-sm" id="compliance-meta" style="color:var(--text2);"></div>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      Ánh xạ lỗ hổng code (OPEN) toàn hệ thống sang các khung: <strong>OWASP Top 10 2021</strong>,
+      <strong>ISO/IEC 27001:2022</strong>, <strong>TCVN 11930:2017 / NĐ 85/2016</strong>, <strong>PCI-DSS v4.0</strong>.
+      Điểm = % nhóm kiểm soát ĐẠT trên số nhóm bị chạm tới. Đây là tham chiếu định hướng audit, không thay văn bản gốc.
+    </div>
+    <div id="compliance-body">
+      <div class="sk-list" aria-busy="true"><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
     </div>
   </div>
 
@@ -1766,7 +1783,7 @@ function navigate(page) {
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance };
   if (loaders[page]) loaders[page]();
 }
 
@@ -2613,6 +2630,7 @@ function renderVulnTable() {
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export CSV (mở bằng Excel)">⬇ CSV</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','md')" title="Xuất Markdown — gọn cho AI đọc / commit repo">⬇ MD</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','sarif')" title="SARIF 2.1.0 — cắm vào GitHub Code Scanning / GitLab / Azure DevOps">⬇ SARIF</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','ai',true)" title="JSON tối giản cho AI/agent đọc (mở tab mới)">🤖 AI</button>
       </div>
     </div>
@@ -5755,6 +5773,70 @@ async function loadConnectors() {
     el.innerHTML = `<div class="empty-state"><div class="icon">${forbidden ? '🔒' : '⚠️'}</div><p>${forbidden ? 'Chỉ ADMIN mới quản lý kết nối' : 'Không tải được kết nối'}</p><p class="text-sm">${escHtml(e.message)}</p></div>`;
     document.getElementById('conn-add-btn').style.display = forbidden ? 'none' : '';
   }
+}
+
+// ─── Compliance (Tuân thủ) ───────────────────────────────────
+async function loadCompliance() {
+  const el = document.getElementById('compliance-body');
+  try {
+    const d = await api('/api/dashboard/compliance');
+    document.getElementById('compliance-meta').textContent =
+      `${d.total_findings} lỗ hổng OPEN · cập nhật ${fmtDate(d.generated_at)}`;
+    if (!d.total_findings) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">✅</div><p>Không có lỗ hổng OPEN</p><p class="text-sm">Hệ thống đạt tuân thủ trong phạm vi đã quét. Hãy chạy scan để cập nhật.</p><button class="btn btn-primary mt-16" onclick="navigate('projects')">Chạy scan</button></div>`;
+      return;
+    }
+    el.innerHTML = d.frameworks.map(renderComplianceCard).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Không tải được dữ liệu tuân thủ</p><p class="text-sm">${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function complianceScoreColor(score) {
+  // compliance: điểm cao = tốt (ngược với posture). Xanh→vàng→đỏ.
+  if (score >= 80) return 'var(--sev-low)';
+  if (score >= 50) return 'var(--sev-med)';
+  return 'var(--sev-crit)';
+}
+
+function renderComplianceCard(fw) {
+  const col = complianceScoreColor(fw.score);
+  const rows = fw.controls.map(c => {
+    const badge = c.status === 'KHÔNG ĐẠT'
+      ? '<span class="badge badge-critical">KHÔNG ĐẠT</span>'
+      : '<span class="badge badge-medium">CẢNH BÁO</span>';
+    return `<tr>
+      <td class="text-mono" style="white-space:nowrap;">${escHtml(c.control_id)}</td>
+      <td>${escHtml(c.control_name)}</td>
+      <td style="text-align:center;">${c.findings}</td>
+      <td style="text-align:center;">${sevBadge(c.worst)}</td>
+      <td style="text-align:center;">${badge}</td>
+    </tr>`;
+  }).join('');
+  const body = fw.controls.length
+    ? `<table style="margin-top:12px;">
+         <thead><tr><th>Mã</th><th>Nhóm kiểm soát</th><th style="text-align:center;">Số PH</th><th style="text-align:center;">Mức nặng nhất</th><th style="text-align:center;">Trạng thái</th></tr></thead>
+         <tbody>${rows}</tbody></table>`
+    : `<div class="text-sm" style="color:var(--text2);margin-top:10px;">Không có phát hiện chạm tới khung này.</div>`;
+  return `<div class="card" style="margin-bottom:16px;">
+    <div class="flex-between" style="align-items:center;gap:16px;flex-wrap:wrap;">
+      <div>
+        <h2 style="margin-bottom:4px;">${escHtml(fw.label)}</h2>
+        <div class="text-sm" style="color:var(--text2);">
+          ${fw.failed ? `<strong style="color:var(--critical);">${fw.failed}</strong> nhóm KHÔNG ĐẠT` : 'Không vi phạm'}
+          · ${fw.touched} nhóm bị chạm tới
+        </div>
+      </div>
+      <div style="text-align:center;min-width:92px;">
+        <div style="font-size:30px;font-weight:800;line-height:1;color:${col};">${fw.score}</div>
+        <div class="text-sm" style="color:var(--text2);">/ 100</div>
+      </div>
+    </div>
+    <div style="height:8px;border-radius:6px;background:var(--bg2);overflow:hidden;margin-top:12px;">
+      <div style="height:100%;width:${fw.score}%;background:${col};"></div>
+    </div>
+    ${body}
+  </div>`;
 }
 
 function connStatusBadge(status) {

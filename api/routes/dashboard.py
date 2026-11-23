@@ -138,6 +138,28 @@ def overview(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/compliance")
+def compliance(project_id: str = None, db: Session = Depends(get_db)):
+    """Tổng hợp tuân thủ toàn hệ thống (hoặc 1 project) từ các lỗ hổng code OPEN.
+
+    Ánh xạ sang OWASP Top 10, ISO 27001, TCVN 11930/NĐ 85, PCI-DSS.
+    """
+    from api.models import Scan, Vulnerability, VulnStatus
+    from scanner import compliance as C
+
+    q = db.query(Vulnerability).filter(Vulnerability.status == VulnStatus.OPEN)
+    if project_id:
+        scan_ids = [s.id for s in db.query(Scan).filter(Scan.project_id == project_id).all()]
+        q = q.filter(Vulnerability.scan_id.in_(scan_ids or ["__none__"]))
+    vulns = q.all()
+    summary = C.compliance_summary(vulns)
+    return {
+        "total_findings": len(vulns),
+        "frameworks": [summary[fw] for fw in C.FRAMEWORKS],
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
 def _posture_score(findings_totals, asset_bands, active_alert_assets) -> Dict:
     """Điểm tư thế rủi ro 0..100 (càng cao càng xấu) + nhãn. Có trọng số theo severity."""
     w = {"CRITICAL": 10, "HIGH": 5, "MEDIUM": 2, "LOW": 0.5, "INFO": 0}

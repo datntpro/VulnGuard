@@ -522,7 +522,7 @@ def get_scan_vulns(
 @router.get("/scans/{scan_id}/export", tags=["scans"])
 def export_scan(
     scan_id: str,
-    format: str = Query(default="json", pattern="^(json|csv|pdf|md|ai)$"),
+    format: str = Query(default="json", pattern="^(json|csv|pdf|md|ai|sarif)$"),
     severity: str = None,
     status: str = None,
     scan_type: str = None,
@@ -566,6 +566,10 @@ def export_scan(
         text = rb.build_markdown(scan, vulns, project_name)
         return StreamingResponse(iter([text.encode("utf-8")]), media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{filename_base}.md"'})
+    if format == "sarif":
+        text = rb.build_sarif(scan, vulns, project_name)
+        return StreamingResponse(iter([text.encode("utf-8")]), media_type="application/sarif+json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.sarif"'})
     # ai — JSON tối giản cho LLM (mở xem được trên trình duyệt, không ép tải)
     text = rb.build_ai_json(scan, vulns, project_name)
     return StreamingResponse(iter([text.encode("utf-8")]), media_type="application/json; charset=utf-8",

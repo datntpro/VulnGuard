@@ -11,6 +11,8 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List
 
+from scanner import compliance
+
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
 _SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 
@@ -395,7 +397,9 @@ def build_pdf(scan, vulns, project_name):
             loc = ((v.file_path or "") + (f":{v.line_start}" if v.line_start else "")) or "—"
             ids = " · ".join(filter(None, [f"CVE {v.cve}" if v.cve else "", f"CWE {v.cwe}" if v.cwe else "",
                                            f"CVSS {v.cvss_score}" if v.cvss_score else ""]))
-            pdf.multi_cell(0, 5, f"{v.tool} ({_stype(v)})  |  {loc}" + (f"  |  {ids}" if ids else ""),
+            tagline = "  ·  ".join(compliance.owasp_tags(v))
+            pdf.multi_cell(0, 5, f"{v.tool} ({_stype(v)})  |  {loc}" + (f"  |  {ids}" if ids else "")
+                           + (f"\n{tagline}" if tagline else ""),
                            new_x="LMARGIN", new_y="NEXT")
             pdf.set_text_color(0, 0, 0)
             pdf.set_font("DejaVu", "", 9)
@@ -417,4 +421,104 @@ def build_pdf(scan, vulns, project_name):
                 pdf.set_text_color(0, 0, 0)
             pdf.ln(3)
 
+    # ── Ánh xạ tuân thủ ──
+    if vulns:
+        summ = compliance.compliance_summary(vulns)
+        pdf.add_page()
+        _h(pdf, "4", "Ánh xạ tuân thủ (Compliance mapping)")
+        pdf.set_font("DejaVu", "", 9)
+        pdf.set_text_color(*_GREY)
+        pdf.multi_cell(0, 5, "Mỗi phát hiện được ánh xạ sang OWASP Top 10 2021, ISO/IEC 27001:2022, "
+                       "TCVN 11930:2017 / NĐ 85/2016 và PCI-DSS v4.0. Điểm = % nhóm kiểm soát ĐẠT "
+                       "trên số nhóm bị chạm tới. KHÔNG ĐẠT = có lỗ hổng Cao/Nghiêm trọng.",
+                       new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
+        for fw in compliance.FRAMEWORKS:
+            d = summ[fw]
+            pdf.set_font("DejaVu", "B", 10.5)
+            pdf.set_text_color(*_NAVY)
+            pdf.cell(0, 7, f"{d['label']}  —  {d['score']}/100"
+                     + (f"  ({d['failed']} nhóm KHÔNG ĐẠT)" if d['failed'] else "  (không vi phạm)"),
+                     new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(0, 0, 0)
+            if not d["controls"]:
+                pdf.set_font("DejaVu", "", 9)
+                pdf.set_text_color(*_GREY)
+                pdf.cell(0, 6, "Không có phát hiện chạm tới khung này.", new_x="LMARGIN", new_y="NEXT")
+                pdf.set_text_color(0, 0, 0)
+                pdf.ln(2)
+                continue
+            pdf.set_font("DejaVu", "", 8.5)
+            with pdf.table(col_widths=(20, 48, 14, 18), text_align=("LEFT", "LEFT", "CENTER", "CENTER"),
+                           headings_style=_navy_heading(), line_height=5) as table:
+                table.row(["Mã", "Nhóm kiểm soát", "Số PH", "Trạng thái"])
+                for c in d["controls"]:
+                    table.row([c["control_id"], c["control_name"], str(c["findings"]), c["status"]])
+            pdf.ln(3)
+
     return bytes(pdf.output())
+
+
+# ─────────────────────────────────────────────
+# SARIF 2.1.0 — cho GitHub Code Scanning / GitLab / Azure DevOps
+# ─────────────────────────────────────────────
+_SARIF_LEVEL = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning",
+                "LOW": "note", "INFO": "note"}
+_SARIF_SECSEV = {"CRITICAL": "9.5", "HIGH": "7.5", "MEDIUM": "5.0", "LOW": "3.0", "INFO": "1.0"}
+
+
+def build_sarif(scan, vulns: List[Any], project_name: str) -> str:
+    """Xuất SARIF 2.1.0 — cắm thẳng vào GitHub Code Scanning / GitLab / Azure DevOps."""
+    rules: Dict[str, Dict[str, Any]] = {}
+    results = []
+    for v in vulns:
+        sev = _sev(v)
+        rid = (getattr(v, "rule_id", None) or f"{v.tool}:{getattr(v, 'cwe', '') or v.title[:40]}")
+        tags = ["security"] + compliance.owasp_tags(v)
+        if getattr(v, "cwe", None):
+            tags.append(f"external/cwe/cwe-{compliance._cwe_int(v.cwe)}")
+        if rid not in rules:
+            rules[rid] = {
+                "id": rid,
+                "name": (v.tool or "VulnGuard").title().replace(" ", ""),
+                "shortDescription": {"text": _clip(v.title, 120)},
+                "fullDescription": {"text": _clip(getattr(v, "description", "") or v.title, 1000)},
+                "helpUri": "https://owasp.org/Top10/",
+                "properties": {"tags": tags, "security-severity": _SARIF_SECSEV.get(sev, "1.0")},
+            }
+        loc = (v.file_path or "").lstrip("/") or "UNKNOWN"
+        line = int(getattr(v, "line_start", 0) or 1) or 1
+        msg = _clip(getattr(v, "ai_explanation", None) or getattr(v, "description", "") or v.title, 800)
+        results.append({
+            "ruleId": rid,
+            "level": _SARIF_LEVEL.get(sev, "note"),
+            "message": {"text": msg},
+            "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": loc},
+                "region": {"startLine": line},
+            }}],
+            "properties": {
+                "severity": sev,
+                "security-severity": _SARIF_SECSEV.get(sev, "1.0"),
+                "cwe": str(getattr(v, "cwe", "") or ""),
+                "cve": str(getattr(v, "cve", "") or ""),
+                "owasp": compliance.owasp_for(v),
+                "tool": v.tool,
+            },
+        })
+    doc = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "VulnGuard",
+                "informationUri": "https://github.com/datntpro/VulnGuard",
+                "version": "1.0",
+                "rules": list(rules.values()),
+            }},
+            "automationDetails": {"id": f"{project_name}/scan-{scan.scan_number}"},
+            "results": results,
+        }],
+    }
+    return json.dumps(doc, ensure_ascii=False, indent=2)
