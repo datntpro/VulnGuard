@@ -306,6 +306,33 @@ def _is_fallback_text(text: str) -> bool:
     return _is_ai_fallback(text)
 
 
+def _tools_section(scan) -> str:
+    """1.5: liệt kê MỌI công cụ đã chạy kèm trạng thái (chạy/0 lỗi/bỏ qua/lỗi) — báo cáo trung thực."""
+    logs = (getattr(scan, "summary", None) or {}).get("scanner_logs") or {}
+    if not logs:
+        return ""
+    _ic = {"ok": "✅", "skipped": "⊘", "error": "❌"}
+    rows = ""
+    has_gap = False
+    for tool, lg in sorted(logs.items()):
+        st = lg.get("status", "ok")
+        if st in ("skipped", "error"):
+            has_gap = True
+        label = _esc(lg.get("label") or tool)
+        detail = (f'{lg.get("count", 0)} phát hiện' if st == "ok"
+                  else ("BỎ QUA (chưa cài / thiếu PATH)" if st == "skipped" else f'LỖI: {_esc((lg.get("error") or "")[:120])}'))
+        color = "#0ca30c" if st == "ok" else "#d03b3b"
+        rows += (f'<tr><td>{_ic.get(st, "•")} {label}</td>'
+                 f'<td style="color:{color};font-weight:600;">{detail}</td></tr>')
+    warn = ('<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;margin-bottom:12px;color:#856404;">'
+            '⚠️ Có công cụ bị <b>bỏ qua/lỗi</b> — kết quả KHÔNG đầy đủ, "0 lỗi" không có nghĩa là sạch.</div>') if has_gap else ""
+    return (f'<div class="page-section"><h2>🛠️ Công cụ đã dùng</h2>{warn}'
+            f'<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+            f'<th style="text-align:left;border-bottom:2px solid #e2e8f0;padding:6px;">Công cụ</th>'
+            f'<th style="text-align:left;border-bottom:2px solid #e2e8f0;padding:6px;">Trạng thái</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div>')
+
+
 def _render_html(
     project: Project,
     scan: Scan,
@@ -1105,6 +1132,8 @@ def _render_html(
       <div class="num">{info}</div><div class="label">Thông tin</div>
     </div>
   </div>
+
+  {_tools_section(scan)}
 
   <!-- ═══ EXECUTIVE SUMMARY ═══ -->
   <div class="page-section">

@@ -14,7 +14,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -119,6 +119,14 @@ async def _run_webscan(scan_id: str, domain_id: str, targets: List[str], params:
         scan.started_at = datetime.utcnow()
         db.commit()
         _set_progress(f"Đang quét {len(targets)} URL bằng nuclei…")
+
+        # 1.2: kiểm security header thiếu (native) — chạy trước, luôn có dù nuclei thiếu template
+        try:
+            from scanner.crawler.headers_check import check_targets as _hdr_check
+            await _hdr_check(targets, _on_finding)
+        except Exception as _e:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(f"[webscan] header check lỗi: {_e}")
 
         _, meta = await run_nuclei(
             targets=targets, severities=params["severities"], tags=params["tags"],
@@ -241,6 +249,67 @@ def list_findings(scan_id: str, severity: Optional[str] = None, db: Session = De
     rows = q.all()
     rows.sort(key=lambda f: (_SEV_ORDER.index(f.severity) if f.severity in _SEV_ORDER else 9, f.name))
     return [_finding_out(f) for f in rows]
+
+
+@router.get("/api/webscans/{scan_id}/export")
+def export_webscan(scan_id: str, format: str = Query(default="json", pattern="^(json|csv|html)$"),
+                   db: Session = Depends(get_db)):
+    """1.1: xuất báo cáo web scan — JSON / CSV / HTML (HTML in ra PDF được từ trình duyệt)."""
+    import csv as _csv
+    import html as _html
+    import io as _io
+    import json as _json
+    from fastapi.responses import StreamingResponse
+
+    scan = db.query(WebScan).filter(WebScan.id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Web scan không tồn tại")
+    rows = db.query(WebFinding).filter(WebFinding.scan_id == scan_id).all()
+    rows.sort(key=lambda f: (_SEV_ORDER.index(f.severity) if f.severity in _SEV_ORDER else 9, f.name))
+    findings = [_finding_out(f) for f in rows]
+    counts = {s: 0 for s in _SEV_ORDER}
+    for f in findings:
+        counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+    base = f"vulnguard_webscan_{scan.scan_number if hasattr(scan,'scan_number') else scan_id[:8]}"
+
+    if format == "json":
+        doc = {"scan_id": scan_id, "domain_id": scan.domain_id, "generated_at": datetime.utcnow().isoformat() + "Z",
+               "summary": {**counts, "total": len(findings)}, "findings": findings}
+        data = _json.dumps(doc, ensure_ascii=False, indent=2, default=str)
+        return StreamingResponse(iter([data.encode()]), media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base}.json"'})
+    if format == "csv":
+        buf = _io.StringIO(); w = _csv.writer(buf)
+        w.writerow(["severity", "name", "host", "matched_at", "template_id", "cve", "cwe", "status", "remediation"])
+        for f in findings:
+            w.writerow([f["severity"], f["name"], f["host"], f["matched_at"], f["template_id"],
+                        f["cve"] or "", f["cwe"] or "", f["status"], (f["remediation"] or "")[:300]])
+        return StreamingResponse(iter([buf.getvalue().encode()]), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base}.csv"'})
+
+    # HTML (self-contained, in ra PDF được)
+    e = _html.escape
+    sev_color = {"critical": "#d03b3b", "high": "#ec835a", "medium": "#fab219", "low": "#0ca30c", "info": "#3987e5"}
+    bars = "".join(f'<span style="background:{sev_color[s]};color:#fff;padding:2px 8px;border-radius:4px;margin-right:6px;">{s}: {counts[s]}</span>'
+                   for s in _SEV_ORDER if counts[s])
+    rows_html = "".join(
+        f'<tr><td style="color:{sev_color.get(f["severity"],"#333")};font-weight:600;">{e(f["severity"].upper())}</td>'
+        f'<td>{e(f["name"])}</td><td style="font-family:monospace;font-size:12px;">{e(f["matched_at"] or f["host"] or "")}</td>'
+        f'<td>{e(f["cve"] or f["cwe"] or "")}</td><td>{e((f["remediation"] or "")[:200])}</td></tr>'
+        for f in findings)
+    html_doc = f"""<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>{e(base)}</title>
+<style>body{{font-family:system-ui,Arial;margin:32px;color:#1a1a1a;}}h1{{color:#1F3864;}}
+table{{border-collapse:collapse;width:100%;margin-top:16px;}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;}}
+th{{background:#1F3864;color:#fff;}}</style></head><body>
+<h1>Báo cáo quét web — VulnGuard</h1>
+<p>Scan: {e(scan_id)} · Thời điểm: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC · Tổng: {len(findings)} finding</p>
+<div style="margin:12px 0;">{bars or '<em>Không có lỗ hổng</em>'}</div>
+<table><thead><tr><th>Mức</th><th>Tên</th><th>Vị trí</th><th>CVE/CWE</th><th>Khuyến nghị</th></tr></thead>
+<tbody>{rows_html}</tbody></table>
+<p style="margin-top:24px;color:#888;font-size:12px;">In trang này (Ctrl/Cmd+P) → lưu PDF nếu cần.</p>
+</body></html>"""
+    return StreamingResponse(iter([html_doc.encode()]), media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'inline; filename="{base}.html"'})
 
 
 @router.patch("/api/webscans/findings/{finding_id}/status")

@@ -5172,6 +5172,14 @@ async function loadWebFindings(id) {
     el.innerHTML = `<div class="card"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
+function exportWebScan(format, newTab) {
+  const id = webScanState.selectedId;
+  if (!id) return;
+  const url = `${API}/api/webscans/${id}/export?format=${format}`;
+  if (newTab) { window.open(url, '_blank'); return; }
+  const a = document.createElement('a'); a.href = url; a.style.display = 'none';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
 function renderWebFindings() {
   const el = document.getElementById('webscan-findings');
   const all = webScanState.findings;
@@ -5182,6 +5190,9 @@ function renderWebFindings() {
       <div class="flex-between" style="margin-bottom:12px;">
         <h2 style="margin:0;">Findings (${all.length})</h2>
         <div class="flex" style="flex-wrap:wrap;">
+          <button class="btn btn-ghost btn-sm" onclick="exportWebScan('html',true)" title="Báo cáo HTML (in ra PDF được)">⬇ HTML</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportWebScan('json')" title="Xuất JSON">⬇ JSON</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportWebScan('csv')" title="Xuất CSV (Excel)">⬇ CSV</button>
           <input id="wf-search" placeholder="Tìm theo tên, template, URL..." style="width:240px;" oninput="webScanState.search=this.value.toLowerCase();renderWebFindingRows()">
           <select id="wf-status" style="width:auto;" onchange="webScanState.status=this.value;renderWebFindingRows()">
             <option value="">Tất cả trạng thái</option><option value="OPEN">Open</option><option value="FALSE_POSITIVE">False Positive</option>
@@ -6678,9 +6689,22 @@ async function saveConnector() {
   finally { btn.disabled = false; }
 }
 
+// ─── Feature flags (1.9) — ẩn module đã tắt khỏi bản triển khai ──
+async function applyFeatureFlags() {
+  try {
+    const f = await fetch('/api/features').then(r => r.ok ? r.json() : null);
+    if (!f) return;
+    const map = { docreview: 'nav-docreview', coworker: 'nav-coworker' };
+    for (const [key, navId] of Object.entries(map)) {
+      if (f[key] === false) { const el = document.getElementById(navId); if (el) el.style.display = 'none'; }
+    }
+  } catch {}
+}
+
 // ─── Init ──────────────────────────────────────────────────────
 applyThemeButtons();
 initAuth();
+applyFeatureFlags();
 document.getElementById('page-dashboard').classList.add('vg-enter');
 loadDashboard();
 </script>

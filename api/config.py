@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # ── Auth ──
     # AUTH_ENABLED=false chỉ dành cho dev/local 1 người — production luôn bật.
     auth_enabled: bool = True
+    # 1.9: feature flags — tắt để ẩn module ngoài ICP khỏi bản bán.
+    feature_coworker: bool = True
+    feature_docreview: bool = True
+    feature_file_assistant: bool = True
     # Secret ký JWT + mã hoá API key cloud AI. Để trống → tự sinh & lưu vào
     # <storage>/secret.key (chmod 600). Đặt cố định nếu chạy nhiều instance.
     vulnguard_secret_key: str = ""
