@@ -924,6 +924,28 @@
       <div id="ollama-status-bar" class="notice" style="margin-bottom:0;">Đang kiểm tra...</div>
     </div>
 
+    <!-- Ollama endpoint -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:6px;">
+        <h2 style="margin-bottom:0;">🔗 Endpoint Ollama</h2>
+        <span id="ollama-endpoint-badge" class="text-sm" style="color:var(--text2);"></span>
+      </div>
+      <div class="notice" style="margin-bottom:12px;">
+        Ollama <strong>không bắt buộc chạy Docker</strong>. Bạn có thể: (1) cài trực tiếp trên máy
+        (<span class="text-mono">ollama serve</span> → <span class="text-mono">http://localhost:11434</span>),
+        hoặc (2) trỏ tới một máy khác trong mạng qua IP (ví dụ <span class="text-mono">http://192.168.1.50:11434</span>).
+        Khi chạy VulnGuard trong Docker, dùng <span class="text-mono">http://host.docker.internal:11434</span> để gọi Ollama trên máy thật.
+      </div>
+      <div class="flex" style="gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:260px;">
+          <label>Địa chỉ Ollama (để trống = mặc định hệ thống)</label>
+          <input id="ollama-endpoint-input" class="text-mono" placeholder="http://localhost:11434">
+        </div>
+        <button class="btn btn-primary" onclick="saveOllamaEndpoint()">💾 Lưu &amp; kiểm tra</button>
+      </div>
+      <div id="ollama-endpoint-msg" class="text-sm" style="margin-top:8px;"></div>
+    </div>
+
     <!-- Active Model -->
     <div class="card">
       <h2>Model đang dùng</h2>
@@ -1094,7 +1116,13 @@
             <div class="opt-desc">Gọi trực tiếp Claude API của Anthropic (API key, Workload Identity Federation hoặc credential trên máy chủ).</div></label>
           <label class="opt-card"><input type="radio" name="ai-provider" value="bedrock" onchange="onAIProviderChange()">
             <div class="opt-title">🟧 Amazon Bedrock</div>
-            <div class="opt-desc">Amazon Bedrock (dùng AWS IAM / IAM Identity Center — cùng hạ tầng AI mà Kiro dùng).</div></label>
+            <div class="opt-desc">Claude qua AWS Bedrock — AWS IAM / IAM Identity Center, profile do <span class="text-mono">kiro-cli</span> / <span class="text-mono">aws sso login</span> tạo, hoặc Bedrock API key (headless).</div></label>
+          <label class="opt-card"><input type="radio" name="ai-provider" value="openai" onchange="onAIProviderChange()">
+            <div class="opt-title">🟢 OpenAI (ChatGPT)</div>
+            <div class="opt-desc">OpenAI API — GPT-4o/GPT-4.1… (hoặc endpoint tương thích qua base URL).</div></label>
+          <label class="opt-card"><input type="radio" name="ai-provider" value="openrouter" onchange="onAIProviderChange()">
+            <div class="opt-title">🧩 OpenRouter</div>
+            <div class="opt-desc">Một API key, nhiều nhà cung cấp/model (Anthropic, OpenAI, Llama, Qwen…).</div></label>
         </div>
 
         <!-- Anthropic -->
@@ -1140,11 +1168,58 @@
         <!-- Bedrock -->
         <div class="settings-section" id="ai-bedrock-section" style="display:none;">
           <div class="separator"></div>
-          <div class="notice">Xác thực qua AWS SDK credential chain trên máy chủ (IAM role, <span class="text-mono">aws sso login</span> / IAM Identity Center, hoặc profile trong <span class="text-mono">~/.aws/config</span>).</div>
           <div class="grid2">
+            <div class="form-group">
+              <label>Phương thức đăng nhập AWS</label>
+              <select id="ai-br-auth" onchange="onBedrockAuthModeChange()">
+                <option value="aws_chain">Credential chain trên máy chủ (IAM role / biến môi trường / default profile)</option>
+                <option value="profile">AWS profile — tạo bằng kiro-cli login / aws sso login</option>
+                <option value="bedrock_api_key">Bedrock API key (headless / CI — AWS_BEARER_TOKEN_BEDROCK)</option>
+              </select>
+            </div>
             <div class="form-group"><label>Region</label><input id="ai-br-region" class="text-mono" placeholder="us-east-1"></div>
-            <div class="form-group"><label>AWS profile (tùy chọn)</label><input id="ai-br-profile" class="text-mono" placeholder="default"></div>
             <div class="form-group"><label>Model ID</label><input id="ai-br-model" class="text-mono" placeholder="anthropic.claude-opus-5-5"></div>
+          </div>
+          <div id="ai-br-profile-wrap" class="form-group" style="display:none;">
+            <label>AWS profile</label>
+            <input id="ai-br-profile" class="text-mono" placeholder="default">
+            <div class="field-hint">Đăng nhập trước trên máy chủ bằng <span class="text-mono">kiro-cli login</span> hoặc <span class="text-mono">aws sso login --profile &lt;tên&gt;</span>, rồi điền đúng tên profile ở đây.</div>
+          </div>
+          <div id="ai-br-key-wrap" class="form-group" style="display:none;">
+            <label>Bedrock API key</label>
+            <input id="ai-br-key" type="password" autocomplete="new-password" class="text-mono" placeholder="ABSK...">
+            <div class="field-hint"><span id="ai-br-key-hint">Chưa có key nào được lưu.</span>
+              <a href="#" id="ai-br-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('bedrock');return false;">Xóa key đã lưu</a></div>
+          </div>
+        </div>
+
+        <!-- OpenAI -->
+        <div class="settings-section" id="ai-openai-section" style="display:none;">
+          <div class="separator"></div>
+          <div class="grid2">
+            <div class="form-group"><label>Model</label><input id="ai-oai-model" class="text-mono" placeholder="gpt-4o"></div>
+            <div class="form-group"><label>Base URL (tùy chọn)</label><input id="ai-oai-base" class="text-mono" placeholder="https://api.openai.com/v1"></div>
+          </div>
+          <div class="form-group">
+            <label>API key</label>
+            <input id="ai-oai-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-...">
+            <div class="field-hint"><span id="ai-oai-key-hint">Chưa có API key nào được lưu.</span>
+              <a href="#" id="ai-oai-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('openai');return false;">Xóa key đã lưu</a></div>
+          </div>
+        </div>
+
+        <!-- OpenRouter -->
+        <div class="settings-section" id="ai-openrouter-section" style="display:none;">
+          <div class="separator"></div>
+          <div class="notice">OpenRouter định tuyến tới nhiều nhà cung cấp. Model dạng <span class="text-mono">nhà-cung-cấp/model</span>, ví dụ <span class="text-mono">anthropic/claude-3.5-sonnet</span>, <span class="text-mono">openai/gpt-4o</span>, <span class="text-mono">meta-llama/llama-3.1-70b-instruct</span>.</div>
+          <div class="grid2">
+            <div class="form-group"><label>Model</label><input id="ai-or-model" class="text-mono" placeholder="anthropic/claude-3.5-sonnet"></div>
+            <div class="form-group">
+              <label>API key</label>
+              <input id="ai-or-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-or-...">
+              <div class="field-hint"><span id="ai-or-key-hint">Chưa có API key nào được lưu.</span>
+                <a href="#" id="ai-or-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('openrouter');return false;">Xóa key đã lưu</a></div>
+            </div>
           </div>
         </div>
       </div>
@@ -3213,9 +3288,34 @@ function renderCompareSection(title, vulns, cls) {
 let pullAbortController = null;
 
 async function loadSettings() {
-  await Promise.all([loadOllamaStatus(), loadInstalledModels(), loadScannerHealth()]);
+  await Promise.all([loadOllamaStatus(), loadOllamaEndpoint(), loadInstalledModels(), loadScannerHealth()]);
   document.getElementById('threshold-info').textContent =
     '🔒 Severity threshold: HIGH — Vuln CRITICAL hoặc HIGH còn OPEN sẽ block approve. Chỉnh BLOCK_SEVERITY_THRESHOLD trong .env để thay đổi.';
+}
+
+async function loadOllamaEndpoint() {
+  try {
+    const r = await api('/api/ollama/endpoint');
+    document.getElementById('ollama-endpoint-input').value = r.custom ? r.url : '';
+    document.getElementById('ollama-endpoint-input').placeholder = r.default || 'http://localhost:11434';
+    document.getElementById('ollama-endpoint-badge').textContent =
+      r.custom ? `tùy chỉnh: ${r.url}` : `mặc định: ${r.url}`;
+  } catch (e) { /* bỏ qua */ }
+}
+
+async function saveOllamaEndpoint() {
+  const msg = document.getElementById('ollama-endpoint-msg');
+  const url = document.getElementById('ollama-endpoint-input').value.trim();
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra kết nối...';
+  try {
+    const r = await api('/api/ollama/endpoint', { method: 'PUT', body: { url } });
+    msg.style.color = 'var(--low)';
+    msg.textContent = `✅ Đã lưu — ${r.url} (${(r.models || []).length} model khả dụng)`;
+    loadOllamaEndpoint(); loadOllamaStatus(); loadInstalledModels();
+  } catch (e) {
+    msg.style.color = 'var(--critical)';
+    msg.textContent = '❌ ' + e.message;
+  }
 }
 
 async function loadOllamaStatus() {
@@ -3226,10 +3326,11 @@ async function loadOllamaStatus() {
     bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
   } catch(e) {
     bar.style.background = 'color-mix(in srgb, var(--critical) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--critical) 30%, transparent)'; bar.style.color = 'var(--critical)';
-    bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Có 2 cách xử lý:<br>
+    bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Cách xử lý:<br>
       <span style="font-size:12px;">
-        1. Chạy Ollama service: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">docker compose up -d ollama</code><br>
-        2. Không dùng AI analysis: bỏ tick "Run AI Analysis" khi trigger scan.
+        1. Cài &amp; chạy Ollama trực tiếp trên máy: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">ollama serve</code> (không cần Docker)<br>
+        2. Hoặc trỏ tới Ollama trên máy khác qua IP ở mục "🔗 Endpoint Ollama" bên dưới.<br>
+        3. Hoặc không dùng AI analysis: bỏ tick "Run AI Analysis" khi trigger scan.
       </span>`;
   }
 }
@@ -4348,7 +4449,9 @@ const AI_DEFAULTS = {
   provider: 'anthropic', mode: 'local_only',
   anthropic: { auth_mode: 'api_key', model: 'claude-opus-5-5', api_key_set: false, api_key_hint: '',
     wif: { federation_rule_id: '', organization_id: '', identity_token_file: '', workspace_id: '', service_account_id: '' } },
-  bedrock: { region: 'us-east-1', aws_profile: '', model: 'anthropic.claude-opus-5-5' },
+  bedrock: { auth_mode: 'aws_chain', region: 'us-east-1', aws_profile: '', model: 'anthropic.claude-opus-5-5', api_key_set: false, api_key_hint: '' },
+  openai: { model: 'gpt-4o', base_url: '', api_key_set: false, api_key_hint: '' },
+  openrouter: { model: 'anthropic/claude-3.5-sonnet', api_key_set: false, api_key_hint: '' },
   hybrid: { escalate_min_severity: 'MEDIUM', fp_band_low: 15, fp_band_high: 85 },
   privacy: { send_code_context: true, context_lines: 15, redact_secrets: true },
 };
@@ -4375,20 +4478,32 @@ async function loadAIConfig() {
   aiConfig = mergeDeep(AI_DEFAULTS, cfg);
   fillAIForm(aiConfig);
 }
+function keyHint(id, section, clearId) {
+  document.getElementById(id).textContent = section.api_key_set
+    ? `Đã lưu: ${section.api_key_hint || '••••'} — để trống để giữ nguyên, nhập key mới để thay.`
+    : 'Chưa có API key nào được lưu.';
+  if (clearId) document.getElementById(clearId).style.display = (section.api_key_set && canAdmin()) ? 'inline' : 'none';
+}
 function fillAIForm(c) {
   setRadio('ai-mode', c.mode);
-  setRadio('ai-provider', c.provider === 'bedrock' ? 'bedrock' : 'anthropic');
+  setRadio('ai-provider', c.provider || 'anthropic');
   setVal('ai-anth-auth', c.anthropic.auth_mode);
   setVal('ai-anth-model', c.anthropic.model);
   setVal('ai-anth-key', '');
-  document.getElementById('ai-anth-key-hint').textContent = c.anthropic.api_key_set
-    ? `Đã lưu: ${c.anthropic.api_key_hint || '••••'} — để trống để giữ nguyên, nhập key mới để thay.`
-    : 'Chưa có API key nào được lưu.';
-  document.getElementById('ai-clear-key').style.display = (c.anthropic.api_key_set && canAdmin()) ? 'inline' : 'none';
+  keyHint('ai-anth-key-hint', c.anthropic, 'ai-clear-key');
   const w = c.anthropic.wif || {};
   setVal('ai-wif-rule', w.federation_rule_id); setVal('ai-wif-org', w.organization_id);
   setVal('ai-wif-token', w.identity_token_file); setVal('ai-wif-ws', w.workspace_id); setVal('ai-wif-sa', w.service_account_id);
+  // Bedrock
+  setVal('ai-br-auth', c.bedrock.auth_mode || 'aws_chain');
   setVal('ai-br-region', c.bedrock.region); setVal('ai-br-profile', c.bedrock.aws_profile); setVal('ai-br-model', c.bedrock.model);
+  setVal('ai-br-key', ''); keyHint('ai-br-key-hint', c.bedrock, 'ai-br-clear-key');
+  // OpenAI
+  setVal('ai-oai-model', c.openai.model); setVal('ai-oai-base', c.openai.base_url); setVal('ai-oai-key', '');
+  keyHint('ai-oai-key-hint', c.openai, 'ai-oai-clear-key');
+  // OpenRouter
+  setVal('ai-or-model', c.openrouter.model); setVal('ai-or-key', '');
+  keyHint('ai-or-key-hint', c.openrouter, 'ai-or-clear-key');
   setVal('ai-escalate-sev', c.hybrid.escalate_min_severity);
   setVal('ai-fp-low', c.hybrid.fp_band_low); setVal('ai-fp-high', c.hybrid.fp_band_high);
   document.getElementById('ai-priv-send').checked = !!c.privacy.send_code_context;
@@ -4399,7 +4514,7 @@ function fillAIForm(c) {
   document.querySelectorAll('#st-ai input, #st-ai select').forEach(i => { i.disabled = !editable; });
   document.getElementById('ai-save-btn').style.display = editable ? '' : 'none';
   document.getElementById('ai-config-readonly').style.display = editable ? 'none' : 'block';
-  onAIModeChange(); onAIAuthModeChange(); renderFpBand();
+  onAIModeChange(); onAIAuthModeChange(); onBedrockAuthModeChange(); renderFpBand();
 }
 function onAIModeChange() {
   const mode = radioVal('ai-mode') || 'local_only';
@@ -4416,6 +4531,8 @@ function onAIProviderChange() {
   const p = radioVal('ai-provider') || 'anthropic';
   document.getElementById('ai-anthropic-section').style.display = p === 'anthropic' ? 'block' : 'none';
   document.getElementById('ai-bedrock-section').style.display = p === 'bedrock' ? 'block' : 'none';
+  document.getElementById('ai-openai-section').style.display = p === 'openai' ? 'block' : 'none';
+  document.getElementById('ai-openrouter-section').style.display = p === 'openrouter' ? 'block' : 'none';
   renderPrivacyWarning();
 }
 function onAIAuthModeChange() {
@@ -4423,6 +4540,11 @@ function onAIAuthModeChange() {
   document.getElementById('ai-auth-apikey').style.display = m === 'api_key' ? 'block' : 'none';
   document.getElementById('ai-auth-wif').style.display = m === 'wif' ? 'block' : 'none';
   document.getElementById('ai-auth-env').style.display = m === 'environment' ? 'block' : 'none';
+}
+function onBedrockAuthModeChange() {
+  const m = val('ai-br-auth');
+  document.getElementById('ai-br-profile-wrap').style.display = m === 'profile' ? 'block' : 'none';
+  document.getElementById('ai-br-key-wrap').style.display = m === 'bedrock_api_key' ? 'block' : 'none';
 }
 function renderFpBand() {
   let lo = Math.max(0, Math.min(100, parseInt(val('ai-fp-low'), 10) || 0));
@@ -4437,7 +4559,8 @@ function renderPrivacyWarning() {
   const mode = radioVal('ai-mode') || 'local_only';
   const send = document.getElementById('ai-priv-send').checked;
   document.getElementById('ai-privacy-warning').style.display = (send && mode !== 'local_only') ? 'block' : 'none';
-  document.getElementById('ai-privacy-provider').textContent = radioVal('ai-provider') === 'bedrock' ? 'Amazon Bedrock' : 'Anthropic';
+  const pl = { anthropic: 'Anthropic', bedrock: 'Amazon Bedrock', openai: 'OpenAI', openrouter: 'OpenRouter' };
+  document.getElementById('ai-privacy-provider').textContent = pl[radioVal('ai-provider')] || 'cloud provider';
 }
 function buildAIPayload() {
   const mode = radioVal('ai-mode') || 'local_only';
@@ -4456,7 +4579,9 @@ function buildAIPayload() {
         service_account_id: val('ai-wif-sa').trim(),
       },
     },
-    bedrock: { region: val('ai-br-region').trim(), aws_profile: val('ai-br-profile').trim(), model: val('ai-br-model').trim() },
+    bedrock: { auth_mode: val('ai-br-auth'), region: val('ai-br-region').trim(), aws_profile: val('ai-br-profile').trim(), model: val('ai-br-model').trim() },
+    openai: { model: val('ai-oai-model').trim() || AI_DEFAULTS.openai.model, base_url: val('ai-oai-base').trim() },
+    openrouter: { model: val('ai-or-model').trim() || AI_DEFAULTS.openrouter.model },
     hybrid: { escalate_min_severity: val('ai-escalate-sev'), fp_band_low: Math.max(0, lo), fp_band_high: Math.min(100, hi) },
     privacy: {
       send_code_context: document.getElementById('ai-priv-send').checked,
@@ -4464,17 +4589,26 @@ function buildAIPayload() {
       redact_secrets: document.getElementById('ai-priv-redact').checked,
     },
   };
-  const key = val('ai-anth-key').trim();
-  if (key) payload.anthropic.api_key = key;   // write-only: chỉ gửi khi người dùng nhập key mới
+  // write-only keys: chỉ gửi khi người dùng nhập key mới
+  const ak = val('ai-anth-key').trim(); if (ak) payload.anthropic.api_key = ak;
+  const bk = val('ai-br-key').trim(); if (bk) payload.bedrock.api_key = bk;
+  const ok = val('ai-oai-key').trim(); if (ok) payload.openai.api_key = ok;
+  const rk = val('ai-or-key').trim(); if (rk) payload.openrouter.api_key = rk;
   return payload;
 }
 async function saveAIConfig() {
   const btn = document.getElementById('ai-save-btn');
   const payload = buildAIPayload();
-  if (payload.mode !== 'local_only' && payload.provider === 'anthropic' && payload.anthropic.auth_mode === 'api_key'
-      && !payload.anthropic.api_key && !(aiConfig && aiConfig.anthropic.api_key_set)) {
-    toast('Chưa có API key Anthropic — nhập API key hoặc chọn phương thức xác thực khác.', 'warn');
-    return;
+  // Kiểm tra credential cho provider đang chọn (chỉ khi dùng cloud)
+  if (payload.mode !== 'local_only') {
+    const p = payload.provider, saved = aiConfig || {};
+    const need = (sec, has) => !payload[sec].api_key && !(saved[sec] && saved[sec].api_key_set) ? has : null;
+    let miss = null;
+    if (p === 'anthropic' && payload.anthropic.auth_mode === 'api_key') miss = need('anthropic', 'Anthropic API key');
+    else if (p === 'bedrock' && payload.bedrock.auth_mode === 'bedrock_api_key') miss = need('bedrock', 'Bedrock API key');
+    else if (p === 'openai') miss = need('openai', 'OpenAI API key');
+    else if (p === 'openrouter') miss = need('openrouter', 'OpenRouter API key');
+    if (miss) { toast(`Chưa có ${miss} — nhập key hoặc chọn phương thức xác thực khác.`, 'warn'); return; }
   }
   btn.disabled = true; btn.textContent = '⏳ Đang lưu...';
   try {
@@ -4485,10 +4619,11 @@ async function saveAIConfig() {
   } catch (e) { toast('Lỗi khi lưu: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '💾 Lưu cấu hình'; }
 }
-async function clearAIKey() {
-  if (!confirm('Xóa API key Anthropic đã lưu trên máy chủ?')) return;
+async function clearAIKey(section = 'anthropic') {
+  const label = { anthropic: 'Anthropic', bedrock: 'Bedrock', openai: 'OpenAI', openrouter: 'OpenRouter' }[section] || section;
+  if (!confirm(`Xóa API key ${label} đã lưu trên máy chủ?`)) return;
   try {
-    const saved = await api('/api/ai/config', { method: 'PUT', body: { anthropic: { clear_api_key: true } } });
+    const saved = await api('/api/ai/config', { method: 'PUT', body: { [section]: { clear_api_key: true } } });
     aiConfig = mergeDeep(AI_DEFAULTS, saved || {});
     fillAIForm(aiConfig);
     toast('Đã xóa API key', 'success');
@@ -4510,7 +4645,7 @@ async function testAIConfig() {
 }
 
 // ─── VULN › PHÂN TÍCH LẠI BẰNG CLAUDE ─────────────────────────
-const AI_PROVIDER_LABEL = { ollama: '🏠 Ollama (local)', anthropic: '✳️ Claude · Anthropic', bedrock: '🟧 Claude · Bedrock' };
+const AI_PROVIDER_LABEL = { ollama: '🏠 Ollama (local)', anthropic: '✳️ Claude · Anthropic', bedrock: '🟧 Claude · Bedrock', openai: '🟢 OpenAI', openrouter: '🧩 OpenRouter', 'claude-api': '✳️ Claude · Anthropic' };
 function renderAIProviderChip(v) {
   const chip = document.getElementById('ai-provider-chip');
   const p = v.ai_provider || (v.ai_explanation ? 'ollama' : null);
