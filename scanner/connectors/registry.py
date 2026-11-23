@@ -5,11 +5,19 @@ from scanner.connectors.base import BaseConnector
 from scanner.connectors.fortinac import FortiNACConnector
 from scanner.connectors.trellix import TrellixConnector
 from scanner.connectors.trendmicro import TrendMicroConnector
+from scanner.connectors.wazuh import WazuhConnector
+from scanner.connectors.openvas import OpenVASConnector
+from scanner.connectors.tenable import TenableConnector
+from scanner.connectors.qualys import QualysConnector
 
 REGISTRY: Dict[str, Type[BaseConnector]] = {
     "TRELLIX_XDR": TrellixConnector,
     "TRENDMICRO_VISION_ONE": TrendMicroConnector,
     "FORTINAC": FortiNACConnector,
+    "WAZUH": WazuhConnector,
+    "OPENVAS_GVM": OpenVASConnector,
+    "TENABLE_IO": TenableConnector,
+    "QUALYS_VMDR": QualysConnector,
 }
 
 

@@ -16,6 +16,10 @@ class ConnectorKind(str, enum.Enum):
     TRELLIX_XDR = "TRELLIX_XDR"
     TRENDMICRO_VISION_ONE = "TRENDMICRO_VISION_ONE"
     FORTINAC = "FORTINAC"
+    WAZUH = "WAZUH"                      # open-source SIEM/XDR/HIDS
+    OPENVAS_GVM = "OPENVAS_GVM"         # open-source VA (Greenbone/GMP)
+    TENABLE_IO = "TENABLE_IO"          # Tenable.io VM (cloud)
+    QUALYS_VMDR = "QUALYS_VMDR"        # Qualys VMDR
 
 
 class ConnectorConfig(Base):

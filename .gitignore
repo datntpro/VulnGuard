@@ -83,3 +83,6 @@ storage/pentest_ca/
 .venv-demo/
 storage/demo/
 storage/admin_credentials.txt
+
+# Mã nguồn upload để scan (giải nén tạm, không commit)
+storage/scan_uploads/
