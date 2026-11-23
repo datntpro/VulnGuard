@@ -244,6 +244,63 @@ async def _run_ai_crawl_analysis(crawl_id: str, domain_url: str):
         db.close()
 
 
+# ─────────────────────────────────────────────
+# P0.4: Xác minh quyền sở hữu domain (bắt buộc trước khi crawl/web scan)
+# ─────────────────────────────────────────────
+@router.get("/{domain_id}/ownership")
+def get_ownership(domain_id: str, db: Session = Depends(get_db)):
+    from scanner import ownership as own
+    d = db.query(Domain).filter(Domain.id == domain_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Domain không tồn tại")
+    if not d.ownership_token:
+        d.ownership_token = own.gen_token()
+        db.commit()
+    host = own.host_of(d.url)
+    return {
+        "verified": bool(d.ownership_verified),
+        "method": d.ownership_method,
+        "verified_at": d.ownership_verified_at.isoformat() + "Z" if d.ownership_verified_at else None,
+        "token": d.ownership_token,
+        "instructions": {
+            "dns_txt": f"Thêm bản ghi TXT cho {host}: vulnguard-verify={d.ownership_token}",
+            "well_known": f"Đặt file https://{host}/.well-known/vulnguard.txt chứa: {d.ownership_token}",
+        },
+    }
+
+
+@router.post("/{domain_id}/ownership/verify")
+async def verify_ownership(domain_id: str, db: Session = Depends(get_db)):
+    from scanner import ownership as own
+    d = db.query(Domain).filter(Domain.id == domain_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Domain không tồn tại")
+    if not d.ownership_token:
+        d.ownership_token = own.gen_token()
+        db.commit()
+    host = own.host_of(d.url)
+    method = None
+    if own.verify_dns_txt(host, d.ownership_token):
+        method = "dns_txt"
+    elif await own.verify_well_known(d.url, d.ownership_token):
+        method = "well_known"
+    if not method:
+        raise HTTPException(status_code=400, detail="Chưa tìm thấy bằng chứng (DNS TXT hoặc /.well-known/vulnguard.txt). "
+                                                    "Thêm token rồi thử lại.")
+    d.ownership_verified = True
+    d.ownership_method = method
+    d.ownership_verified_at = datetime.utcnow()
+    db.commit()
+    return {"verified": True, "method": method}
+
+
+def _require_verified(domain):
+    """P0.4: chặn quét/crawl nếu domain chưa xác minh sở hữu."""
+    if not getattr(domain, "ownership_verified", False):
+        raise HTTPException(status_code=403, detail="Domain chưa xác minh quyền sở hữu. "
+                            "Vào mục Xác minh (DNS TXT / .well-known) trước khi crawl/quét.")
+
+
 @router.post("/{domain_id}/crawls", response_model=CrawlOut, status_code=202)
 async def trigger_crawl(
     domain_id: str,
@@ -254,6 +311,7 @@ async def trigger_crawl(
     domain = db.query(Domain).filter(Domain.id == domain_id).first()
     if not domain:
         raise HTTPException(status_code=404, detail="Domain không tồn tại")
+    _require_verified(domain)   # P0.4
 
     async with _get_domain_lock(domain_id):
         crawls = db.query(DomainCrawl).filter(DomainCrawl.domain_id == domain_id).order_by(DomainCrawl.crawl_number).all()

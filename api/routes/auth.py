@@ -35,6 +35,9 @@ PUBLIC_API_PATHS = {
 }
 
 # (method or "*", path prefix) chỉ ADMIN được gọi
+# P0.2: endpoint quét CHỦ ĐỘNG — khoá khi AUTH_ENABLED=false (method != GET)
+ACTIVE_SCAN_PREFIXES = ("/api/pentest", "/api/webscans", "/api/domains")
+
 ADMIN_ONLY = [
     ("*", "/api/auth/users"),
     ("PUT", "/api/ai/config"),
@@ -57,6 +60,7 @@ class UserOut(BaseModel):
     name: str
     role: UserRole
     is_active: bool
+    must_change_password: bool = False
     last_login_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
@@ -168,6 +172,14 @@ async def auth_middleware(request: Request, call_next):
     request.state.user = None
 
     if not settings.auth_enabled:
+        # P0.2: auth TẮT → chặn các tính năng quét CHỦ ĐỘNG (có thể tấn công mục tiêu
+        # ngoài). Instance mở không auth không được phép bắn web scan/crawl/pentest.
+        if request.method not in ("GET", "HEAD", "OPTIONS") and any(
+                path.startswith(p) for p in ACTIVE_SCAN_PREFIXES):
+            return JSONResponse(
+                {"detail": "Tính năng quét chủ động (web scan/crawl/pentest) bị khoá khi "
+                           "AUTH_ENABLED=false. Hãy bật auth và đăng nhập để dùng."},
+                status_code=403)
         return await call_next(request)
 
     is_api = path.startswith("/api/")
@@ -237,6 +249,27 @@ def logout(response: Response):
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(current_user)):
     return user
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=200)
+
+
+@router.post("/change-password")
+def change_password(payload: ChangePasswordIn, response: Response,
+                    user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Người dùng tự đổi mật khẩu — xoá cờ must_change_password (P0.3)."""
+    if not verify_password(payload.current_password, user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=400, detail="Mật khẩu mới phải khác mật khẩu cũ")
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    user.token_version = (user.token_version or 0) + 1   # vô hiệu các phiên cũ
+    db.commit()
+    token = _set_session(response, user)   # cấp lại phiên cho chính người đổi
+    return {"ok": True, "token": token}
 
 
 # ── User management (ADMIN) ──

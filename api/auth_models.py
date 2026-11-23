@@ -23,6 +23,7 @@ class User(Base):
     password_hash = Column(String(300), nullable=True)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.ANALYST)
     is_active = Column(Boolean, nullable=False, default=True)
+    must_change_password = Column(Boolean, nullable=False, default=False)  # P0.3
     token_version = Column(Integer, nullable=False, default=0)
     last_login_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

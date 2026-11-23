@@ -35,8 +35,9 @@ class WebScanCreate(BaseModel):
     crawl_id: Optional[str] = None
     severities: List[str] = Field(default_factory=lambda: ["critical", "high", "medium", "low"])
     tags: List[str] = Field(default_factory=list)
+    exclude_tags: List[str] = Field(default_factory=list)   # P0.9: loại nhóm template
     fuzz: bool = False
-    rate_limit: int = Field(default=50, ge=1, le=500)
+    rate_limit: int = Field(default=10, ge=1, le=500)        # P0.9: mặc định 10 req/s (an toàn hơn)
     authorized: bool = False
 
 
@@ -123,6 +124,7 @@ async def _run_webscan(scan_id: str, domain_id: str, targets: List[str], params:
             targets=targets, severities=params["severities"], tags=params["tags"],
             fuzz=params["fuzz"], rate_limit=params["rate_limit"],
             timeout=settings.nuclei_timeout_minutes * 60, on_finding=_on_finding,
+            exclude_tags=params.get("exclude_tags"),
         )
         scan = db.query(WebScan).filter(WebScan.id == scan_id).first()
         scan.summary = {**counts, "total": sum(counts.values()), "timed_out": meta.get("timed_out", False)}
@@ -167,8 +169,18 @@ def trigger_webscan(domain_id: str, payload: WebScanCreate, background: Backgrou
     domain = db.query(Domain).filter(Domain.id == domain_id).first()
     if not domain:
         raise HTTPException(status_code=404, detail="Domain không tồn tại")
+    # P0.4: phải xác minh quyền sở hữu domain (DNS TXT / .well-known) trước khi quét
+    if not getattr(domain, "ownership_verified", False):
+        raise HTTPException(status_code=403, detail="Domain chưa xác minh quyền sở hữu — "
+                            "xác minh (DNS TXT / .well-known) trước khi web scan.")
     if not payload.authorized:
         raise HTTPException(status_code=400, detail="Cần xác nhận bạn có quyền quét domain này (authorized=true)")
+    # P0.9: fuzz là quét xâm nhập mạnh → chỉ ADMIN được bật (duyệt như Pentest Agent)
+    if payload.fuzz:
+        _u = getattr(request.state, "user", None)
+        from api.auth_models import UserRole as _R
+        if _u is not None and getattr(_u, "role", None) != _R.ADMIN:
+            raise HTTPException(status_code=403, detail="Chỉ ADMIN mới được bật fuzz (quét xâm nhập mạnh)")
     if not is_nuclei_available():
         raise HTTPException(status_code=400, detail="Nuclei chưa được cài trên máy chủ VulnGuard")
     if domain_id in _running:
@@ -201,6 +213,7 @@ def trigger_webscan(domain_id: str, payload: WebScanCreate, background: Backgrou
     _running.add(domain_id)
     background.add_task(_run_webscan, scan.id, domain_id, targets, {
         "severities": severities, "tags": scan.tags, "fuzz": payload.fuzz, "rate_limit": payload.rate_limit,
+        "exclude_tags": [t.strip()[:60] for t in payload.exclude_tags if t.strip()][:20],
     })
     return _scan_out(scan)
 
