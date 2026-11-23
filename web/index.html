@@ -482,6 +482,8 @@
   <div class="nav-section">Tài sản &amp; Rủi ro</div>
   <div class="nav-item" onclick="navigate('assets')" id="nav-assets"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h0M7 16.5h0"/></svg><span>Asset Inventory</span></div>
   <div class="nav-item" onclick="navigate('connectors')" id="nav-connectors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3M15 7V3M8 7h8v4a4 4 0 0 1-8 0z"/><path d="M12 15v3a3 3 0 0 0 3 3h1"/></svg><span>Kết nối (XDR/NAC)</span></div>
+  <div class="nav-item" onclick="navigate('compliance')" id="nav-compliance"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="m9 12 2 2 4-4"/></svg><span>Tuân thủ</span></div>
+  <div class="nav-item" onclick="navigate('scm')" id="nav-scm"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H14a2 2 0 0 1 2 2v1.5M8.5 18H14a2 2 0 0 0 2-2v-1.5"/></svg><span>Nguồn mã (SCM)</span></div>
   <div class="nav-section">Hệ thống</div>
   <div class="nav-item" onclick="navigate('settings')" id="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Settings</span></div>
   <div class="sidebar-footer">
@@ -772,6 +774,71 @@
     </div>
   </div>
 
+  <!-- COMPLIANCE PAGE -->
+  <div class="page" id="page-compliance">
+    <div class="flex-between mb-16">
+      <h1>🛡️ Tuân thủ (Compliance)</h1>
+      <div class="text-sm" id="compliance-meta" style="color:var(--text2);"></div>
+    </div>
+    <div class="notice" style="margin-bottom:16px;">
+      Ánh xạ lỗ hổng code (OPEN) toàn hệ thống sang các khung: <strong>OWASP Top 10 2021</strong>,
+      <strong>ISO/IEC 27001:2022</strong>, <strong>TCVN 11930:2017 / NĐ 85/2016</strong>, <strong>PCI-DSS v4.0</strong>.
+      Điểm = % nhóm kiểm soát ĐẠT trên số nhóm bị chạm tới. Đây là tham chiếu định hướng audit, không thay văn bản gốc.
+    </div>
+    <div id="compliance-body">
+      <div class="sk-list" aria-busy="true"><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
+    </div>
+  </div>
+
+  <!-- SCM PAGE -->
+  <div class="page" id="page-scm">
+    <div class="flex-between mb-16"><h1>🔗 Nguồn mã (SCM)</h1></div>
+    <div class="notice" style="margin-bottom:16px;">
+      Kết nối <strong>GitHub</strong> và <strong>GitLab</strong> (cloud hoặc self-managed/onprem) để quét repo,
+      đặt <strong>lịch quét định kỳ</strong> và <strong>gửi báo cáo tự động cho owner</strong>. Token được mã hoá, không hiển thị lại.
+    </div>
+
+    <!-- Connections -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:12px;"><h2 style="margin:0;">Kết nối</h2></div>
+      <div class="grid2" style="align-items:flex-end;">
+        <div class="form-group" style="margin:0;"><label>Tên</label><input id="scm-name" placeholder="GitLab nội bộ"></div>
+        <div class="form-group" style="margin:0;"><label>Loại</label>
+          <select id="scm-provider"><option value="GITHUB">GitHub</option><option value="GITLAB">GitLab</option></select></div>
+        <div class="form-group" style="margin:0;"><label>Base URL (trống = cloud)</label><input id="scm-baseurl" class="text-mono" placeholder="https://gitlab.corp.vn"></div>
+        <div class="form-group" style="margin:0;"><label>Token (PAT)</label><input id="scm-token" type="password" autocomplete="new-password" class="text-mono" placeholder="ghp_... / glpat-..."></div>
+      </div>
+      <div class="mt-16"><button class="btn btn-primary btn-sm" onclick="scmAddConnection()">+ Thêm kết nối</button> <span id="scm-conn-msg" class="text-sm"></span></div>
+      <div id="scm-conn-list" class="mt-16"></div>
+    </div>
+
+    <!-- Repos -->
+    <div class="card">
+      <h2 style="margin:0 0 12px;">Repository được quét</h2>
+      <div id="scm-repo-list"><div class="text-sm" style="color:var(--text2);">Chưa có repo nào.</div></div>
+    </div>
+
+    <!-- SMTP -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:6px;"><h2 style="margin:0;">✉️ SMTP (gửi báo cáo)</h2><span id="smtp-badge" class="text-sm" style="color:var(--text2);"></span></div>
+      <div class="notice" style="margin-bottom:12px;">Cấu hình SMTP để gửi báo cáo PDF tự động cho owner sau mỗi lần quét theo lịch. Mật khẩu được mã hoá.</div>
+      <div class="grid2">
+        <div class="form-group"><label>SMTP host</label><input id="smtp-host" class="text-mono" placeholder="smtp.gmail.com"></div>
+        <div class="form-group"><label>Port</label><input id="smtp-port" type="number" placeholder="587"></div>
+        <div class="form-group"><label>Username</label><input id="smtp-user" class="text-mono" placeholder="bot@corp.vn"></div>
+        <div class="form-group"><label>Password</label><input id="smtp-pass" type="password" autocomplete="new-password" class="text-mono"><div class="field-hint"><span id="smtp-pass-hint"></span></div></div>
+        <div class="form-group"><label>From</label><input id="smtp-from" class="text-mono" placeholder="VulnGuard <bot@corp.vn>"></div>
+        <div class="form-group"><label><input type="checkbox" id="smtp-tls" style="width:auto;"> Dùng STARTTLS (587)</label></div>
+      </div>
+      <div class="flex" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="saveSmtp()">💾 Lưu</button>
+        <input id="smtp-test-to" placeholder="email nhận thử" style="max-width:220px;">
+        <button class="btn btn-ghost btn-sm" onclick="testSmtp()">✉️ Gửi thử</button>
+        <span id="smtp-msg" class="text-sm"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- SETTINGS PAGE -->
   <!-- CO-WORK PAGE -->
   <div class="page" id="page-coworker">
@@ -896,6 +963,7 @@
       <div class="tab active" id="st-tab-ollama" onclick="switchTab(this,'st-ollama')">🤖 Ollama &amp; Model</div>
       <div class="tab" id="st-tab-scanners" onclick="switchTab(this,'st-scanners')">🛠️ Scanner Tools</div>
       <div class="tab" id="st-tab-ai" onclick="switchTab(this,'st-ai');loadAIConfig()">☁️ AI Provider</div>
+      <div class="tab" id="st-tab-report" onclick="switchTab(this,'st-report');loadReportBranding()">📄 Báo cáo</div>
       <div class="tab" id="st-tab-users" onclick="switchTab(this,'st-users');loadUsers()" style="display:none;">👥 Người dùng</div>
     </div>
     <div class="tab-content active" id="st-ollama">
@@ -904,6 +972,28 @@
     <div class="card">
       <h2>🤖 Ollama AI Status</h2>
       <div id="ollama-status-bar" class="notice" style="margin-bottom:0;">Đang kiểm tra...</div>
+    </div>
+
+    <!-- Ollama endpoint -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:6px;">
+        <h2 style="margin-bottom:0;">🔗 Endpoint Ollama</h2>
+        <span id="ollama-endpoint-badge" class="text-sm" style="color:var(--text2);"></span>
+      </div>
+      <div class="notice" style="margin-bottom:12px;">
+        Ollama <strong>không bắt buộc chạy Docker</strong>. Bạn có thể: (1) cài trực tiếp trên máy
+        (<span class="text-mono">ollama serve</span> → <span class="text-mono">http://localhost:11434</span>),
+        hoặc (2) trỏ tới một máy khác trong mạng qua IP (ví dụ <span class="text-mono">http://192.168.1.50:11434</span>).
+        Khi chạy VulnGuard trong Docker, dùng <span class="text-mono">http://host.docker.internal:11434</span> để gọi Ollama trên máy thật.
+      </div>
+      <div class="flex" style="gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:260px;">
+          <label>Địa chỉ Ollama (để trống = mặc định hệ thống)</label>
+          <input id="ollama-endpoint-input" class="text-mono" placeholder="http://localhost:11434">
+        </div>
+        <button class="btn btn-primary" onclick="saveOllamaEndpoint()">💾 Lưu &amp; kiểm tra</button>
+      </div>
+      <div id="ollama-endpoint-msg" class="text-sm" style="margin-top:8px;"></div>
     </div>
 
     <!-- Active Model -->
@@ -1007,6 +1097,36 @@
       </div>
     </div>
 
+    <!-- SonarQube server config -->
+    <div class="card">
+      <div class="flex-between" style="margin-bottom:6px;">
+        <h2 style="margin-bottom:0;">📡 SonarQube (SAST sâu)</h2>
+        <span id="sonar-badge" class="text-sm" style="color:var(--text2);"></span>
+      </div>
+      <div class="notice" style="margin-bottom:12px;">
+        Trỏ tới SonarQube server (Community) để chạy SAST theo data-flow, giảm false positive.
+        Dùng server sẵn có hoặc bật bundled: <span class="text-mono">docker compose --profile sonar up -d</span>.
+        Tạo token tại SonarQube → <em>My Account → Security</em>. Token được <strong>mã hoá</strong>, không hiển thị lại.
+      </div>
+      <div class="grid2">
+        <div class="form-group">
+          <label>SonarQube URL</label>
+          <input id="sonar-url" class="text-mono" placeholder="http://sonarqube:9000 hoặc https://sonar.corp.vn">
+        </div>
+        <div class="form-group">
+          <label>Token</label>
+          <input id="sonar-token" type="password" autocomplete="new-password" class="text-mono" placeholder="squ_...">
+          <div class="field-hint"><span id="sonar-token-hint">Chưa có token nào được lưu.</span>
+            <a href="#" id="sonar-clear-token" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearSonarToken();return false;">Xóa token</a></div>
+        </div>
+      </div>
+      <div class="flex" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="saveSonarConfig()">💾 Lưu</button>
+        <button class="btn btn-ghost" onclick="testSonarConfig()">🔌 Kiểm tra kết nối</button>
+      </div>
+      <div id="sonar-msg" class="text-sm" style="margin-top:8px;"></div>
+    </div>
+
     <!-- Severity Threshold Info -->
     <div class="card">
       <h2>⚙️ Severity Threshold (Block Approve)</h2>
@@ -1076,7 +1196,13 @@
             <div class="opt-desc">Gọi trực tiếp Claude API của Anthropic (API key, Workload Identity Federation hoặc credential trên máy chủ).</div></label>
           <label class="opt-card"><input type="radio" name="ai-provider" value="bedrock" onchange="onAIProviderChange()">
             <div class="opt-title">🟧 Amazon Bedrock</div>
-            <div class="opt-desc">Amazon Bedrock (dùng AWS IAM / IAM Identity Center — cùng hạ tầng AI mà Kiro dùng).</div></label>
+            <div class="opt-desc">Claude qua AWS Bedrock — AWS IAM / IAM Identity Center, profile do <span class="text-mono">kiro-cli</span> / <span class="text-mono">aws sso login</span> tạo, hoặc Bedrock API key (headless).</div></label>
+          <label class="opt-card"><input type="radio" name="ai-provider" value="openai" onchange="onAIProviderChange()">
+            <div class="opt-title">🟢 OpenAI (ChatGPT)</div>
+            <div class="opt-desc">OpenAI API — GPT-4o/GPT-4.1… (hoặc endpoint tương thích qua base URL).</div></label>
+          <label class="opt-card"><input type="radio" name="ai-provider" value="openrouter" onchange="onAIProviderChange()">
+            <div class="opt-title">🧩 OpenRouter</div>
+            <div class="opt-desc">Một API key, nhiều nhà cung cấp/model (Anthropic, OpenAI, Llama, Qwen…).</div></label>
         </div>
 
         <!-- Anthropic -->
@@ -1122,11 +1248,58 @@
         <!-- Bedrock -->
         <div class="settings-section" id="ai-bedrock-section" style="display:none;">
           <div class="separator"></div>
-          <div class="notice">Xác thực qua AWS SDK credential chain trên máy chủ (IAM role, <span class="text-mono">aws sso login</span> / IAM Identity Center, hoặc profile trong <span class="text-mono">~/.aws/config</span>).</div>
           <div class="grid2">
+            <div class="form-group">
+              <label>Phương thức đăng nhập AWS</label>
+              <select id="ai-br-auth" onchange="onBedrockAuthModeChange()">
+                <option value="aws_chain">Credential chain trên máy chủ (IAM role / biến môi trường / default profile)</option>
+                <option value="profile">AWS profile — tạo bằng kiro-cli login / aws sso login</option>
+                <option value="bedrock_api_key">Bedrock API key (headless / CI — AWS_BEARER_TOKEN_BEDROCK)</option>
+              </select>
+            </div>
             <div class="form-group"><label>Region</label><input id="ai-br-region" class="text-mono" placeholder="us-east-1"></div>
-            <div class="form-group"><label>AWS profile (tùy chọn)</label><input id="ai-br-profile" class="text-mono" placeholder="default"></div>
             <div class="form-group"><label>Model ID</label><input id="ai-br-model" class="text-mono" placeholder="anthropic.claude-opus-5-5"></div>
+          </div>
+          <div id="ai-br-profile-wrap" class="form-group" style="display:none;">
+            <label>AWS profile</label>
+            <input id="ai-br-profile" class="text-mono" placeholder="default">
+            <div class="field-hint">Đăng nhập trước trên máy chủ bằng <span class="text-mono">kiro-cli login</span> hoặc <span class="text-mono">aws sso login --profile &lt;tên&gt;</span>, rồi điền đúng tên profile ở đây.</div>
+          </div>
+          <div id="ai-br-key-wrap" class="form-group" style="display:none;">
+            <label>Bedrock API key</label>
+            <input id="ai-br-key" type="password" autocomplete="new-password" class="text-mono" placeholder="ABSK...">
+            <div class="field-hint"><span id="ai-br-key-hint">Chưa có key nào được lưu.</span>
+              <a href="#" id="ai-br-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('bedrock');return false;">Xóa key đã lưu</a></div>
+          </div>
+        </div>
+
+        <!-- OpenAI -->
+        <div class="settings-section" id="ai-openai-section" style="display:none;">
+          <div class="separator"></div>
+          <div class="grid2">
+            <div class="form-group"><label>Model</label><input id="ai-oai-model" class="text-mono" placeholder="gpt-4o"></div>
+            <div class="form-group"><label>Base URL (tùy chọn)</label><input id="ai-oai-base" class="text-mono" placeholder="https://api.openai.com/v1"></div>
+          </div>
+          <div class="form-group">
+            <label>API key</label>
+            <input id="ai-oai-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-...">
+            <div class="field-hint"><span id="ai-oai-key-hint">Chưa có API key nào được lưu.</span>
+              <a href="#" id="ai-oai-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('openai');return false;">Xóa key đã lưu</a></div>
+          </div>
+        </div>
+
+        <!-- OpenRouter -->
+        <div class="settings-section" id="ai-openrouter-section" style="display:none;">
+          <div class="separator"></div>
+          <div class="notice">OpenRouter định tuyến tới nhiều nhà cung cấp. Model dạng <span class="text-mono">nhà-cung-cấp/model</span>, ví dụ <span class="text-mono">anthropic/claude-3.5-sonnet</span>, <span class="text-mono">openai/gpt-4o</span>, <span class="text-mono">meta-llama/llama-3.1-70b-instruct</span>.</div>
+          <div class="grid2">
+            <div class="form-group"><label>Model</label><input id="ai-or-model" class="text-mono" placeholder="anthropic/claude-3.5-sonnet"></div>
+            <div class="form-group">
+              <label>API key</label>
+              <input id="ai-or-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-or-...">
+              <div class="field-hint"><span id="ai-or-key-hint">Chưa có API key nào được lưu.</span>
+                <a href="#" id="ai-or-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('openrouter');return false;">Xóa key đã lưu</a></div>
+            </div>
           </div>
         </div>
       </div>
@@ -1158,6 +1331,44 @@
       </div>
       <div id="ai-test-result" class="test-result"></div>
     </div><!-- /st-ai -->
+
+    <!-- ── BÁO CÁO (branding PDF) ──────────────────────────── -->
+    <div class="tab-content" id="st-report">
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:14px;">
+          <h2 style="margin-bottom:0;">📄 Thương hiệu báo cáo PDF</h2>
+          <button class="btn btn-primary btn-sm" onclick="saveReportBranding()">💾 Lưu</button>
+        </div>
+        <div class="notice" style="margin-bottom:14px;">
+          Tùy chỉnh logo, tên tổ chức và nội dung header/footer trên file PDF báo cáo scan.
+          Áp dụng ngay cho các lần export PDF tiếp theo.
+        </div>
+        <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;">
+          <div style="flex:1;min-width:280px;">
+            <label>Tên tổ chức (góc phải bìa)</label>
+            <input id="rb-org-name" placeholder="VulnGuard">
+            <label style="margin-top:12px;">Dòng phụ dưới tên tổ chức</label>
+            <input id="rb-org-tagline" placeholder="DevSecOps Security Platform">
+            <label style="margin-top:12px;">Tiêu đề báo cáo (xuống dòng bằng Enter)</label>
+            <textarea id="rb-report-title" rows="2" placeholder="BÁO CÁO QUÉT BẢO MẬT&#10;MÃ NGUỒN &amp; THÀNH PHẦN"></textarea>
+            <label style="margin-top:12px;">Chữ footer (trái)</label>
+            <input id="rb-footer-text" placeholder="VulnGuard · Báo cáo quét bảo mật">
+            <label style="margin-top:12px;">Nhãn bảo mật (footer)</label>
+            <input id="rb-confidential" placeholder="BẢO MẬT / CONFIDENTIAL">
+          </div>
+          <div style="width:220px;">
+            <label>Logo (PNG/JPG, ≤ 2MB)</label>
+            <div style="border:1px dashed var(--border);border-radius:10px;padding:16px;text-align:center;background:var(--bg2);">
+              <img id="rb-logo-preview" alt="logo" style="max-width:120px;max-height:60px;object-fit:contain;margin-bottom:10px;">
+              <div><input type="file" id="rb-logo-file" accept="image/png,image/jpeg" style="display:none;" onchange="uploadReportLogo()"></div>
+              <button class="btn btn-ghost btn-sm" onclick="document.getElementById('rb-logo-file').click()">⬆️ Tải logo</button>
+              <button class="btn btn-ghost btn-sm" onclick="resetReportLogo()" style="margin-top:6px;">↩️ Logo mặc định</button>
+              <div id="rb-logo-msg" class="text-sm" style="margin-top:8px;color:var(--text2);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /st-report -->
 
     <!-- ── USERS (ADMIN) ───────────────────────────────────── -->
     <div class="tab-content" id="st-users">
@@ -1197,7 +1408,7 @@
           <div><label>Tool</label><div id="modal-tool" class="text-mono"></div></div>
           <div><label>Scan Type</label><div id="modal-scan-type"></div></div>
           <div><label>Rule/CVE</label><div id="modal-rule" class="text-mono"></div></div>
-          <div><label>Status</label><div id="modal-status"></div></div>
+          <div><label>Trạng thái</label><div id="modal-status"></div><span id="modal-new-badge"></span></div>
           <div><label>File</label><div id="modal-file" class="text-mono text-sm"></div></div>
           <div><label>Line</label><div id="modal-line" class="text-mono"></div></div>
         </div>
@@ -1215,9 +1426,34 @@
           <label>Code snippet</label>
           <div id="modal-code" class="code-block"></div>
         </div>
-        <div class="mt-16 flex gap-8">
-          <button class="btn btn-ghost btn-sm" onclick="markFP()">Mark False Positive</button>
-          <button class="btn btn-ghost btn-sm" onclick="markOpen()">Reset to Open</button>
+        <!-- Data-flow (attack vector source→sink) -->
+        <div id="modal-dataflow-row" style="display:none;">
+          <label>🧭 Luồng dữ liệu (source → sink)</label>
+          <div id="modal-dataflow"></div>
+        </div>
+        <!-- Triage panel (Checkmarx-style) -->
+        <div class="separator" style="margin:18px 0 12px;"></div>
+        <div class="flex-between" style="margin-bottom:8px;">
+          <h3 style="margin:0;font-size:14px;">🏷️ Triage</h3>
+          <span class="text-sm" style="color:var(--text2);" id="modal-triage-meta"></span>
+        </div>
+        <div class="grid2" style="align-items:flex-end;">
+          <div class="form-group" style="margin:0;">
+            <label>Đổi trạng thái</label>
+            <select id="triage-state"></select>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <label>Ghi chú (bắt buộc với "Không khai thác được / Chấp nhận")</label>
+            <input id="triage-note" placeholder="Lý do / bằng chứng...">
+          </div>
+        </div>
+        <div class="mt-16 flex gap-8" style="align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="applyTriage()">💾 Cập nhật trạng thái</button>
+          <span id="triage-msg" class="text-sm"></span>
+        </div>
+        <div class="mt-16">
+          <label style="display:block;margin-bottom:6px;">Lịch sử triage (xuyên scan)</label>
+          <div id="triage-history" class="text-sm" style="color:var(--text2);">—</div>
         </div>
       </div>
       <div class="tab-content" id="tab-ai">
@@ -1727,7 +1963,7 @@ function navigate(page) {
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, compare: loadCompareProjects, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance, scm: loadScm };
   if (loaders[page]) loaders[page]();
 }
 
@@ -1768,10 +2004,20 @@ function sevBadge(s) {
   const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
   return `<span class="badge ${cls[s] || 'badge-info'}">${s}</span>`;
 }
+// Trạng thái triage kiểu Checkmarx
+const TRIAGE_STATES = [
+  { v: 'OPEN', lbl: 'Cần xác minh', cls: 'badge-open' },
+  { v: 'CONFIRMED', lbl: 'Đã xác nhận', cls: 'badge-high' },
+  { v: 'URGENT', lbl: 'Khẩn cấp', cls: 'badge-critical' },
+  { v: 'PROPOSED_NE', lbl: 'Đề xuất: Không khai thác được', cls: 'badge-medium' },
+  { v: 'NOT_EXPLOITABLE', lbl: 'Không khai thác được', cls: 'badge-fp' },
+  { v: 'ACCEPTED', lbl: 'Chấp nhận rủi ro', cls: 'badge-accepted' },
+  { v: 'FIXED', lbl: 'Đã sửa', cls: 'badge-fixed' },
+];
+const STATUS_LABEL = Object.fromEntries(TRIAGE_STATES.map(s => [s.v, s.lbl]).concat([['FALSE_POSITIVE', 'False Positive']]));
+const STATUS_CLS = Object.fromEntries(TRIAGE_STATES.map(s => [s.v, s.cls]).concat([['FALSE_POSITIVE', 'badge-fp']]));
 function statusBadge(s) {
-  const cls = { OPEN: 'badge-open', ACCEPTED: 'badge-accepted', FALSE_POSITIVE: 'badge-fp', FIXED: 'badge-fixed' };
-  const lbl = { OPEN: 'Open', ACCEPTED: 'Accepted', FALSE_POSITIVE: 'False Positive', FIXED: 'Fixed' };
-  return `<span class="badge ${cls[s] || ''}">${lbl[s] || s}</span>`;
+  return `<span class="badge ${STATUS_CLS[s] || ''}">${STATUS_LABEL[s] || s}</span>`;
 }
 function fmtDate(d) { return d ? new Date(d).toLocaleString('vi-VN') : '—'; }
 
@@ -2416,6 +2662,7 @@ async function loadEndpoints() {
 
 function exportCrawl(crawlId, format) {
   const url = `${API}/api/domains/crawls/${crawlId}/export?format=${format}`;
+  if (newTab) { window.open(url, '_blank'); return; }
   const a = document.createElement('a');
   a.href = url;
   a.style.display = 'none';
@@ -2445,9 +2692,11 @@ async function loadScans(projectId) {
       <div class="flex mb-16">
         <button class="btn btn-primary" onclick="openScanModal('${projectId}')">🚀 Scan mới</button>
       </div>
+      <div id="scan-history-block"></div>
       <div style="display:flex;flex-direction:column;gap:12px;">
         ${scans.map(sc => renderScanCard(sc, projectId)).join('')}
       </div>`;
+    renderScanHistory(projectId);
 
     // Auto-poll running scans (2s interval for fresh progress data)
     const running = scans.find(s => s.status === 'RUNNING' || s.status === 'PENDING');
@@ -2460,6 +2709,67 @@ async function loadScans(projectId) {
   } catch(e) {
     el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
   }
+}
+
+// ─── Scan History + Trend (GĐ2) ──────────────────────────────
+// Status palette (cố định 2 theme) — dùng hex vì --sev-* chỉ scope trong .vg-dash
+const SEV_BAR = { CRITICAL: '#d03b3b', HIGH: '#ec835a', MEDIUM: '#fab219', LOW: '#0ca30c', INFO: '#3987e5' };
+async function renderScanHistory(projectId) {
+  const box = document.getElementById('scan-history-block');
+  if (!box) return;
+  let data;
+  try { data = await api(`/api/projects/${projectId}/scan-trend`); } catch { return; }
+  const pts = data.points || [];
+  if (pts.length < 1) return;
+  const maxTotal = Math.max(1, ...pts.map(p => p.total));
+  const sevs = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+  const bars = pts.map(p => {
+    const segs = sevs.filter(s => p[s] > 0).map(s =>
+      `<span title="${DASH_SEV_LABEL[s]}: ${p[s]}" style="width:${(p[s]/maxTotal*320)}px;background:${SEV_BAR[s]};height:14px;display:inline-block;"></span>`).join('');
+    return `<div style="display:flex;align-items:center;gap:10px;margin:4px 0;">
+      <span class="text-mono text-sm" style="width:92px;color:var(--text2);">#${p.scan_number}</span>
+      <span style="display:inline-flex;border-radius:3px;overflow:hidden;background:var(--bg3);min-width:2px;">${segs}</span>
+      <span class="text-sm" style="color:var(--text2);">${p.total} (${p.active} mở)</span>
+    </div>`;
+  }).join('');
+  const opts = pts.map(p => `<option value="${p.scan_id}">#${p.scan_number} · ${fmtDate(p.started_at)}</option>`).join('');
+  const last2 = pts.length >= 2 ? [pts[pts.length-2].scan_id, pts[pts.length-1].scan_id] : [pts[0].scan_id, pts[0].scan_id];
+  box.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <h2 style="margin:0 0 10px;">📊 Lịch sử & xu hướng</h2>
+      <div style="margin-bottom:14px;">${bars}</div>
+      <div class="flex" style="gap:8px;align-items:flex-end;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:12px;">
+        <div class="form-group" style="margin:0;"><label>Scan cũ</label><select id="hist-old">${opts}</select></div>
+        <div class="form-group" style="margin:0;"><label>Scan mới</label><select id="hist-new">${opts}</select></div>
+        <button class="btn btn-primary btn-sm" onclick="runInlineCompare('${projectId}')">⇄ So sánh</button>
+      </div>
+      <div id="hist-compare" class="mt-16"></div>
+    </div>`;
+  document.getElementById('hist-old').value = last2[0];
+  document.getElementById('hist-new').value = last2[1];
+}
+async function runInlineCompare(projectId) {
+  const oldId = document.getElementById('hist-old').value;
+  const newId = document.getElementById('hist-new').value;
+  const el = document.getElementById('hist-compare');
+  if (oldId === newId) { el.innerHTML = '<div class="notice warn">Chọn 2 scan khác nhau.</div>'; return; }
+  el.innerHTML = '<div class="loading"><div class="spinner"></div>Đang so sánh...</div>';
+  try {
+    const r = await api(`/api/projects/${projectId}/compare?scan_old_id=${oldId}&scan_new_id=${newId}`);
+    const { diff, summary } = r;
+    const note = summary.settings_changed ? `<div class="notice warn" style="margin-bottom:12px;">⚠️ Scan settings đổi (${(summary.old_types||[]).join(',')||'—'} → ${(summary.new_types||[]).join(',')||'—'}) — có mục "Chưa đánh giá".</div>` : '';
+    el.innerHTML = `${note}
+      <div class="grid4 mb-16">
+        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 Mới</div></div>
+        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">🔁 Tái xuất hiện</div></div>
+        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Đã khắc phục</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--text2)">${summary.not_evaluated_count||0}</div><div class="stat-label">➖ Chưa đánh giá</div></div>
+      </div>
+      ${renderCompareSection('🆕 Mới (New)', diff.new, 'compare-new')}
+      ${renderCompareSection('🔁 Tái xuất hiện (Recurring)', diff.persisted, 'compare-persisted')}
+      ${renderCompareSection('✅ Đã khắc phục (Resolved)', diff.fixed, 'compare-fixed')}
+      ${renderCompareSection('➖ Chưa đánh giá (Not Evaluated)', diff.not_evaluated || [], '')}`;
+  } catch (e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`; }
 }
 
 function renderScanCard(sc, projectId) {
@@ -2595,11 +2905,21 @@ function renderVulnTable() {
         <button class="btn btn-ghost btn-sm" onclick="loadScans('${currentProjectId}')">← Về Scans</button>
         <span style="margin-left:12px;font-size:14px;">${filtered.length}/${allVulns.length} vulnerabilities</span>
       </div>
-      <div class="flex" style="gap:6px;">
+      <div class="flex" style="gap:6px;align-items:center;flex-wrap:wrap;">
+        <select id="export-diff" class="btn-sm" title="Phạm vi báo cáo" style="height:30px;">
+          <option value="all">Phạm vi: Tất cả</option>
+          <option value="new">Chỉ lỗ hổng Mới</option>
+          <option value="recurrent">Chỉ Tái xuất hiện</option>
+        </select>
+        <label class="text-sm" title="Chỉ gồm lỗ hổng còn mở (loại Không khai thác được / Đã sửa)"><input type="checkbox" id="export-scope" style="width:auto;"> chỉ còn mở</label>
         <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo AI dạng file .html">⬇ Tải .html</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','pdf')" title="Xuất báo cáo PDF (tiếng Việt)">⬇ PDF</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
-        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export toàn bộ kết quả scan ra CSV (mở được bằng Excel)">⬇ CSV</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export CSV (mở bằng Excel)">⬇ CSV</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','md')" title="Xuất Markdown — gọn cho AI đọc / commit repo">⬇ MD</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','sarif')" title="SARIF 2.1.0 — cắm vào GitHub Code Scanning / GitLab / Azure DevOps">⬇ SARIF</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','ai',true)" title="JSON tối giản cho AI/agent đọc (mở tab mới)">🤖 AI</button>
       </div>
     </div>
     <div class="filter-bar">
@@ -2612,10 +2932,9 @@ function renderVulnTable() {
         <option value="LOW" ${sevFilter==='LOW'?'selected':''}>Low</option>
       </select>
       <select id="filter-status" onchange="renderVulnTable()">
-        <option value="">All Status</option>
-        <option value="OPEN" ${statusFilter==='OPEN'?'selected':''}>Open</option>
-        <option value="ACCEPTED" ${statusFilter==='ACCEPTED'?'selected':''}>Accepted</option>
-        <option value="FALSE_POSITIVE" ${statusFilter==='FALSE_POSITIVE'?'selected':''}>False Positive</option>
+        <option value="">Tất cả trạng thái</option>
+        ${TRIAGE_STATES.map(s => `<option value="${s.v}" ${statusFilter===s.v?'selected':''}>${s.lbl}</option>`).join('')}
+        <option value="FALSE_POSITIVE" ${statusFilter==='FALSE_POSITIVE'?'selected':''}>False Positive (cũ)</option>
       </select>
       <select id="filter-type" onchange="renderVulnTable()">
         <option value="">All Types</option>
@@ -2662,20 +2981,26 @@ function downloadAIReport(scanId) {
   a.click();
 }
 
-function exportScan(scanId, format) {
+function exportScan(scanId, format, newTab) {
   // Lấy giá trị filter hiện tại để export đúng những gì đang hiển thị
   const sev    = document.getElementById('filter-sev')?.value    || '';
   const status = document.getElementById('filter-status')?.value || '';
   const type   = document.getElementById('filter-type')?.value   || '';
 
+  const diff  = document.getElementById('export-diff')?.value  || 'all';
+  const scope = document.getElementById('export-scope')?.checked ? 'active' : 'all';
+
   const params = new URLSearchParams({ format });
   if (sev)    params.append('severity',  sev);
   if (status) params.append('status',    status);
   if (type)   params.append('scan_type', type);
+  if (diff !== 'all')  params.append('diff', diff);
+  if (scope === 'active') params.append('scope', 'active');
 
   const url = `${API}/api/projects/scans/${scanId}/export?${params.toString()}`;
 
   // Trigger download bằng cách tạo thẻ <a> ẩn
+  if (newTab) { window.open(url, '_blank'); return; }
   const a = document.createElement('a');
   a.href = url;
   a.style.display = 'none';
@@ -2696,6 +3021,8 @@ function openVulnDetail(vulnId) {
   document.getElementById('modal-scan-type').innerHTML = `<span class="tag">${v.scan_type}</span>`;
   document.getElementById('modal-rule').textContent = v.rule_id || '—';
   document.getElementById('modal-status').innerHTML = statusBadge(v.status);
+  renderTriagePanel(v);
+  loadDataflow(v.id);
   document.getElementById('modal-file').textContent = v.file_path || '—';
   document.getElementById('modal-line').textContent = v.line_start ? `${v.line_start}${v.line_end && v.line_end !== v.line_start ? '–'+v.line_end : ''}` : '—';
   document.getElementById('modal-desc').textContent = v.description || '—';
@@ -2763,11 +3090,75 @@ function switchTab(el, tabId) {
   document.getElementById(tabId)?.classList.add('active');
 }
 
-async function markFP() {
-  try { await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status: 'FALSE_POSITIVE' }}); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+function isNewFinding(v) {
+  return !v.first_seen_scan_id || v.first_seen_scan_id === v.scan_id;
 }
-async function markOpen() {
-  try { await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status: 'OPEN' }}); await refreshCurrentVuln(); } catch(e) { alert(e.message); }
+async function loadDataflow(vulnId) {
+  const row = document.getElementById('modal-dataflow-row');
+  const el = document.getElementById('modal-dataflow');
+  row.style.display = 'none';
+  try {
+    const r = await api(`/api/vulns/${vulnId}/dataflow`);
+    if (!r.available || !r.nodes.length) return;
+    const ICON = { source: '🟢', propagation: '🔵', sink: '🔴' };
+    const LBL = { source: 'Nguồn (source)', propagation: 'Lan truyền', sink: 'Đích (sink)' };
+    el.innerHTML = r.nodes.map((n, i) => `
+      <div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;">
+        <div style="display:flex;flex-direction:column;align-items:center;">
+          <span>${ICON[n.label] || '⚪'}</span>
+          ${i < r.nodes.length - 1 ? '<span style="flex:1;width:2px;background:var(--border);min-height:18px;margin:2px 0;"></span>' : ''}
+        </div>
+        <div style="flex:1;">
+          <div class="text-sm"><strong>${LBL[n.label] || n.label}</strong>
+            ${n.file ? `<span class="text-mono" style="color:var(--text2);"> · ${escHtml(n.file)}${n.line ? ':' + n.line : ''}</span>` : ''}</div>
+          ${n.content ? `<div class="code-block" style="margin-top:3px;padding:6px 8px;font-size:12px;">${escHtml(n.content)}</div>` : ''}
+        </div>
+      </div>`).join('');
+    row.style.display = 'block';
+  } catch (e) { /* không có dataflow → ẩn */ }
+}
+function renderTriagePanel(v) {
+  // badge Mới / Tái xuất hiện
+  const nb = document.getElementById('modal-new-badge');
+  nb.innerHTML = isNewFinding(v)
+    ? ' <span class="badge badge-high">Mới</span>'
+    : ' <span class="badge badge-info">Tái xuất hiện</span>';
+  // select trạng thái
+  const sel = document.getElementById('triage-state');
+  sel.innerHTML = TRIAGE_STATES.map(s => `<option value="${s.v}"${s.v === v.status ? ' selected' : ''}>${s.lbl}</option>`).join('');
+  document.getElementById('triage-note').value = '';
+  // meta người triage
+  const meta = document.getElementById('modal-triage-meta');
+  meta.textContent = v.triage_by ? `Triage gần nhất: ${v.triage_by} · ${fmtDate(v.triage_at)}` : 'Chưa triage';
+  document.getElementById('triage-msg').textContent = '';
+  loadTriageHistory(v.id);
+}
+async function loadTriageHistory(vulnId) {
+  const el = document.getElementById('triage-history');
+  el.textContent = 'Đang tải...';
+  try {
+    const rows = await api(`/api/vulns/${vulnId}/triage-history`);
+    if (!rows.length) { el.textContent = 'Chưa có thay đổi nào.'; return; }
+    el.innerHTML = rows.map(r => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);">
+        ${statusBadge(r.from_status || '—')} → ${statusBadge(r.to_status)}
+        <span style="color:var(--text2);">· ${escHtml(r.actor || 'hệ thống')} · ${fmtDate(r.created_at)}</span>
+        ${r.note ? `<div style="margin-top:2px;">📝 ${escHtml(r.note)}</div>` : ''}
+      </div>`).join('');
+  } catch (e) { el.textContent = 'Không tải được lịch sử: ' + e.message; }
+}
+async function applyTriage() {
+  const status = document.getElementById('triage-state').value;
+  const note = document.getElementById('triage-note').value.trim();
+  const msg = document.getElementById('triage-msg');
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try {
+    await api(`/api/vulns/${currentVulnId}/status`, { method: 'PATCH', body: { status, note } });
+    msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã cập nhật';
+    await refreshCurrentVuln();
+  } catch (e) {
+    msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message;
+  }
 }
 async function refreshCurrentVuln() {
   const idx = allVulns.findIndex(v => v.id === currentVulnId);
@@ -3145,19 +3536,26 @@ async function runCompare() {
     const r = await api(`/api/projects/${projectId}/compare?scan_old_id=${scanOld}&scan_new_id=${scanNew}`);
     const { diff, summary } = r;
 
+    const settingsNote = summary.settings_changed ? `
+      <div class="notice warn" style="margin-bottom:16px;">
+        ⚠️ Scan settings đã thay đổi giữa 2 lần quét (cũ: ${(summary.old_types||[]).join(', ')||'—'} → mới: ${(summary.new_types||[]).join(', ')||'—'}).
+        Các finding thuộc loại quét không chạy lại được xếp vào <strong>Chưa đánh giá</strong> để không báo nhầm "đã khắc phục".
+      </div>` : '';
     el.innerHTML = `
+      ${settingsNote}
       <div class="${summary.approve_status === 'BLOCKED' ? 'approve-blocked' : 'approve-ok'}" style="margin-bottom:16px;font-weight:600;">
         ${summary.approve_message}
       </div>
       <div class="grid4 mb-16 vg-stagger">
-        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 New</div></div>
-        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Fixed</div></div>
-        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">⏳ Persisted</div></div>
-        <div class="stat-card"><div class="stat-num c">${summary.blocked_count}</div><div class="stat-label">⛔ Blocked</div></div>
+        <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 Mới</div></div>
+        <div class="stat-card"><div class="stat-num compare-persisted">${summary.persisted_count}</div><div class="stat-label">🔁 Tái xuất hiện</div></div>
+        <div class="stat-card"><div class="stat-num compare-fixed">${summary.fixed_count}</div><div class="stat-label">✅ Đã khắc phục</div></div>
+        <div class="stat-card"><div class="stat-num" style="color:var(--text2)">${summary.not_evaluated_count||0}</div><div class="stat-label">➖ Chưa đánh giá</div></div>
       </div>
-      ${renderCompareSection('🆕 New Vulnerabilities', diff.new, 'compare-new')}
-      ${renderCompareSection('✅ Fixed Vulnerabilities', diff.fixed, 'compare-fixed')}
-      ${renderCompareSection('⏳ Persisted (chưa fix)', diff.persisted, 'compare-persisted')}
+      ${renderCompareSection('🆕 Mới (New)', diff.new, 'compare-new')}
+      ${renderCompareSection('🔁 Tái xuất hiện (Recurring)', diff.persisted, 'compare-persisted')}
+      ${renderCompareSection('✅ Đã khắc phục (Resolved)', diff.fixed, 'compare-fixed')}
+      ${renderCompareSection('➖ Chưa đánh giá (Not Evaluated)', diff.not_evaluated || [], '')}
     `;
   } catch(e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`; }
 }
@@ -3180,9 +3578,74 @@ function renderCompareSection(title, vulns, cls) {
 let pullAbortController = null;
 
 async function loadSettings() {
-  await Promise.all([loadOllamaStatus(), loadInstalledModels(), loadScannerHealth()]);
+  await Promise.all([loadOllamaStatus(), loadOllamaEndpoint(), loadInstalledModels(), loadScannerHealth(), loadSonarConfig()]);
   document.getElementById('threshold-info').textContent =
     '🔒 Severity threshold: HIGH — Vuln CRITICAL hoặc HIGH còn OPEN sẽ block approve. Chỉnh BLOCK_SEVERITY_THRESHOLD trong .env để thay đổi.';
+}
+
+async function loadSonarConfig() {
+  try {
+    const r = await api('/api/settings/sonarqube');
+    document.getElementById('sonar-url').value = r.url || '';
+    document.getElementById('sonar-token').value = '';
+    document.getElementById('sonar-token-hint').textContent = r.token_set
+      ? `Đã lưu: ${r.token_hint || '••••'} — để trống để giữ nguyên.` : 'Chưa có token nào được lưu.';
+    document.getElementById('sonar-clear-token').style.display = (r.token_set && canAdmin()) ? 'inline' : 'none';
+    document.getElementById('sonar-badge').textContent = r.url ? (r.custom ? 'đã cấu hình' : 'từ .env') : 'chưa cấu hình';
+  } catch (e) { /* bỏ qua */ }
+}
+async function saveSonarConfig() {
+  const msg = document.getElementById('sonar-msg');
+  const body = { url: document.getElementById('sonar-url').value.trim() };
+  const tok = document.getElementById('sonar-token').value.trim();
+  if (tok) body.token = tok;
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try {
+    await api('/api/settings/sonarqube', { method: 'PUT', body });
+    msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã lưu cấu hình SonarQube';
+    loadSonarConfig(); loadScannerHealth();
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function clearSonarToken() {
+  if (!confirm('Xóa token SonarQube đã lưu?')) return;
+  try { await api('/api/settings/sonarqube', { method: 'PUT', body: { clear_token: true } }); loadSonarConfig(); }
+  catch (e) { toast('Lỗi: ' + e.message, 'error'); }
+}
+async function testSonarConfig() {
+  const msg = document.getElementById('sonar-msg');
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra...';
+  try {
+    const r = await api('/api/settings/sonarqube/test', { method: 'POST' });
+    msg.style.color = r.ok ? 'var(--low)' : 'var(--sev-med)';
+    msg.innerHTML = `${r.ok ? '✅' : '⚠️'} Server: <strong>${escHtml(r.status || '—')}</strong>`
+      + ` · Token: ${r.token_valid == null ? '(chưa nhập)' : (r.token_valid ? '✅ hợp lệ' : '❌ không hợp lệ')}`
+      + ` · sonar-scanner: ${r.has_scanner ? '✅ đã cài' : '❌ chưa cài'}`;
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+
+async function loadOllamaEndpoint() {
+  try {
+    const r = await api('/api/ollama/endpoint');
+    document.getElementById('ollama-endpoint-input').value = r.custom ? r.url : '';
+    document.getElementById('ollama-endpoint-input').placeholder = r.default || 'http://localhost:11434';
+    document.getElementById('ollama-endpoint-badge').textContent =
+      r.custom ? `tùy chỉnh: ${r.url}` : `mặc định: ${r.url}`;
+  } catch (e) { /* bỏ qua */ }
+}
+
+async function saveOllamaEndpoint() {
+  const msg = document.getElementById('ollama-endpoint-msg');
+  const url = document.getElementById('ollama-endpoint-input').value.trim();
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra kết nối...';
+  try {
+    const r = await api('/api/ollama/endpoint', { method: 'PUT', body: { url } });
+    msg.style.color = 'var(--low)';
+    msg.textContent = `✅ Đã lưu — ${r.url} (${(r.models || []).length} model khả dụng)`;
+    loadOllamaEndpoint(); loadOllamaStatus(); loadInstalledModels();
+  } catch (e) {
+    msg.style.color = 'var(--critical)';
+    msg.textContent = '❌ ' + e.message;
+  }
 }
 
 async function loadOllamaStatus() {
@@ -3193,10 +3656,11 @@ async function loadOllamaStatus() {
     bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
   } catch(e) {
     bar.style.background = 'color-mix(in srgb, var(--critical) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--critical) 30%, transparent)'; bar.style.color = 'var(--critical)';
-    bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Có 2 cách xử lý:<br>
+    bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Cách xử lý:<br>
       <span style="font-size:12px;">
-        1. Chạy Ollama service: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">docker compose up -d ollama</code><br>
-        2. Không dùng AI analysis: bỏ tick "Run AI Analysis" khi trigger scan.
+        1. Cài &amp; chạy Ollama trực tiếp trên máy: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">ollama serve</code> (không cần Docker)<br>
+        2. Hoặc trỏ tới Ollama trên máy khác qua IP ở mục "🔗 Endpoint Ollama" bên dưới.<br>
+        3. Hoặc không dùng AI analysis: bỏ tick "Run AI Analysis" khi trigger scan.
       </span>`;
   }
 }
@@ -3315,6 +3779,61 @@ async function saveScannerConfig() {
     btn.disabled = false;
     alert('Lỗi khi lưu: ' + e.message);
   }
+}
+
+// ─── Report branding (logo + header/footer PDF) ──────────────
+async function loadReportBranding() {
+  try {
+    const b = await api('/api/settings/report-branding');
+    document.getElementById('rb-org-name').value = b.org_name || '';
+    document.getElementById('rb-org-tagline').value = b.org_tagline || '';
+    document.getElementById('rb-report-title').value = b.report_title || '';
+    document.getElementById('rb-footer-text').value = b.footer_text || '';
+    document.getElementById('rb-confidential').value = b.confidential_label || '';
+    const img = document.getElementById('rb-logo-preview');
+    // thêm query ?t để tránh cache sau khi đổi logo
+    img.src = '/api/settings/report-branding/logo-image?t=' + Date.now();
+    img.onerror = () => { img.style.display = 'none'; };
+    img.style.display = '';
+    document.getElementById('rb-logo-msg').textContent = b.has_custom_logo ? 'Logo tùy chỉnh' : 'Logo mặc định VulnGuard';
+  } catch (e) { /* chưa đăng nhập / lỗi */ }
+}
+
+async function saveReportBranding() {
+  try {
+    await api('/api/settings/report-branding', { method: 'PUT', body: {
+      org_name: document.getElementById('rb-org-name').value,
+      org_tagline: document.getElementById('rb-org-tagline').value,
+      report_title: document.getElementById('rb-report-title').value,
+      footer_text: document.getElementById('rb-footer-text').value,
+      confidential_label: document.getElementById('rb-confidential').value,
+    }});
+    (typeof toast === 'function') ? toast('✅ Đã lưu thương hiệu báo cáo') : alert('Đã lưu thương hiệu báo cáo');
+  } catch (e) { alert('Lỗi khi lưu: ' + e.message); }
+}
+
+async function uploadReportLogo() {
+  const f = document.getElementById('rb-logo-file').files[0];
+  if (!f) return;
+  const msg = document.getElementById('rb-logo-msg');
+  msg.textContent = 'Đang tải...';
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch(API + '/api/settings/report-branding/logo', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(await r.text());
+    msg.textContent = '✅ Đã cập nhật logo';
+    const img = document.getElementById('rb-logo-preview');
+    img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
+  } catch (e) { msg.textContent = '❌ ' + e.message; }
+}
+
+async function resetReportLogo() {
+  try {
+    await api('/api/settings/report-branding/logo', { method: 'DELETE' });
+    document.getElementById('rb-logo-msg').textContent = 'Đã về logo mặc định';
+    const img = document.getElementById('rb-logo-preview');
+    img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
+  } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
 async function loadInstalledModels() {
@@ -4285,7 +4804,9 @@ const AI_DEFAULTS = {
   provider: 'anthropic', mode: 'local_only',
   anthropic: { auth_mode: 'api_key', model: 'claude-opus-5-5', api_key_set: false, api_key_hint: '',
     wif: { federation_rule_id: '', organization_id: '', identity_token_file: '', workspace_id: '', service_account_id: '' } },
-  bedrock: { region: 'us-east-1', aws_profile: '', model: 'anthropic.claude-opus-5-5' },
+  bedrock: { auth_mode: 'aws_chain', region: 'us-east-1', aws_profile: '', model: 'anthropic.claude-opus-5-5', api_key_set: false, api_key_hint: '' },
+  openai: { model: 'gpt-4o', base_url: '', api_key_set: false, api_key_hint: '' },
+  openrouter: { model: 'anthropic/claude-3.5-sonnet', api_key_set: false, api_key_hint: '' },
   hybrid: { escalate_min_severity: 'MEDIUM', fp_band_low: 15, fp_band_high: 85 },
   privacy: { send_code_context: true, context_lines: 15, redact_secrets: true },
 };
@@ -4312,20 +4833,32 @@ async function loadAIConfig() {
   aiConfig = mergeDeep(AI_DEFAULTS, cfg);
   fillAIForm(aiConfig);
 }
+function keyHint(id, section, clearId) {
+  document.getElementById(id).textContent = section.api_key_set
+    ? `Đã lưu: ${section.api_key_hint || '••••'} — để trống để giữ nguyên, nhập key mới để thay.`
+    : 'Chưa có API key nào được lưu.';
+  if (clearId) document.getElementById(clearId).style.display = (section.api_key_set && canAdmin()) ? 'inline' : 'none';
+}
 function fillAIForm(c) {
   setRadio('ai-mode', c.mode);
-  setRadio('ai-provider', c.provider === 'bedrock' ? 'bedrock' : 'anthropic');
+  setRadio('ai-provider', c.provider || 'anthropic');
   setVal('ai-anth-auth', c.anthropic.auth_mode);
   setVal('ai-anth-model', c.anthropic.model);
   setVal('ai-anth-key', '');
-  document.getElementById('ai-anth-key-hint').textContent = c.anthropic.api_key_set
-    ? `Đã lưu: ${c.anthropic.api_key_hint || '••••'} — để trống để giữ nguyên, nhập key mới để thay.`
-    : 'Chưa có API key nào được lưu.';
-  document.getElementById('ai-clear-key').style.display = (c.anthropic.api_key_set && canAdmin()) ? 'inline' : 'none';
+  keyHint('ai-anth-key-hint', c.anthropic, 'ai-clear-key');
   const w = c.anthropic.wif || {};
   setVal('ai-wif-rule', w.federation_rule_id); setVal('ai-wif-org', w.organization_id);
   setVal('ai-wif-token', w.identity_token_file); setVal('ai-wif-ws', w.workspace_id); setVal('ai-wif-sa', w.service_account_id);
+  // Bedrock
+  setVal('ai-br-auth', c.bedrock.auth_mode || 'aws_chain');
   setVal('ai-br-region', c.bedrock.region); setVal('ai-br-profile', c.bedrock.aws_profile); setVal('ai-br-model', c.bedrock.model);
+  setVal('ai-br-key', ''); keyHint('ai-br-key-hint', c.bedrock, 'ai-br-clear-key');
+  // OpenAI
+  setVal('ai-oai-model', c.openai.model); setVal('ai-oai-base', c.openai.base_url); setVal('ai-oai-key', '');
+  keyHint('ai-oai-key-hint', c.openai, 'ai-oai-clear-key');
+  // OpenRouter
+  setVal('ai-or-model', c.openrouter.model); setVal('ai-or-key', '');
+  keyHint('ai-or-key-hint', c.openrouter, 'ai-or-clear-key');
   setVal('ai-escalate-sev', c.hybrid.escalate_min_severity);
   setVal('ai-fp-low', c.hybrid.fp_band_low); setVal('ai-fp-high', c.hybrid.fp_band_high);
   document.getElementById('ai-priv-send').checked = !!c.privacy.send_code_context;
@@ -4336,7 +4869,7 @@ function fillAIForm(c) {
   document.querySelectorAll('#st-ai input, #st-ai select').forEach(i => { i.disabled = !editable; });
   document.getElementById('ai-save-btn').style.display = editable ? '' : 'none';
   document.getElementById('ai-config-readonly').style.display = editable ? 'none' : 'block';
-  onAIModeChange(); onAIAuthModeChange(); renderFpBand();
+  onAIModeChange(); onAIAuthModeChange(); onBedrockAuthModeChange(); renderFpBand();
 }
 function onAIModeChange() {
   const mode = radioVal('ai-mode') || 'local_only';
@@ -4353,6 +4886,8 @@ function onAIProviderChange() {
   const p = radioVal('ai-provider') || 'anthropic';
   document.getElementById('ai-anthropic-section').style.display = p === 'anthropic' ? 'block' : 'none';
   document.getElementById('ai-bedrock-section').style.display = p === 'bedrock' ? 'block' : 'none';
+  document.getElementById('ai-openai-section').style.display = p === 'openai' ? 'block' : 'none';
+  document.getElementById('ai-openrouter-section').style.display = p === 'openrouter' ? 'block' : 'none';
   renderPrivacyWarning();
 }
 function onAIAuthModeChange() {
@@ -4360,6 +4895,11 @@ function onAIAuthModeChange() {
   document.getElementById('ai-auth-apikey').style.display = m === 'api_key' ? 'block' : 'none';
   document.getElementById('ai-auth-wif').style.display = m === 'wif' ? 'block' : 'none';
   document.getElementById('ai-auth-env').style.display = m === 'environment' ? 'block' : 'none';
+}
+function onBedrockAuthModeChange() {
+  const m = val('ai-br-auth');
+  document.getElementById('ai-br-profile-wrap').style.display = m === 'profile' ? 'block' : 'none';
+  document.getElementById('ai-br-key-wrap').style.display = m === 'bedrock_api_key' ? 'block' : 'none';
 }
 function renderFpBand() {
   let lo = Math.max(0, Math.min(100, parseInt(val('ai-fp-low'), 10) || 0));
@@ -4374,7 +4914,8 @@ function renderPrivacyWarning() {
   const mode = radioVal('ai-mode') || 'local_only';
   const send = document.getElementById('ai-priv-send').checked;
   document.getElementById('ai-privacy-warning').style.display = (send && mode !== 'local_only') ? 'block' : 'none';
-  document.getElementById('ai-privacy-provider').textContent = radioVal('ai-provider') === 'bedrock' ? 'Amazon Bedrock' : 'Anthropic';
+  const pl = { anthropic: 'Anthropic', bedrock: 'Amazon Bedrock', openai: 'OpenAI', openrouter: 'OpenRouter' };
+  document.getElementById('ai-privacy-provider').textContent = pl[radioVal('ai-provider')] || 'cloud provider';
 }
 function buildAIPayload() {
   const mode = radioVal('ai-mode') || 'local_only';
@@ -4393,7 +4934,9 @@ function buildAIPayload() {
         service_account_id: val('ai-wif-sa').trim(),
       },
     },
-    bedrock: { region: val('ai-br-region').trim(), aws_profile: val('ai-br-profile').trim(), model: val('ai-br-model').trim() },
+    bedrock: { auth_mode: val('ai-br-auth'), region: val('ai-br-region').trim(), aws_profile: val('ai-br-profile').trim(), model: val('ai-br-model').trim() },
+    openai: { model: val('ai-oai-model').trim() || AI_DEFAULTS.openai.model, base_url: val('ai-oai-base').trim() },
+    openrouter: { model: val('ai-or-model').trim() || AI_DEFAULTS.openrouter.model },
     hybrid: { escalate_min_severity: val('ai-escalate-sev'), fp_band_low: Math.max(0, lo), fp_band_high: Math.min(100, hi) },
     privacy: {
       send_code_context: document.getElementById('ai-priv-send').checked,
@@ -4401,17 +4944,26 @@ function buildAIPayload() {
       redact_secrets: document.getElementById('ai-priv-redact').checked,
     },
   };
-  const key = val('ai-anth-key').trim();
-  if (key) payload.anthropic.api_key = key;   // write-only: chỉ gửi khi người dùng nhập key mới
+  // write-only keys: chỉ gửi khi người dùng nhập key mới
+  const ak = val('ai-anth-key').trim(); if (ak) payload.anthropic.api_key = ak;
+  const bk = val('ai-br-key').trim(); if (bk) payload.bedrock.api_key = bk;
+  const ok = val('ai-oai-key').trim(); if (ok) payload.openai.api_key = ok;
+  const rk = val('ai-or-key').trim(); if (rk) payload.openrouter.api_key = rk;
   return payload;
 }
 async function saveAIConfig() {
   const btn = document.getElementById('ai-save-btn');
   const payload = buildAIPayload();
-  if (payload.mode !== 'local_only' && payload.provider === 'anthropic' && payload.anthropic.auth_mode === 'api_key'
-      && !payload.anthropic.api_key && !(aiConfig && aiConfig.anthropic.api_key_set)) {
-    toast('Chưa có API key Anthropic — nhập API key hoặc chọn phương thức xác thực khác.', 'warn');
-    return;
+  // Kiểm tra credential cho provider đang chọn (chỉ khi dùng cloud)
+  if (payload.mode !== 'local_only') {
+    const p = payload.provider, saved = aiConfig || {};
+    const need = (sec, has) => !payload[sec].api_key && !(saved[sec] && saved[sec].api_key_set) ? has : null;
+    let miss = null;
+    if (p === 'anthropic' && payload.anthropic.auth_mode === 'api_key') miss = need('anthropic', 'Anthropic API key');
+    else if (p === 'bedrock' && payload.bedrock.auth_mode === 'bedrock_api_key') miss = need('bedrock', 'Bedrock API key');
+    else if (p === 'openai') miss = need('openai', 'OpenAI API key');
+    else if (p === 'openrouter') miss = need('openrouter', 'OpenRouter API key');
+    if (miss) { toast(`Chưa có ${miss} — nhập key hoặc chọn phương thức xác thực khác.`, 'warn'); return; }
   }
   btn.disabled = true; btn.textContent = '⏳ Đang lưu...';
   try {
@@ -4422,10 +4974,11 @@ async function saveAIConfig() {
   } catch (e) { toast('Lỗi khi lưu: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '💾 Lưu cấu hình'; }
 }
-async function clearAIKey() {
-  if (!confirm('Xóa API key Anthropic đã lưu trên máy chủ?')) return;
+async function clearAIKey(section = 'anthropic') {
+  const label = { anthropic: 'Anthropic', bedrock: 'Bedrock', openai: 'OpenAI', openrouter: 'OpenRouter' }[section] || section;
+  if (!confirm(`Xóa API key ${label} đã lưu trên máy chủ?`)) return;
   try {
-    const saved = await api('/api/ai/config', { method: 'PUT', body: { anthropic: { clear_api_key: true } } });
+    const saved = await api('/api/ai/config', { method: 'PUT', body: { [section]: { clear_api_key: true } } });
     aiConfig = mergeDeep(AI_DEFAULTS, saved || {});
     fillAIForm(aiConfig);
     toast('Đã xóa API key', 'success');
@@ -4447,7 +5000,7 @@ async function testAIConfig() {
 }
 
 // ─── VULN › PHÂN TÍCH LẠI BẰNG CLAUDE ─────────────────────────
-const AI_PROVIDER_LABEL = { ollama: '🏠 Ollama (local)', anthropic: '✳️ Claude · Anthropic', bedrock: '🟧 Claude · Bedrock' };
+const AI_PROVIDER_LABEL = { ollama: '🏠 Ollama (local)', anthropic: '✳️ Claude · Anthropic', bedrock: '🟧 Claude · Bedrock', openai: '🟢 OpenAI', openrouter: '🧩 OpenRouter', 'claude-api': '✳️ Claude · Anthropic' };
 function renderAIProviderChip(v) {
   const chip = document.getElementById('ai-provider-chip');
   const p = v.ai_provider || (v.ai_explanation ? 'ollama' : null);
@@ -5721,6 +6274,223 @@ async function loadConnectors() {
     el.innerHTML = `<div class="empty-state"><div class="icon">${forbidden ? '🔒' : '⚠️'}</div><p>${forbidden ? 'Chỉ ADMIN mới quản lý kết nối' : 'Không tải được kết nối'}</p><p class="text-sm">${escHtml(e.message)}</p></div>`;
     document.getElementById('conn-add-btn').style.display = forbidden ? 'none' : '';
   }
+}
+
+// ─── Compliance (Tuân thủ) ───────────────────────────────────
+async function loadCompliance() {
+  const el = document.getElementById('compliance-body');
+  try {
+    const d = await api('/api/dashboard/compliance');
+    document.getElementById('compliance-meta').textContent =
+      `${d.total_findings} lỗ hổng OPEN · cập nhật ${fmtDate(d.generated_at)}`;
+    if (!d.total_findings) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">✅</div><p>Không có lỗ hổng OPEN</p><p class="text-sm">Hệ thống đạt tuân thủ trong phạm vi đã quét. Hãy chạy scan để cập nhật.</p><button class="btn btn-primary mt-16" onclick="navigate('projects')">Chạy scan</button></div>`;
+      return;
+    }
+    el.innerHTML = d.frameworks.map(renderComplianceCard).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>Không tải được dữ liệu tuân thủ</p><p class="text-sm">${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function complianceScoreColor(score) {
+  // compliance: điểm cao = tốt (ngược với posture). Xanh→vàng→đỏ.
+  if (score >= 80) return 'var(--sev-low)';
+  if (score >= 50) return 'var(--sev-med)';
+  return 'var(--sev-crit)';
+}
+
+function renderComplianceCard(fw) {
+  const col = complianceScoreColor(fw.score);
+  const rows = fw.controls.map(c => {
+    const badge = c.status === 'KHÔNG ĐẠT'
+      ? '<span class="badge badge-critical">KHÔNG ĐẠT</span>'
+      : '<span class="badge badge-medium">CẢNH BÁO</span>';
+    return `<tr>
+      <td class="text-mono" style="white-space:nowrap;">${escHtml(c.control_id)}</td>
+      <td>${escHtml(c.control_name)}</td>
+      <td style="text-align:center;">${c.findings}</td>
+      <td style="text-align:center;">${sevBadge(c.worst)}</td>
+      <td style="text-align:center;">${badge}</td>
+    </tr>`;
+  }).join('');
+  const body = fw.controls.length
+    ? `<table style="margin-top:12px;">
+         <thead><tr><th>Mã</th><th>Nhóm kiểm soát</th><th style="text-align:center;">Số PH</th><th style="text-align:center;">Mức nặng nhất</th><th style="text-align:center;">Trạng thái</th></tr></thead>
+         <tbody>${rows}</tbody></table>`
+    : `<div class="text-sm" style="color:var(--text2);margin-top:10px;">Không có phát hiện chạm tới khung này.</div>`;
+  return `<div class="card" style="margin-bottom:16px;">
+    <div class="flex-between" style="align-items:center;gap:16px;flex-wrap:wrap;">
+      <div>
+        <h2 style="margin-bottom:4px;">${escHtml(fw.label)}</h2>
+        <div class="text-sm" style="color:var(--text2);">
+          ${fw.failed ? `<strong style="color:var(--critical);">${fw.failed}</strong> nhóm KHÔNG ĐẠT` : 'Không vi phạm'}
+          · ${fw.touched} nhóm bị chạm tới
+        </div>
+      </div>
+      <div style="text-align:center;min-width:92px;">
+        <div style="font-size:30px;font-weight:800;line-height:1;color:${col};">${fw.score}</div>
+        <div class="text-sm" style="color:var(--text2);">/ 100</div>
+      </div>
+    </div>
+    <div style="height:8px;border-radius:6px;background:var(--bg2);overflow:hidden;margin-top:12px;">
+      <div style="height:100%;width:${fw.score}%;background:${col};"></div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+// ─── SCM (GitHub/GitLab) ─────────────────────────────────────
+let scmConnections = [], scmRepos = [], scmSchedules = [];
+async function loadScm() {
+  try {
+    [scmConnections, scmRepos, scmSchedules] = await Promise.all([
+      api('/api/scm/connections'), api('/api/scm/repos'), api('/api/scm/schedules')]);
+    renderScmConnections(); renderScmRepos(); loadSmtp();
+  } catch (e) {
+    document.getElementById('scm-conn-list').innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+function renderScmConnections() {
+  const el = document.getElementById('scm-conn-list');
+  if (!scmConnections.length) { el.innerHTML = '<div class="text-sm" style="color:var(--text2);">Chưa có kết nối.</div>'; return; }
+  el.innerHTML = `<table><thead><tr><th>Tên</th><th>Loại</th><th>Endpoint</th><th>Token</th><th></th></tr></thead><tbody>${
+    scmConnections.map(c => `<tr>
+      <td>${escHtml(c.name)}</td>
+      <td>${c.provider === 'GITHUB' ? '🐙 GitHub' : '🦊 GitLab'}${c.cloud ? ' <span class="text-sm" style="color:var(--text2);">cloud</span>' : ''}</td>
+      <td class="text-mono text-sm">${escHtml(c.base_url || (c.provider === 'GITHUB' ? 'github.com' : 'gitlab.com'))}</td>
+      <td>${c.token_set ? '🔒 ' + escHtml(c.token_hint) : '—'}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-ghost btn-sm" onclick="scmTestConn('${c.id}')">🔌 Test</button>
+        <button class="btn btn-ghost btn-sm" onclick="scmBrowse('${c.id}')">📂 Repo</button>
+        <button class="btn btn-ghost btn-sm" onclick="scmDeleteConn('${c.id}')">🗑️</button>
+      </td></tr>
+      <tr id="scm-browse-${c.id}" style="display:none;"><td colspan="5"></td></tr>`).join('')}</tbody></table>`;
+}
+async function scmAddConnection() {
+  const msg = document.getElementById('scm-conn-msg');
+  const body = { name: val('scm-name').trim(), provider: val('scm-provider'),
+                 base_url: val('scm-baseurl').trim(), token: val('scm-token').trim() };
+  if (!body.name || !body.token) { msg.textContent = 'Nhập tên và token'; return; }
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try {
+    await api('/api/scm/connections', { method: 'POST', body });
+    ['scm-name','scm-baseurl','scm-token'].forEach(id => setVal(id, ''));
+    msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã thêm';
+    loadScm();
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function scmTestConn(id) {
+  const msg = document.getElementById('scm-conn-msg');
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra...';
+  try { const r = await api(`/api/scm/connections/${id}/test`, { method: 'POST' });
+    msg.style.color = 'var(--low)'; msg.textContent = `✅ OK — user: ${r.user || ''}`;
+  } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function scmDeleteConn(id) {
+  if (!confirm('Xóa kết nối này (kèm repo & lịch liên quan)?')) return;
+  try { await api(`/api/scm/connections/${id}`, { method: 'DELETE' }); loadScm(); } catch (e) { toast(e.message, 'error'); }
+}
+async function scmBrowse(id) {
+  const row = document.getElementById('scm-browse-' + id);
+  const cell = row.querySelector('td');
+  if (row.style.display === 'table-row') { row.style.display = 'none'; return; }
+  row.style.display = 'table-row'; cell.innerHTML = 'Đang tải danh sách repo...';
+  try {
+    const repos = await api(`/api/scm/connections/${id}/remote-repos`);
+    cell.innerHTML = repos.length ? `<div style="max-height:260px;overflow:auto;">${repos.map(r => `
+      <div class="flex-between" style="padding:4px 0;border-bottom:1px solid var(--border);">
+        <span class="text-mono text-sm">${escHtml(r.full_name)} <span style="color:var(--text2);">(${escHtml(r.default_branch)})</span></span>
+        <button class="btn btn-ghost btn-sm" onclick="scmAddRepo('${id}','${escHtml(r.full_name)}','${escHtml(r.default_branch)}')">+ Thêm</button>
+      </div>`).join('')}</div>` : '<span class="text-sm">Không có repo.</span>';
+  } catch (e) { cell.innerHTML = '<span class="text-sm" style="color:var(--critical);">' + escHtml(e.message) + '</span>'; }
+}
+async function scmAddRepo(connId, fullName, branch) {
+  const email = prompt(`Email owner nhận báo cáo cho ${fullName} (có thể bỏ trống):`, '');
+  try {
+    await api('/api/scm/repos', { method: 'POST', body: {
+      connection_id: connId, repo_full_name: fullName, default_branch: branch || 'main',
+      owner_email: email || '', scan_types: [], run_ai: false } });
+    toast('Đã thêm repo ' + fullName, 'success'); loadScm();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function renderScmRepos() {
+  const el = document.getElementById('scm-repo-list');
+  if (!scmRepos.length) { el.innerHTML = '<div class="text-sm" style="color:var(--text2);">Chưa có repo nào. Dùng "📂 Repo" ở kết nối để thêm.</div>'; return; }
+  el.innerHTML = scmRepos.map(r => {
+    const sch = scmSchedules.find(s => s.repo_id === r.id);
+    const last = sch && sch.last_run_at ? `· lần chạy gần nhất: ${fmtDate(sch.last_run_at)} (${sch.last_status || '—'})` : '';
+    return `<div class="card" style="margin-bottom:12px;background:var(--bg2);">
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+        <div><strong class="text-mono">${escHtml(r.repo_full_name)}</strong>
+          <span class="text-sm" style="color:var(--text2);">· ${escHtml(r.default_branch)} ${r.owner_email ? '· 📧 ' + escHtml(r.owner_email) : '· (chưa có owner email)'}</span></div>
+        <div style="white-space:nowrap;">
+          <button class="btn btn-primary btn-sm" onclick="scmScanNow('${r.id}')">▶ Quét ngay</button>
+          <button class="btn btn-ghost btn-sm" onclick="scmDeleteRepo('${r.id}')">🗑️</button>
+        </div>
+      </div>
+      <div class="flex" style="gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+        <span class="text-sm">Lịch quét mỗi</span>
+        <input type="number" id="sch-int-${r.id}" value="${sch ? sch.interval_minutes : 1440}" min="5" style="width:90px;"><span class="text-sm">phút</span>
+        <label class="text-sm"><input type="checkbox" id="sch-email-${r.id}" ${!sch || sch.email_report ? 'checked' : ''} style="width:auto;"> gửi report owner</label>
+        <label class="text-sm"><input type="checkbox" id="sch-en-${r.id}" ${sch && sch.enabled ? 'checked' : ''} style="width:auto;"> bật lịch</label>
+        <button class="btn btn-ghost btn-sm" onclick="scmSaveSchedule('${r.id}','${sch ? sch.id : ''}')">💾 Lưu lịch</button>
+        ${sch ? `<button class="btn btn-ghost btn-sm" onclick="scmDeleteSchedule('${sch.id}')">Xóa lịch</button>` : ''}
+        <span class="text-sm" style="color:var(--text2);">${last}</span>
+      </div>
+      ${sch && sch.last_error ? `<div class="text-sm" style="color:var(--critical);margin-top:6px;">Lỗi: ${escHtml(sch.last_error)}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+async function scmScanNow(id) {
+  try { const r = await api(`/api/scm/repos/${id}/scan-now`, { method: 'POST' }); toast(r.message || 'Đã kích hoạt', 'success'); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function scmDeleteRepo(id) {
+  if (!confirm('Xóa repo này khỏi danh sách quét?')) return;
+  try { await api(`/api/scm/repos/${id}`, { method: 'DELETE' }); loadScm(); } catch (e) { toast(e.message, 'error'); }
+}
+async function scmSaveSchedule(repoId, schId) {
+  const body = { repo_id: repoId,
+    interval_minutes: parseInt(document.getElementById('sch-int-' + repoId).value, 10) || 1440,
+    email_report: document.getElementById('sch-email-' + repoId).checked,
+    enabled: document.getElementById('sch-en-' + repoId).checked };
+  try {
+    if (schId) await api(`/api/scm/schedules/${schId}`, { method: 'PUT', body });
+    else await api('/api/scm/schedules', { method: 'POST', body });
+    toast('Đã lưu lịch', 'success'); loadScm();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function scmDeleteSchedule(id) {
+  try { await api(`/api/scm/schedules/${id}`, { method: 'DELETE' }); loadScm(); } catch (e) { toast(e.message, 'error'); }
+}
+// SMTP
+async function loadSmtp() {
+  try {
+    const s = await api('/api/settings/smtp');
+    setVal('smtp-host', s.host); setVal('smtp-port', s.port); setVal('smtp-user', s.username);
+    setVal('smtp-from', s.from_addr); setVal('smtp-pass', '');
+    document.getElementById('smtp-tls').checked = !!s.use_tls;
+    document.getElementById('smtp-pass-hint').textContent = s.password_set ? `Đã lưu: ${s.password_hint}` : 'Chưa có mật khẩu.';
+    document.getElementById('smtp-badge').textContent = s.configured ? 'đã cấu hình' : 'chưa cấu hình';
+  } catch (e) { /* bỏ qua */ }
+}
+async function saveSmtp() {
+  const msg = document.getElementById('smtp-msg');
+  const body = { host: val('smtp-host').trim(), port: parseInt(val('smtp-port'), 10) || 587,
+    username: val('smtp-user').trim(), from_addr: val('smtp-from').trim(),
+    use_tls: document.getElementById('smtp-tls').checked };
+  const p = val('smtp-pass').trim(); if (p) body.password = p;
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang lưu...';
+  try { await api('/api/settings/smtp', { method: 'PUT', body }); msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã lưu'; loadSmtp(); }
+  catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
+}
+async function testSmtp() {
+  const to = val('smtp-test-to').trim(); const msg = document.getElementById('smtp-msg');
+  if (!to) { msg.textContent = 'Nhập email nhận thử'; return; }
+  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang gửi...';
+  try { const r = await api('/api/settings/smtp/test', { method: 'POST', body: { to } }); msg.style.color = 'var(--low)'; msg.textContent = '✅ ' + r.message; }
+  catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
 }
 
 function connStatusBadge(status) {

@@ -32,7 +32,7 @@ def _norm(sev) -> str:
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db)):
-    from api.models import Project, Scan, Vulnerability, VulnStatus
+    from api.models import Project, Scan, Vulnerability, VulnStatus, ACTIVE_VULN_STATUSES
     from api.webscan_models import WebFinding, WebScan
     from api.domain_models import Domain
     from api.pentest_models import (Engagement, PentestFinding, PentestRun, RunStatus,
@@ -135,6 +135,28 @@ def overview(db: Session = Depends(get_db)):
         "coverage": coverage,
         "scan_trend": trend_series,
         "generated_at": datetime.utcnow(),
+    }
+
+
+@router.get("/compliance")
+def compliance(project_id: str = None, db: Session = Depends(get_db)):
+    """Tổng hợp tuân thủ toàn hệ thống (hoặc 1 project) từ các lỗ hổng code OPEN.
+
+    Ánh xạ sang OWASP Top 10, ISO 27001, TCVN 11930/NĐ 85, PCI-DSS.
+    """
+    from api.models import Scan, Vulnerability, VulnStatus, ACTIVE_VULN_STATUSES
+    from scanner import compliance as C
+
+    q = db.query(Vulnerability).filter(Vulnerability.status.in_(ACTIVE_VULN_STATUSES))
+    if project_id:
+        scan_ids = [s.id for s in db.query(Scan).filter(Scan.project_id == project_id).all()]
+        q = q.filter(Vulnerability.scan_id.in_(scan_ids or ["__none__"]))
+    vulns = q.all()
+    summary = C.compliance_summary(vulns)
+    return {
+        "total_findings": len(vulns),
+        "frameworks": [summary[fw] for fw in C.FRAMEWORKS],
+        "generated_at": datetime.utcnow().isoformat() + "Z",
     }
 
 

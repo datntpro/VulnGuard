@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from api.database import get_db
-from api.models import Scan, Vulnerability, VulnStatus
+from api.models import Scan, Vulnerability, VulnStatus, ACTIVE_VULN_STATUS_VALUES
 from api.schemas import CompareResult, VulnDiff, VulnOut, ScanOut
 from api.config import settings
 
@@ -68,9 +68,24 @@ def compare_scans(
     def sort_key(v):
         return SEVERITY_ORDER.get(v.severity.value, 99)
 
+    # ── "Not Evaluated" (Checkmarx-style): nếu scan settings (loại quét) đổi,
+    #    một finding "fixed" mà loại quét của nó KHÔNG chạy ở scan mới thì
+    #    không thể khẳng định đã resolve → tách ra để không báo nhầm "đã fix" ──
+    old_types = set(scan_old.scan_types or [])
+    new_types = set(scan_new.scan_types or [])
+    settings_changed = old_types != new_types
+    not_evaluated = []
+    if settings_changed:
+        still_fixed = []
+        for v in fixed_findings:
+            t = v.scan_type.value if hasattr(v.scan_type, "value") else str(v.scan_type)
+            (not_evaluated if t not in new_types else still_fixed).append(v)
+        fixed_findings = still_fixed
+
     new_findings.sort(key=sort_key)
     fixed_findings.sort(key=sort_key)
     persisted_findings.sort(key=sort_key)
+    not_evaluated.sort(key=sort_key)
 
     # Check scan có bị block không
     threshold = settings.block_severity_threshold
@@ -78,13 +93,17 @@ def compare_scans(
     blocked_vulns = [
         v for v in new_vulns
         if SEVERITY_ORDER.get(v.severity.value, 99) <= threshold_level
-        and v.status.value == "OPEN"
+        and v.status.value in ACTIVE_VULN_STATUS_VALUES
     ]
 
     summary = {
         "new_count": len(new_findings),
         "fixed_count": len(fixed_findings),
         "persisted_count": len(persisted_findings),
+        "not_evaluated_count": len(not_evaluated),
+        "settings_changed": settings_changed,
+        "old_types": sorted(old_types),
+        "new_types": sorted(new_types),
         "blocked_count": len(blocked_vulns),
         "approve_status": "BLOCKED" if blocked_vulns else "APPROVED",
         "approve_message": (
@@ -102,9 +121,36 @@ def compare_scans(
             new=[VulnOut.model_validate(v) for v in new_findings],
             fixed=[VulnOut.model_validate(v) for v in fixed_findings],
             persisted=[VulnOut.model_validate(v) for v in persisted_findings],
+            not_evaluated=[VulnOut.model_validate(v) for v in not_evaluated],
         ),
         summary=summary,
     )
+
+
+@router.get("/{project_id}/scan-trend")
+def scan_trend(project_id: str, db: Session = Depends(get_db)):
+    """Xu hướng số lỗ hổng theo mức độ qua các lần scan (COMPLETED), cũ → mới."""
+    from api.models import ScanStatus
+    scans = (db.query(Scan).filter(Scan.project_id == project_id,
+                                   Scan.status == ScanStatus.COMPLETED)
+             .order_by(Scan.scan_number).all())
+    sevs = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+    out = []
+    for sc in scans:
+        counts = {s: 0 for s in sevs}
+        active = 0
+        for v in db.query(Vulnerability).filter(Vulnerability.scan_id == sc.id).all():
+            sv = v.severity.value if hasattr(v.severity, "value") else str(v.severity)
+            counts[sv if sv in counts else "INFO"] += 1
+            if (v.status.value if hasattr(v.status, "value") else v.status) in ACTIVE_VULN_STATUS_VALUES:
+                active += 1
+        out.append({
+            "scan_id": sc.id, "scan_number": sc.scan_number,
+            "started_at": sc.started_at.isoformat() + "Z" if sc.started_at else None,
+            "scan_types": sc.scan_types or [],
+            **counts, "total": sum(counts.values()), "active": active,
+        })
+    return {"project_id": project_id, "points": out}
 
 
 @router.get("/{project_id}/approve-check")
@@ -119,7 +165,7 @@ def approve_check(project_id: str, scan_id: str, db: Session = Depends(get_db)):
 
     blocked_vulns = db.query(Vulnerability).filter(
         Vulnerability.scan_id == scan_id,
-        Vulnerability.status == "OPEN"
+        Vulnerability.status.in_(ACTIVE_VULN_STATUS_VALUES)
     ).all()
 
     blocked_vulns = [

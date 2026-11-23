@@ -29,10 +29,27 @@ class Severity(str, enum.Enum):
 
 
 class VulnStatus(str, enum.Enum):
-    OPEN = "OPEN"
-    ACCEPTED = "ACCEPTED"
-    FALSE_POSITIVE = "FALSE_POSITIVE"
-    FIXED = "FIXED"
+    # Trạng thái triage kiểu Checkmarx. OPEN = "Cần xác minh (To Verify)" — mặc định,
+    # giữ tên OPEN để tương thích dữ liệu/quyền cũ.
+    OPEN = "OPEN"                       # To Verify — chưa triage
+    CONFIRMED = "CONFIRMED"             # Đã xác nhận là lỗi thật, cần sửa
+    URGENT = "URGENT"                   # Đã xác nhận + khẩn cấp
+    PROPOSED_NE = "PROPOSED_NE"         # Đề xuất: không khai thác được (chờ reviewer chốt)
+    NOT_EXPLOITABLE = "NOT_EXPLOITABLE" # Chốt: không khai thác được (final)
+    ACCEPTED = "ACCEPTED"              # Chấp nhận rủi ro
+    FALSE_POSITIVE = "FALSE_POSITIVE"  # (legacy, coi như NOT_EXPLOITABLE)
+    FIXED = "FIXED"                    # Đã sửa
+
+
+# Trạng thái còn "mở" (tính vào rủi ro / chặn approve / hiện trong summary)
+ACTIVE_VULN_STATUSES = (
+    VulnStatus.OPEN, VulnStatus.CONFIRMED, VulnStatus.URGENT, VulnStatus.PROPOSED_NE,
+)
+ACTIVE_VULN_STATUS_VALUES = tuple(s.value for s in ACTIVE_VULN_STATUSES)
+# Chuyển sang các trạng thái này BẮT BUỘC ghi chú (note)
+NOTE_REQUIRED_STATUSES = (VulnStatus.NOT_EXPLOITABLE, VulnStatus.ACCEPTED)
+# Chỉ ADMIN mới được chốt các trạng thái này
+ADMIN_ONLY_STATUSES = (VulnStatus.NOT_EXPLOITABLE,)
 
 
 class ScanType(str, enum.Enum):
@@ -119,6 +136,13 @@ class Vulnerability(Base):
     # Fingerprint cho tracking across scans
     fingerprint = Column(String(64), nullable=True, index=True)
 
+    # Triage (kiểu Checkmarx) — kế thừa qua các lần scan theo fingerprint
+    triage_note = Column(Text, nullable=True)
+    triage_by = Column(String(200), nullable=True)
+    triage_at = Column(DateTime, nullable=True)
+    first_seen_at = Column(DateTime, nullable=True)       # lần đầu finding này xuất hiện (xuyên scan)
+    first_seen_scan_id = Column(String, nullable=True)    # scan đầu tiên thấy finding (để đánh dấu "Mới")
+
     created_at = Column(DateTime, server_default=func.now())
 
     scan = relationship("Scan", back_populates="vulnerabilities")
@@ -139,3 +163,19 @@ class Waiver(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     vulnerability = relationship("Vulnerability", back_populates="waiver")
+
+
+# ─────────────────────────────────────────────
+# Audit trail đổi trạng thái triage (change log kiểu Checkmarx)
+class TriageEvent(Base):
+    __tablename__ = "triage_events"
+
+    id = Column(String, primary_key=True, default=gen_id)
+    vulnerability_id = Column(String, ForeignKey("vulnerabilities.id"), nullable=True, index=True)
+    project_id = Column(String, nullable=True, index=True)
+    fingerprint = Column(String(64), nullable=True, index=True)   # để truy vết xuyên scan
+    from_status = Column(String(40), nullable=True)
+    to_status = Column(String(40), nullable=False)
+    note = Column(Text, nullable=True)
+    actor = Column(String(200), nullable=True)                    # email/tên người triage
+    created_at = Column(DateTime, server_default=func.now())

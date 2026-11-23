@@ -1,5 +1,5 @@
 """
-Cloud AI analyzer — Claude qua Anthropic API hoặc Amazon Bedrock.
+Cloud AI analyzer — Claude (Anthropic API / Amazon Bedrock), OpenAI (ChatGPT) & OpenRouter.
 
 Mục tiêu chính: GIẢM FALSE POSITIVE so với model local nhỏ:
   1. Model mạnh hơn (mặc định claude-opus-5-5) + structured output (JSON schema
@@ -181,21 +181,52 @@ def build_user_prompt(v: Dict[str, Any], code_context: Optional[str], local_opin
 # ─────────────────────────────────────────────
 # Client factory
 # ─────────────────────────────────────────────
-def build_client(cfg: Dict[str, Any]) -> Tuple[Any, str, bool]:
-    """Trả về (async_client, model, is_first_party)."""
+def build_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
+    """Trả về (async_client, model, family). family ∈ {'anthropic_first','bedrock','openai'}."""
+    provider = cfg["provider"]
+
+    # ── OpenAI (ChatGPT) & OpenRouter — SDK openai, API tương thích ──
+    if provider in ("openai", "openrouter"):
+        from openai import AsyncOpenAI
+        from api.services.ai_config import get_api_key, OPENROUTER_BASE_URL
+        sec = cfg[provider]
+        key = get_api_key(provider, cfg)
+        if not key:
+            raise RuntimeError(f"Chưa cấu hình API key cho {provider} (Settings → AI Provider)")
+        if provider == "openrouter":
+            base_url = OPENROUTER_BASE_URL
+            default_headers = {"HTTP-Referer": "https://github.com/datntpro/VulnGuard",
+                               "X-Title": "VulnGuard"}
+            model = sec.get("model") or "anthropic/claude-3.5-sonnet"
+        else:
+            base_url = (sec.get("base_url") or "").strip() or None
+            default_headers = None
+            model = sec.get("model") or "gpt-4o"
+        client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=180.0,
+                             default_headers=default_headers)
+        return client, model, "openai"
+
     import anthropic
 
     timeout = anthropic.Timeout(180.0, connect=10.0)
-    if cfg["provider"] == "bedrock":
+    if provider == "bedrock":
         b = cfg["bedrock"]
+        auth_mode = b.get("auth_mode", "aws_chain")
+        if auth_mode == "bedrock_api_key":
+            from api.services.ai_config import get_api_key
+            tok = get_api_key("bedrock", cfg)
+            if not tok:
+                raise RuntimeError("Chưa cấu hình Bedrock API key (Settings → AI Provider)")
+            # botocore đọc token qua biến môi trường này
+            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = tok
         client = anthropic.AsyncAnthropicBedrockMantle(
             aws_region=b.get("region") or None,
-            aws_profile=b.get("aws_profile") or None,
+            aws_profile=(b.get("aws_profile") or None) if auth_mode == "profile" else None,
             timeout=timeout,
             # Bedrock không có server-side `fallbacks` → dùng middleware phía client
             middleware=[anthropic.BetaRefusalFallbackMiddleware([{"model": "anthropic.claude-opus-4-8"}])],
         )
-        return client, b.get("model") or "anthropic.claude-opus-5-5", False
+        return client, b.get("model") or "anthropic.claude-opus-5-5", "bedrock"
 
     a = cfg["anthropic"]
     mode = a.get("auth_mode", "api_key")
@@ -220,20 +251,35 @@ def build_client(cfg: Dict[str, Any]) -> Tuple[Any, str, bool]:
         client = anthropic.AsyncAnthropic(credentials=creds, timeout=timeout)
     else:  # environment — ANTHROPIC_API_KEY / ant auth login profile
         client = anthropic.AsyncAnthropic(timeout=timeout)
-    return client, a.get("model") or "claude-opus-5-5", True
+    return client, a.get("model") or "claude-opus-5-5", "anthropic_first"
+
+
+_PROVIDER_LABEL = {"anthropic_first": "claude-api", "bedrock": "bedrock",
+                   "openai": "openai"}
 
 
 class CloudAnalyzer:
     def __init__(self, cfg: Optional[Dict[str, Any]] = None):
         from api.services.ai_config import load_config
         self.cfg = cfg or load_config()
-        self.client, self.model, self.first_party = build_client(self.cfg)
+        self.client, self.model, self.family = build_client(self.cfg)
+        self.first_party = self.family == "anthropic_first"
 
     @property
     def provider_label(self) -> str:
-        return f"{'claude-api' if self.first_party else 'bedrock'}:{self.model}"
+        prov = self.cfg.get("provider", "")
+        base = _PROVIDER_LABEL.get(self.family, prov)
+        # openrouter dùng family openai nhưng ghi nhãn theo provider thật
+        if prov == "openrouter":
+            base = "openrouter"
+        return f"{base}:{self.model}"
 
     async def _create(self, system: str, user: str, schema: dict, max_tokens: int = 8000) -> str:
+        if self.family == "openai":
+            return await self._create_openai(system, user, schema, max_tokens)
+        return await self._create_anthropic(system, user, schema, max_tokens)
+
+    async def _create_anthropic(self, system: str, user: str, schema: dict, max_tokens: int) -> str:
         kwargs = dict(
             model=self.model,
             max_tokens=max_tokens,
@@ -254,6 +300,32 @@ class CloudAnalyzer:
             raise RuntimeError("Model hết max_tokens trước khi trả đủ JSON")
         text = next((b.text for b in resp.content if b.type == "text"), "")
         return text
+
+    async def _create_openai(self, system: str, user: str, schema: dict, max_tokens: int) -> str:
+        """OpenAI / OpenRouter — Chat Completions + structured output.
+
+        Thử json_schema (strict); nếu model/endpoint không hỗ trợ thì lùi về
+        json_object + ép schema trong prompt.
+        """
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        rf_schema = {"type": "json_schema",
+                     "json_schema": {"name": "analysis", "schema": schema, "strict": True}}
+        try:
+            resp = await self.client.chat.completions.create(
+                model=self.model, messages=messages,
+                max_completion_tokens=max_tokens, response_format=rf_schema)
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            msg = str(e).lower()
+            if not any(k in msg for k in ("response_format", "json_schema", "schema", "unsupported", "400", "invalid")):
+                raise
+            # fallback: json_object
+            messages[0]["content"] += ("\n\nCHỈ trả về JSON hợp lệ đúng schema sau, "
+                                       "không văn bản ngoài JSON:\n" + json.dumps(schema, ensure_ascii=False))
+            resp = await self.client.chat.completions.create(
+                model=self.model, messages=messages,
+                max_completion_tokens=max_tokens, response_format={"type": "json_object"})
+            return resp.choices[0].message.content or ""
 
     async def analyze_finding(self, vuln: Dict[str, Any], local_opinion: Optional[dict] = None) -> Dict[str, Any]:
         privacy = self.cfg["privacy"]

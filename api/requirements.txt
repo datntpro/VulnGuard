@@ -20,8 +20,14 @@ pypdf>=4.2.0
 python-docx>=1.1.2
 # Cloud AI — Claude API (Anthropic) + Amazon Bedrock (Mantle client)
 anthropic[bedrock]>=2.12.0
+# OpenAI SDK — dùng cho provider OpenAI (ChatGPT) & OpenRouter (API tương thích)
+openai>=1.40.0
 # Auth — JWT session + mã hoá secret (API key cloud AI) khi lưu
 pyjwt>=2.8.0
 cryptography>=42.0.0
 # MCP server — expose asset/intel/connector cho agent (Claude Desktop / Pentest Agent)
 mcp>=2.0.0
+# Export PDF báo cáo scan (server-side, font tiếng Việt bundled)
+fpdf2>=2.8.0
+# Pillow — fpdf2 cần để nhúng logo PNG/JPG vào báo cáo
+Pillow>=10.0.0

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from api.database import get_db, SessionLocal
-from api.models import Project, Scan, Vulnerability, ScanStatus, Severity
+from api.models import Project, Scan, Vulnerability, ScanStatus, Severity, ACTIVE_VULN_STATUS_VALUES
 from api.schemas import ScanCreate, ScanOut, VulnOut
 from api.config import settings
 
@@ -33,7 +33,7 @@ def _compute_summary(vulns: List[Vulnerability]) -> dict:
     for v in vulns:
         summary[v.severity.value] += 1
         summary["total"] += 1
-        if v.status.value == "OPEN":
+        if v.status.value in ACTIVE_VULN_STATUS_VALUES:
             summary["open"] += 1
         elif v.status.value == "ACCEPTED":
             summary["accepted"] += 1
@@ -169,6 +169,18 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
 
         db.commit()
         db.refresh(scan)
+
+        # ── Kế thừa triage từ scan trước (Checkmarx-style): finding đã đánh
+        #    "Không khai thác được / Đã xác nhận / Chấp nhận" không phải triage lại ──
+        try:
+            import logging as _lg
+            from api.services.triage import inherit_triage
+            n_inherited = inherit_triage(db, scan)
+            if n_inherited:
+                _lg.getLogger(__name__).info(f"[triage] kế thừa {n_inherited} finding từ scan trước")
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger(__name__).warning(f"[triage] kế thừa lỗi (bỏ qua): {e}")
 
         # ── Phase 1 DONE: Đánh dấu scan COMPLETED ngay (không đợi AI) ────
         # UI sẽ thấy kết quả scan ngay lập tức
@@ -534,10 +546,12 @@ def get_scan_vulns(
 @router.get("/scans/{scan_id}/export", tags=["scans"])
 def export_scan(
     scan_id: str,
-    format: str = Query(default="json", pattern="^(json|csv)$"),
+    format: str = Query(default="json", pattern="^(json|csv|pdf|md|ai|sarif)$"),
     severity: str = None,
     status: str = None,
     scan_type: str = None,
+    diff: str = Query(default="all", pattern="^(all|new|recurrent)$"),
+    scope: str = Query(default="all", pattern="^(all|active)$"),
     db: Session = Depends(get_db)
 ):
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
@@ -560,14 +574,46 @@ def export_scan(
     # tránh JSON export trả vulns theo thứ tự Enum DB không liên quan tới mức độ nghiêm trọng.
     vulns = sorted(query.all(), key=lambda v: SEVERITY_ORDER.get(v.severity.value, 99))
 
+    # Lọc theo phạm vi báo cáo (Checkmarx-style): New/Recurrent + chỉ còn mở
+    if scope == "active":
+        vulns = [v for v in vulns if v.status.value in ACTIVE_VULN_STATUS_VALUES]
+    if diff == "new":
+        vulns = [v for v in vulns if (not v.first_seen_scan_id) or v.first_seen_scan_id == scan_id]
+    elif diff == "recurrent":
+        vulns = [v for v in vulns if v.first_seen_scan_id and v.first_seen_scan_id != scan_id]
+
     project = db.query(Project).filter(Project.id == scan.project_id).first()
     project_name = project.name if project else scan.project_id
     filename_base = f"vulnguard_{project_name}_{scan.scan_number}".replace(" ", "_")
 
     if format == "json":
         return _export_json(scan, vulns, project_name, filename_base)
-    else:
+    if format == "csv":
         return _export_csv(scan, vulns, filename_base)
+    # Nhãn phạm vi báo cáo (Checkmarx-style)
+    _diff_lbl = {"all": "Tất cả", "new": "Chỉ lỗ hổng MỚI", "recurrent": "Chỉ lỗ hổng TÁI XUẤT HIỆN"}
+    scope_note = None
+    if diff != "all" or scope != "all":
+        scope_note = _diff_lbl[diff] + ("; chỉ còn mở (active)" if scope == "active" else "")
+
+    # PDF / Markdown / AI-JSON — dùng scanner/report_builder
+    from scanner import report_builder as rb
+    if format == "pdf":
+        data = rb.build_pdf(scan, vulns, project_name, scope_note=scope_note)
+        return StreamingResponse(iter([data]), media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'})
+    if format == "md":
+        text = rb.build_markdown(scan, vulns, project_name)
+        return StreamingResponse(iter([text.encode("utf-8")]), media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.md"'})
+    if format == "sarif":
+        text = rb.build_sarif(scan, vulns, project_name)
+        return StreamingResponse(iter([text.encode("utf-8")]), media_type="application/sarif+json; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.sarif"'})
+    # ai — JSON tối giản cho LLM (mở xem được trên trình duyệt, không ép tải)
+    text = rb.build_ai_json(scan, vulns, project_name)
+    return StreamingResponse(iter([text.encode("utf-8")]), media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'inline; filename="{filename_base}.ai.json"'})
 
 
 def _export_json(scan: Scan, vulns: list, project_name: str, filename_base: str) -> StreamingResponse:

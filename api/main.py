@@ -7,7 +7,7 @@ import os
 from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
-from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard
+from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard, scm
 # domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
 # đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
 from api import domain_models  # noqa: F401
@@ -19,6 +19,7 @@ from api import webscan_models  # noqa: F401
 from api import pentest_models  # noqa: F401
 from api import asset_models  # noqa: F401
 from api import connector_models  # noqa: F401
+from api import scm_models  # noqa: F401
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -52,6 +53,13 @@ def _run_migrations():
             "ALTER TABLE pentest_findings ADD COLUMN evidence_traffic_id VARCHAR",
             "ALTER TABLE pentest_runs ADD COLUMN todolist TEXT",
             "ALTER TABLE pentest_engagements ADD COLUMN max_parallel INTEGER DEFAULT 3",
+            # GĐ1 triage (Checkmarx-style) — cột mới trên vulnerabilities
+            "ALTER TABLE vulnerabilities ADD COLUMN triage_note TEXT",
+            "ALTER TABLE vulnerabilities ADD COLUMN triage_by VARCHAR(200)",
+            "ALTER TABLE vulnerabilities ADD COLUMN triage_at DATETIME",
+            "ALTER TABLE vulnerabilities ADD COLUMN first_seen_at DATETIME",
+            "ALTER TABLE vulnerabilities ADD COLUMN first_seen_scan_id VARCHAR",
+            # P0 (an toàn/trung thực)
             "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 0",  # P0.3
             "ALTER TABLE domains ADD COLUMN ownership_verified BOOLEAN DEFAULT 0",  # P0.4
             "ALTER TABLE domains ADD COLUMN ownership_token VARCHAR(80)",
@@ -210,6 +218,17 @@ app.include_router(coworker.router)
 app.include_router(coworker_agent.router)
 app.include_router(docreview.router)
 app.include_router(file_assistant.router)
+app.include_router(scm.router)
+
+
+@app.on_event("startup")
+async def _start_scheduler():
+    try:
+        from api.services import scheduler
+        scheduler.start()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[scheduler] không khởi động được: {e}")
 
 
 @app.get("/api/health")

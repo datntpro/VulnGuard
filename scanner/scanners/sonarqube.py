@@ -32,6 +32,15 @@ _SEV = {
 
 
 def _cfg(name: str, default=None):
+    # Ưu tiên cấu hình người dùng lưu qua UI (Settings → Scanner Tools → SonarQube)
+    try:
+        from api.services import runtime_settings as rt
+        if name.upper() == "SONARQUBE_URL" and rt.sonarqube_url():
+            return rt.sonarqube_url()
+        if name.upper() == "SONARQUBE_TOKEN" and rt.sonarqube_token():
+            return rt.sonarqube_token()
+    except Exception:
+        pass
     try:
         from api.config import settings
         v = getattr(settings, name.lower(), None)

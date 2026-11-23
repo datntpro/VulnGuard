@@ -129,12 +129,28 @@ class VulnOut(BaseModel):
     ai_analyzed_at: Optional[datetime]
     ai_provider: Optional[str] = None
     fingerprint: Optional[str]
+    triage_note: Optional[str] = None
+    triage_by: Optional[str] = None
+    triage_at: Optional[datetime] = None
+    first_seen_at: Optional[datetime] = None
+    first_seen_scan_id: Optional[str] = None
     created_at: datetime
     waiver: Optional[WaiverOut]
 
 
 class VulnStatusUpdate(BaseModel):
     status: VulnStatus
+    note: Optional[str] = None
+
+
+class TriageEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    from_status: Optional[str]
+    to_status: str
+    note: Optional[str]
+    actor: Optional[str]
+    created_at: datetime
 
 
 class WaiverCreate(BaseModel):
@@ -149,9 +165,10 @@ class WaiverCreate(BaseModel):
 # Compare Schemas
 # ─────────────────────────────────────────────
 class VulnDiff(BaseModel):
-    new: List[VulnOut] = []        # Xuất hiện lần đầu trong scan mới
-    fixed: List[VulnOut] = []      # Có trong scan cũ, không còn trong scan mới
-    persisted: List[VulnOut] = []  # Vẫn còn trong cả hai
+    new: List[VulnOut] = []            # Xuất hiện lần đầu trong scan mới
+    fixed: List[VulnOut] = []          # Có trong scan cũ, không còn trong scan mới (đã resolve)
+    persisted: List[VulnOut] = []      # Vẫn còn trong cả hai (recurring)
+    not_evaluated: List[VulnOut] = []  # Không đánh giá lại được do đổi scan settings
 
 
 class CompareResult(BaseModel):

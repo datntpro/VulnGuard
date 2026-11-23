@@ -99,7 +99,11 @@ class AIAnalyzer:
         # khác nhau cho cùng 1 biến — Settings đã tự đọc env var OLLAMA_URL/
         # OLLAMA_TIMEOUT nếu có, nên không cần đọc os.environ riêng ở đây nữa.
         from api.config import settings as _settings
-        self.ollama_url = _settings.ollama_url
+        try:
+            from api.services import runtime_settings
+            self.ollama_url = runtime_settings.ollama_url()
+        except Exception:
+            self.ollama_url = _settings.ollama_url
         self._ollama_timeout = _settings.ollama_timeout
 
         # Ưu tiên: active model đã set qua UI > env var > default
@@ -108,8 +112,8 @@ class AIAnalyzer:
     def _get_active_model(self) -> str:
         """Lấy active model — ưu tiên từ api/routes/ollama nếu đã import."""
         try:
-            from api.routes.ollama import get_active_model
-            return get_active_model()
+            from api.services import runtime_settings
+            return runtime_settings.ollama_model()
         except Exception:
             pass
         return os.environ.get("OLLAMA_MODEL", "llama3.2")
