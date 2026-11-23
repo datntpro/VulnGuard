@@ -42,12 +42,55 @@ class SemgrepScanner(BaseScanner):
     scan_type = "SAST"
     tool_name = "semgrep"
 
-    # Registry rulesets — sẽ được pre-cached trong Docker build
-    ONLINE_RULESETS = [
-        "p/python",
-        "p/security-audit",
-        "p/owasp-top-ten",
-    ]
+    # Ruleset đa ngôn ngữ luôn chạy
+    BASE_RULESETS = ["p/security-audit", "p/owasp-top-ten"]
+    # Ánh xạ ngôn ngữ → registry ruleset (1.4: SAST hiểu JS/TS, không chỉ Python)
+    LANG_RULESETS = {
+        "python": ["p/python"],
+        "javascript": ["p/javascript", "p/nodejs"],
+        "typescript": ["p/typescript"],
+        "react": ["p/react"],
+        "java": ["p/java"],
+        "go": ["p/golang"],
+        "php": ["p/php"],
+        "ruby": ["p/ruby"],
+    }
+    _LANG_EXT = {
+        ".py": "python", ".js": "javascript", ".jsx": "react", ".mjs": "javascript",
+        ".cjs": "javascript", ".ts": "typescript", ".tsx": "react", ".java": "java",
+        ".go": "go", ".php": "php", ".rb": "ruby",
+    }
+
+    def _detect_languages(self) -> set:
+        """Quét nhanh phần mở rộng file để chọn ruleset đúng ngôn ngữ."""
+        langs = set()
+        skip = {"node_modules", ".git", "venv", ".venv", "dist", "build", "__pycache__"}
+        try:
+            for root, dirs, files in os.walk(self.scan_path):
+                dirs[:] = [d for d in dirs if d not in skip]
+                for fn in files:
+                    lang = self._LANG_EXT.get(os.path.splitext(fn)[1].lower())
+                    if lang:
+                        langs.add(lang)
+                        if lang in ("javascript", "typescript", "react"):
+                            langs.add("react")  # bật p/react khi có JS/TS front-end
+                if len(langs) >= 6:
+                    break
+        except Exception:
+            pass
+        return langs
+
+    def _online_rulesets(self) -> List[str]:
+        langs = self._detect_languages()
+        rulesets = list(self.BASE_RULESETS)
+        for lang in langs:
+            for rs in self.LANG_RULESETS.get(lang, []):
+                if rs not in rulesets:
+                    rulesets.append(rs)
+        # Không nhận ra ngôn ngữ nào → mặc định Python (giữ hành vi cũ)
+        if not langs:
+            rulesets.append("p/python")
+        return rulesets
 
     async def scan(self) -> List[Dict[str, Any]]:
         all_findings: List[Dict[str, Any]] = []
@@ -73,11 +116,12 @@ class SemgrepScanner(BaseScanner):
         # ── Bước 2: Online/cached registry rules (chỉ khi có internet) ──────
         # Kiểm tra internet trước để tránh treo 120s khi offline
         if _has_internet():
-            logger.info("Semgrep: có internet — chạy online registry rules...")
+            rulesets = self._online_rulesets()
+            logger.info(f"Semgrep: có internet — chạy ruleset theo ngôn ngữ: {', '.join(rulesets)}")
             config_args = []
-            for ruleset in self.ONLINE_RULESETS:
+            for ruleset in rulesets:
                 config_args += ["--config", ruleset]
-            online = await self._run_semgrep(config_args, timeout=90)
+            online = await self._run_semgrep(config_args, timeout=120)
             add_findings(online)
         else:
             logger.info("Semgrep: không có internet — bỏ qua online registry rules (offline mode)")

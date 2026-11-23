@@ -5,9 +5,39 @@ Secret Detection Scanners:
 """
 import json
 import os
+import re
 from typing import List, Dict, Any
 
 from scanner.scanners.base import BaseScanner, run_command, make_fingerprint
+
+# 1.3: giảm false positive cho secret
+_TEST_PATH_RE = re.compile(
+    r"(^|/)(tests?|__tests__|__mocks__|fixtures?|mocks?|examples?|sample[s]?|e2e|spec)(/|$)"
+    r"|\.(test|spec|example|sample|mock)\.|(^|/)\.env\.(example|sample|template)$", re.I)
+# Giá trị công khai / placeholder → không phải secret thật
+_PUBLIC_VALUE_RE = re.compile(
+    r"\.apps\.googleusercontent\.com|change[_-]?me|placeholder|dummy|example|your[_-]|xxx+|"
+    r"<[^>]+>|\$\{[^}]+\}|000000|test[_-]?(key|token|secret)", re.I)
+_SEV_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+
+
+def _reduce_secret_fp(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Hạ mức các finding nhiều khả năng là false positive (file test/fixture, giá trị công khai)."""
+    for f in findings:
+        path = f.get("file_path", "") or ""
+        blob = (f.get("code_snippet", "") or "") + " " + (f.get("description", "") or "")
+        note = None
+        new_sev = f.get("severity", "HIGH")
+        if _PUBLIC_VALUE_RE.search(blob):
+            new_sev, note = "INFO", "Giá trị công khai/placeholder — nhiều khả năng không phải secret thật"
+        elif _TEST_PATH_RE.search("/" + path):
+            # Trong file test/fixture: hạ xuống LOW (secret thật trong test vẫn cần xem)
+            if _SEV_RANK.get(new_sev, 3) > 1:
+                new_sev, note = "LOW", "Nằm trong file test/fixture/example — rủi ro thường thấp"
+        if note:
+            f["severity"] = new_sev
+            f["description"] = (f.get("description", "") or "") + f"\n[Giảm FP] {note}."
+    return findings
 
 
 class GitleaksScanner(BaseScanner):
@@ -73,7 +103,7 @@ class GitleaksScanner(BaseScanner):
                 "raw": result,
             })
 
-        return findings
+        return _reduce_secret_fp(findings)
 
 
 class DetectSecretsScanner(BaseScanner):
@@ -193,7 +223,7 @@ class DetectSecretsScanner(BaseScanner):
         except Exception:
             return []
 
-        return findings
+        return _reduce_secret_fp(findings)
 
     def _collect_files(self) -> List[str]:
         """Thu thập files phù hợp để scan."""
