@@ -139,7 +139,9 @@ async def run_katana(
             error_msg = str(e)[:500]
 
         endpoints, raw_lines = _parse_output(out_file, max_urls)
-        truncated = raw_lines > len(endpoints)
+        # 1.5: chỉ đánh dấu "truncated" khi THỰC SỰ chạm giới hạn max_urls — không
+        # phải khi raw_lines > số endpoint (đó chỉ là dedup bình thường, không mất dữ liệu).
+        truncated = len(endpoints) >= max_urls
 
         # Katana có thể exit code 0 mà vẫn không tìm thấy URL nào (domain chặn
         # bot/User-Agent, lỗi SSL/DNS, redirect loop, hoặc site cần JS render đầy đủ

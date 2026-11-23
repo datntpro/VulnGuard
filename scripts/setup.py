@@ -68,8 +68,10 @@ def bin_dir() -> Path:
     if IS_WIN:
         d = Path(os.environ.get("LOCALAPPDATA", ROOT)) / "VulnGuard" / "bin"
     else:
+        # 1.6: các lệnh cài (curl ... | sh -b <dir>) KHÔNG dùng sudo → nếu
+        # /usr/local/bin không ghi trực tiếp được thì dùng ~/.local/bin cho chắc.
         d = Path("/usr/local/bin")
-        if not os.access(d, os.W_OK) and not shutil.which("sudo"):
+        if not os.access(d, os.W_OK):
             d = Path.home() / ".local" / "bin"
     d.mkdir(parents=True, exist_ok=True)
     return d

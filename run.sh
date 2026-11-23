@@ -23,7 +23,7 @@ mkdir -p "$PWD/storage/db" "$PWD/storage/documents"
 # Đưa .venv/bin LÊN ĐẦU PATH để các scanner (semgrep, bandit, pip-audit,
 # detect-secrets…) cài trong venv luôn tìm thấy — nếu không, scan sẽ âm thầm
 # bỏ qua tool mà vẫn báo "0 lỗi" (P0.1).
-export PATH="$PWD/$VENV/bin:$PATH"
+export PATH="$PWD/$VENV/bin:$HOME/.local/bin:$PATH"
 # Mặc định CHỈ nghe localhost (an toàn). Mở ra ngoài bằng VULNGUARD_HOST=0.0.0.0 (P0.2).
 HOST="${VULNGUARD_HOST:-127.0.0.1}"
 echo "─────────────────────────────────────────────"

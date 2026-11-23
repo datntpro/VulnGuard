@@ -57,6 +57,7 @@ def _run_migrations():
             "ALTER TABLE domains ADD COLUMN ownership_token VARCHAR(80)",
             "ALTER TABLE domains ADD COLUMN ownership_method VARCHAR(20)",
             "ALTER TABLE domains ADD COLUMN ownership_verified_at DATETIME",
+            "ALTER TABLE pentest_runs ADD COLUMN scope_snapshot TEXT",  # 1.7 audit
         ):
             try:
                 conn.execute(text(ddl))
@@ -214,6 +215,16 @@ app.include_router(file_assistant.router)
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "VulnGuard", "deploy_mode": app_settings.deploy_mode}
+
+
+@app.get("/api/features")
+def features():
+    """1.9: cờ bật/tắt module (để ẩn khỏi bản bán theo ICP)."""
+    return {
+        "coworker": app_settings.feature_coworker,
+        "docreview": app_settings.feature_docreview,
+        "file_assistant": app_settings.feature_file_assistant,
+    }
 
 
 # Serve Web UI

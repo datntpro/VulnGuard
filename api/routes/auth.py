@@ -171,6 +171,14 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     request.state.user = None
 
+    # 1.9: chặn module đã tắt bằng feature flag (ẩn khỏi bản bán)
+    _feat = (("/api/coworker", settings.feature_coworker),
+             ("/api/docreview", settings.feature_docreview),
+             ("/api/file-assistant", settings.feature_file_assistant))
+    for prefix, on in _feat:
+        if not on and path.startswith(prefix):
+            return JSONResponse({"detail": "Module đã tắt trên bản triển khai này."}, status_code=404)
+
     if not settings.auth_enabled:
         # P0.2: auth TẮT → chặn các tính năng quét CHỦ ĐỘNG (có thể tấn công mục tiêu
         # ngoài). Instance mở không auth không được phép bắn web scan/crawl/pentest.
