@@ -187,6 +187,18 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
         vulns_for_summary = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
         summary = _compute_summary(vulns_for_summary)
         summary["scanner_logs"] = scanner_logs
+        # P0.1: đánh dấu cảnh báo nếu có công cụ BỊ BỎ QUA/LỖI — kết quả KHÔNG đầy đủ,
+        # không được hiểu "0 lỗi = sạch".
+        skipped = [t for t, l in scanner_logs.items() if l.get("status") == "skipped"]
+        errored = [t for t, l in scanner_logs.items() if l.get("status") == "error"]
+        summary["tools_skipped"] = skipped
+        summary["tools_errored"] = errored
+        if skipped or errored:
+            summary["scan_warning"] = (
+                "Kết quả KHÔNG đầy đủ — công cụ bị bỏ qua: "
+                + (", ".join(skipped) or "—")
+                + (("; lỗi: " + ", ".join(errored)) if errored else "")
+            )
         summary["ai_status"] = "pending" if (run_ai and findings) else "skipped"
         summary["ai_total"] = len(vulns_for_summary) if (run_ai and findings) else 0
         summary["ai_done"] = 0

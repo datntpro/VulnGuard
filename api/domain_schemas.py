@@ -21,6 +21,7 @@ class DomainOut(BaseModel):
     name: str
     url: str
     description: Optional[str] = None
+    ownership_verified: bool = False
     created_at: datetime
     crawl_count: int = 0
 

@@ -20,10 +20,17 @@ export DEPLOY_MODE="${DEPLOY_MODE:-native}"
 mkdir -p "$PWD/storage/db" "$PWD/storage/documents"
 
 [ -d "$VENV" ] || { echo "❌ Chưa cài. Chạy: bash setup.sh"; exit 1; }
+# Đưa .venv/bin LÊN ĐẦU PATH để các scanner (semgrep, bandit, pip-audit,
+# detect-secrets…) cài trong venv luôn tìm thấy — nếu không, scan sẽ âm thầm
+# bỏ qua tool mà vẫn báo "0 lỗi" (P0.1).
+export PATH="$PWD/$VENV/bin:$PATH"
+# Mặc định CHỈ nghe localhost (an toàn). Mở ra ngoài bằng VULNGUARD_HOST=0.0.0.0 (P0.2).
+HOST="${VULNGUARD_HOST:-127.0.0.1}"
 echo "─────────────────────────────────────────────"
-echo "  VulnGuard PRODUCTION:  http://localhost:$PORT"
+echo "  VulnGuard PRODUCTION:  http://$HOST:$PORT"
+[ "$HOST" = "0.0.0.0" ] && echo "  ⚠️  Đang mở ra TẤT CẢ network interface (VULNGUARD_HOST=0.0.0.0). Hãy đảm bảo có auth + firewall."
 echo "  Lần đầu: tạo tài khoản ADMIN ngay trên trang đăng nhập."
 echo "  (Ctrl+C để dừng)"
 echo "─────────────────────────────────────────────"
 WORKERS="${VULNGUARD_WORKERS:-1}"
-exec "$VENV/bin/uvicorn" api.main:app --host 0.0.0.0 --port "$PORT" --workers "$WORKERS"
+exec "$VENV/bin/uvicorn" api.main:app --host "$HOST" --port "$PORT" --workers "$WORKERS"

@@ -59,6 +59,12 @@ def _run_migrations():
             "ALTER TABLE vulnerabilities ADD COLUMN triage_at DATETIME",
             "ALTER TABLE vulnerabilities ADD COLUMN first_seen_at DATETIME",
             "ALTER TABLE vulnerabilities ADD COLUMN first_seen_scan_id VARCHAR",
+            # P0 (an toàn/trung thực)
+            "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 0",  # P0.3
+            "ALTER TABLE domains ADD COLUMN ownership_verified BOOLEAN DEFAULT 0",  # P0.4
+            "ALTER TABLE domains ADD COLUMN ownership_token VARCHAR(80)",
+            "ALTER TABLE domains ADD COLUMN ownership_method VARCHAR(20)",
+            "ALTER TABLE domains ADD COLUMN ownership_verified_at DATETIME",
         ):
             try:
                 conn.execute(text(ddl))

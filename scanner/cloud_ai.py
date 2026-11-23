@@ -87,12 +87,32 @@ def _mask(value: str) -> str:
     return f"{value[:3]}…[REDACTED {len(value)} ký tự]"
 
 
+# P0.7: PII tiếng Việt / nội bộ — che trước khi gửi ra cloud
+_PII_PATTERNS = [
+    (re.compile(r"\b\d{12}\b"), "[CCCD]"),                                   # CCCD/CMND 12 số
+    (re.compile(r"\b\d{9}\b"), "[CMND]"),                                    # CMND 9 số
+    (re.compile(r"(?<!\d)(?:\+?84|0)(?:\d[ .-]?){8,9}\d(?!\d)"), "[SĐT]"),   # số điện thoại VN
+    (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "[EMAIL]"),
+    (re.compile(r"\b(?:10|127|192\.168|169\.254)(?:\.\d{1,3}){1,3}\b"), "[IP_NỘI_BỘ]"),
+    (re.compile(r"\b172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}\b"), "[IP_NỘI_BỘ]"),
+]
+
+
+def redact_pii(text: str) -> str:
+    if not text:
+        return text
+    for pat, tag in _PII_PATTERNS:
+        text = pat.sub(tag, text)
+    return text
+
+
 def redact(text: str) -> str:
     if not text:
         return text
     for pat in _SECRET_PATTERNS:
         text = pat.sub(lambda m: _mask(m.group(0)), text)
-    return _ASSIGN_PATTERN.sub(lambda m: m.group(1) + _mask(m.group(2)) + m.group(3), text)
+    text = _ASSIGN_PATTERN.sub(lambda m: m.group(1) + _mask(m.group(2)) + m.group(3), text)
+    return redact_pii(text)   # P0.7: che luôn PII sau secret
 
 
 # ─────────────────────────────────────────────

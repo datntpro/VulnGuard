@@ -7,7 +7,7 @@
 **Bảo mật từ code đến hạ tầng — chạy local, AI hỗ trợ.**
 _Security from code to infrastructure — local-first, AI-assisted._
 
-Unified, local-first security platform: code · web · documents · automated pentest · context-aware asset & risk management — your data never leaves your machine.
+Unified, local-first security platform: code · web · documents · automated pentest · context-aware asset & risk management. **In local-only mode your data stays on your machine**; cloud AI is opt-in and sends only findings + redacted context (see [`docs/DATA_FLOW.md`](docs/DATA_FLOW.md)).
 
 **🌐 [English](#-english) · [Tiếng Việt](#-tiếng-việt)**
 
@@ -89,10 +89,13 @@ The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sq
 
 ## Security & privacy
 
-- **Local by default** — scanners + Ollama run on your machine; nothing is sent out.
-- **Auth + RBAC**; `setup.sh` auto-generates the ADMIN password (saved to `storage/admin_credentials.txt`, chmod 600 — change it then delete the file).
+- **Local by default** — scanners + Ollama run on your machine. In **local-only mode** no scan data is sent out. Cloud AI / connectors are opt-in and do send data — see [`docs/DATA_FLOW.md`](docs/DATA_FLOW.md).
+- **Listens on `127.0.0.1` by default** — expose externally only via `VULNGUARD_HOST=0.0.0.0` (behind auth + firewall).
+- **Auth + RBAC**; `setup.sh` generates the ADMIN password into `storage/admin_credentials.txt` (chmod 600, **not printed to the terminal**) and forces a change on first login — read it, log in, change it, delete the file.
 - **Secrets encrypted at rest** (Fernet): cloud AI keys, connector credentials — only hints are shown, never raw values.
-- **Cloud AI is opt-in**; in hybrid/cloud mode only findings + redacted code context are sent.
+- **Cloud AI is opt-in**; in hybrid/cloud mode only findings + redacted code context are sent (secrets and Vietnamese PII such as CCCD/phone/email/internal IPs are masked first).
+- **Authorized scanning only** — active scan/crawl/pentest require ownership verification; see [`EULA.md`](EULA.md).
+- **License:** AGPL-3.0 (Community) with a commercial option (Pro) — see [`LICENSE`](LICENSE) and [`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md).
 - The **Pentest Agent** operates only within an authorized scope; destructive actions require approval.
 
 ## CI/CD (DevSecOps)
@@ -168,7 +171,7 @@ GitHub Actions khép vòng: **`ci.yml`** chạy bộ test + **gate bảo mật B
 
 ## Bảo mật & Privacy
 
-- **Mặc định hoàn toàn local** — scanner + Ollama chạy tại chỗ, không gửi gì ra ngoài.
+- **Mặc định local** — scanner + Ollama chạy tại chỗ; ở **chế độ local-only, dữ liệu quét không rời máy**. Tính năng AI đám mây / connector là tùy chọn và CÓ gửi dữ liệu — xem [`docs/DATA_FLOW.md`](docs/DATA_FLOW.md).
 - **Đăng nhập + RBAC**; `setup.sh` tự sinh mật khẩu ADMIN (lưu `storage/admin_credentials.txt`, chmod 600 — đổi rồi xoá file).
 - **Secret mã hoá at-rest** (Fernet): key cloud AI, credential connector — chỉ hiện hint, không lộ raw.
 - **Cloud AI là opt-in**; chế độ hybrid/cloud chỉ gửi finding + ngữ cảnh code đã redact.
