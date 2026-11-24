@@ -2097,7 +2097,7 @@ async function loadKnowledge() {
       (s.auto_update ? ` · Tự cập nhật mỗi ${s.update_interval_hours}h` : ' · Tự cập nhật: TẮT') + '</span>' +
       (ecos ? `<br><span class="text-sm" style="color:var(--text2);">${ecos}</span>` : '');
   } catch (e) {
-    box.innerHTML = '❌ Lỗi tải trạng thái KB: ' + e.message;
+    box.innerHTML = '❌ Lỗi tải trạng thái KB: ' + escHtml(e.message);
   }
 }
 async function kbUpdateNow(force) {
@@ -2124,7 +2124,7 @@ async function kbImport() {
 // ─── Severity utils ───────────────────────────────────────────
 function sevBadge(s) {
   const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
-  return `<span class="badge ${cls[s] || 'badge-info'}">${s}</span>`;
+  return `<span class="badge ${cls[s] || 'badge-info'}">${escHtml(s)}</span>`;
 }
 // Markdown-lite → HTML an toàn: ```code```, `inline`, **bold**, bullet/number list, đoạn.
 function mdLite(text) {
@@ -2230,7 +2230,7 @@ const TRIAGE_STATES = [
 const STATUS_LABEL = Object.fromEntries(TRIAGE_STATES.map(s => [s.v, s.lbl]).concat([['FALSE_POSITIVE', 'False Positive']]));
 const STATUS_CLS = Object.fromEntries(TRIAGE_STATES.map(s => [s.v, s.cls]).concat([['FALSE_POSITIVE', 'badge-fp']]));
 function statusBadge(s) {
-  return `<span class="badge ${STATUS_CLS[s] || ''}">${STATUS_LABEL[s] || s}</span>`;
+  return `<span class="badge ${STATUS_CLS[s] || ''}">${escHtml(STATUS_LABEL[s] || s)}</span>`;
 }
 function fmtDate(d) { return d ? new Date(d).toLocaleString('vi-VN') : '—'; }
 
@@ -2597,8 +2597,8 @@ async function loadDomains() {
                      : `<button class="btn btn-ghost btn-sm" onclick="openOwnership('${d.id}')" title="Bắt buộc trước khi crawl/quét">⚠️ Xác minh</button>`}</td>
                 <td>${d.crawl_count}</td>
                 <td>
-                  <button class="btn btn-ghost btn-sm" onclick="openDomainCrawls('${d.id}','${escHtml(d.name)}')">Xem Crawls →</button>
-                  <button class="btn btn-ghost btn-sm" onclick="deleteDomain('${d.id}','${escHtml(d.name)}')">🗑</button>
+                  <button class="btn btn-ghost btn-sm" onclick="openDomainCrawls('${jsStr(d.id)}','${jsStr(d.name)}')">Xem Crawls →</button>
+                  <button class="btn btn-ghost btn-sm" onclick="deleteDomain('${jsStr(d.id)}','${jsStr(d.name)}')">🗑</button>
                 </td>
               </tr>
             `).join('')}
@@ -2683,7 +2683,7 @@ function renderCrawlCard(c) {
 
   let body = '';
   if (c.status === 'COMPLETED') {
-    const methodsHtml = Object.entries(s.methods || {}).map(([m,n]) => `<span class="tag">${m}: ${n}</span>`).join(' ');
+    const methodsHtml = Object.entries(s.methods || {}).map(([m,n]) => `<span class="tag">${escHtml(m)}: ${escHtml(n)}</span>`).join(' ');
     body = `
       <div class="grid4" style="margin-top:12px;gap:8px;">
         <div class="mini-stat">
@@ -2763,8 +2763,8 @@ function renderAISection(c) {
       <div class="text-sm" style="color:var(--text2);margin-bottom:4px;">⚠️ Endpoint nhạy cảm (${sensitive.length})</div>
       ${sensitive.map(e => `
         <div class="text-sm" style="background:var(--bg3);border-radius:6px;padding:8px;margin-bottom:6px;">
-          <span class="tag">${e.method||'GET'}</span> <code>${escHtml(e.path||'')}</code>
-          <span class="tag" style="margin-left:6px;">${AI_CATEGORY_LABEL[e.category] || e.category || 'unknown'}</span>
+          <span class="tag">${escHtml(e.method||'GET')}</span> <code>${escHtml(e.path||'')}</code>
+          <span class="tag" style="margin-left:6px;">${escHtml(AI_CATEGORY_LABEL[e.category] || e.category || 'unknown')}</span>
           <div style="color:var(--text2);margin-top:4px;">${escHtml(e.reason||'')}</div>
         </div>`).join('')}
     </div>` : '';
@@ -2775,7 +2775,7 @@ function renderAISection(c) {
         <div class="text-sm" style="background:var(--bg3);border-radius:6px;padding:8px;margin-bottom:6px;">
           <code>${escHtml(w.path||'')}</code>${w.param ? ` · param <code>${escHtml(w.param)}</code>` : ''}
           ${w.suggested_regex ? ` · regex <code>${escHtml(w.suggested_regex)}</code>` : ''}
-          <span class="tag" style="margin-left:6px;color:${w.suggested_action==='deny' ? 'var(--critical)' : 'var(--text2)'};">${(w.suggested_action||'log').toUpperCase()}</span>
+          <span class="tag" style="margin-left:6px;color:${w.suggested_action==='deny' ? 'var(--critical)' : 'var(--text2)'};">${escHtml(String(w.suggested_action||'log').toUpperCase())}</span>
           <div style="color:var(--text2);margin-top:4px;">${escHtml(w.reason||'')}</div>
         </div>`).join('')}
     </div>` : '';
@@ -2858,11 +2858,11 @@ async function loadEndpoints() {
           <tbody>
             ${endpoints.map(e => `
               <tr>
-                <td><span class="tag">${e.method}</span></td>
+                <td><span class="tag">${escHtml(e.method)}</span></td>
                 <td class="text-mono text-sm" title="${escHtml(e.url)}">${escHtml(e.path || e.url)}</td>
                 <td class="text-sm">${e.status_code || '—'}</td>
-                <td class="text-sm">${(e.query_params||[]).join(', ') || '—'}</td>
-                <td class="text-sm">${(e.body_params||[]).join(', ') || '—'}</td>
+                <td class="text-sm">${(e.query_params||[]).map(escHtml).join(', ') || '—'}</td>
+                <td class="text-sm">${(e.body_params||[]).map(escHtml).join(', ') || '—'}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -3175,7 +3175,7 @@ function renderVulnTable() {
       </div>
     </div>
     <div class="filter-bar">
-      <input style="max-width:200px;" id="filter-search" placeholder="Tìm theo tên/file..." value="${searchFilter}" oninput="renderVulnTable()">
+      <input style="max-width:200px;" id="filter-search" placeholder="Tìm theo tên/file..." value="${escHtml(searchFilter)}" oninput="renderVulnTable()">
       <select id="filter-sev" onchange="renderVulnTable()">
         <option value="">All Severity</option>
         <option value="CRITICAL" ${sevFilter==='CRITICAL'?'selected':''}>Critical</option>
@@ -3398,7 +3398,7 @@ async function loadDataflow(vulnId) {
           ${i < r.nodes.length - 1 ? '<span style="flex:1;width:2px;background:var(--border);min-height:18px;margin:2px 0;"></span>' : ''}
         </div>
         <div style="flex:1;">
-          <div class="text-sm"><strong>${LBL[n.label] || n.label}</strong>
+          <div class="text-sm"><strong>${escHtml(LBL[n.label] || n.label)}</strong>
             ${n.file ? `<span class="text-mono" style="color:var(--text2);"> · ${escHtml(n.file)}${n.line ? ':' + n.line : ''}</span>` : ''}</div>
           ${n.content ? `<div class="code-block" style="margin-top:3px;padding:6px 8px;font-size:12px;">${escHtml(n.content)}</div>` : ''}
         </div>
@@ -3792,13 +3792,13 @@ function closeProgressAndViewVulns() {
 }
 
 function escHtml(str) {
-  if (!str) return '';
+  if (str == null) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 // An toàn khi nhúng chuỗi người dùng vào JS string nháy đơn BÊN TRONG HTML attribute
 // nháy kép (vd onclick="fn('...')") — escape \ và ' cho JS rồi HTML-escape.
 function jsStr(s) {
-  return escHtml(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+  return escHtml(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029'));
 }
 
 // ─── APPROVE CHECK ────────────────────────────────────────────
@@ -4246,11 +4246,11 @@ async function loadVisionModel() {
     const cur = data.vision_model;
     const opts = installed.length ? installed : (cur ? [cur] : []);
     sel.innerHTML = opts.length
-      ? opts.map(n => `<option value="${n}" ${n === cur ? 'selected' : ''}>${n}</option>`).join('')
+      ? opts.map(n => `<option value="${escHtml(n)}" ${n === cur ? 'selected' : ''}>${escHtml(n)}</option>`).join('')
       : '<option value="">— Chưa có model nào —</option>';
     // nếu vision model cấu hình chưa được pull, vẫn hiển thị để biết
     if (cur && !installed.includes(cur)) {
-      sel.insertAdjacentHTML('afterbegin', `<option value="${cur}" selected>${cur} (chưa pull)</option>`);
+      sel.insertAdjacentHTML('afterbegin', `<option value="${escHtml(cur)}" selected>${escHtml(cur)} (chưa pull)</option>`);
     }
   } catch(e) { /* bỏ qua */ }
 }
@@ -4451,12 +4451,12 @@ async function cwLoadTree(path) {
   const treeEl = document.getElementById('cw-tree');
   treeEl.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   document.getElementById('cw-breadcrumb').innerHTML =
-    `📁 ${cwState.currentPath || '/'} ` +
+    `📁 ${escHtml(cwState.currentPath || '/')} ` +
     (cwState.currentPath ? `<a href="#" onclick="cwLoadTree('');return false;" style="color:var(--accent2);">[root]</a>` : '');
   try {
     const data = await api(`/api/coworker/fs/tree?folder_id=${cwState.folderId}&path=${encodeURIComponent(cwState.currentPath)}`);
     const parentBtn = cwState.currentPath
-      ? `<div style="cursor:pointer;padding:4px 0;color:var(--text2);" onclick="cwLoadTree('${cwState.currentPath.split('/').slice(0,-1).join('/')}')">⬅ ..</div>`
+      ? `<div style="cursor:pointer;padding:4px 0;color:var(--text2);" onclick="cwLoadTree('${jsStr(cwState.currentPath.split('/').slice(0,-1).join('/'))}')">⬅ ..</div>`
       : '';
     treeEl.innerHTML = parentBtn + data.entries.map(e => {
       const fullPath = cwState.currentPath ? `${cwState.currentPath}/${e.name}` : e.name;
@@ -4619,10 +4619,10 @@ async function loadDocReviews() {
                 <td><strong>${escHtml(d.name)}</strong>${d.description ? `<br><span class="text-sm">${escHtml(d.description)}</span>` : ''}</td>
                 <td class="text-sm">${escHtml(d.doc_type)}</td>
                 <td class="text-sm">${v ? 'v' + v.version_number : '—'}</td>
-                <td class="text-sm">${v ? (VERSION_STATUS_META[v.status] || v.status) : '—'}</td>
-                <td class="text-sm">${v ? (REVIEW_STATUS_META[v.review_status] || v.review_status) : '—'}</td>
+                <td class="text-sm">${v ? escHtml(VERSION_STATUS_META[v.status] || v.status) : '—'}</td>
+                <td class="text-sm">${v ? escHtml(REVIEW_STATUS_META[v.review_status] || v.review_status) : '—'}</td>
                 <td><strong>${score}</strong></td>
-                <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteDocument('${d.id}','${escHtml(d.name)}')">🗑</button></td>
+                <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteDocument('${jsStr(d.id)}','${jsStr(d.name)}')">🗑</button></td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -4705,7 +4705,7 @@ async function loadDocDetail() {
                   <tr style="cursor:pointer;${v.id === currentDocVersionId ? 'background:var(--bg3);' : ''}" onclick="selectDocVersion('${v.id}')">
                     <td><strong>v${v.version_number}</strong></td>
                     <td class="text-sm">${escHtml(v.original_filename)}</td>
-                    <td class="text-sm">${VERSION_STATUS_META[v.status] || v.status}</td>
+                    <td class="text-sm">${escHtml(VERSION_STATUS_META[v.status] || v.status)}</td>
                     <td>${v.summary && v.summary.score_pct != null ? v.summary.score_pct + '%' : '—'}</td>
                     <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();selectDocVersion('${v.id}')">Xem</button></td>
                   </tr>
@@ -4806,7 +4806,7 @@ async function renderDocVersionDetail() {
 
     el.innerHTML = `
       <div class="flex-between mb-16">
-        <div class="text-sm">v${v.version_number} — ${escHtml(v.original_filename)} — ${VERSION_STATUS_META[v.status] || v.status}</div>
+        <div class="text-sm">v${v.version_number} — ${escHtml(v.original_filename)} — ${escHtml(VERSION_STATUS_META[v.status] || v.status)}</div>
         <div class="flex">
           ${v.review_status === 'DONE' ? `<button class="btn btn-ghost btn-sm" onclick="window.open('/api/docreview/versions/${v.id}/export?download=true','_blank')">⬇ Báo cáo HTML</button>` : ''}
           ${v.review_status === 'DONE' ? `<button class="btn btn-ghost btn-sm" onclick="triggerReview('${v.id}')">↻ Review lại</button>` : ''}
@@ -5073,16 +5073,16 @@ function renderUsers() {
           <div class="user-avatar" style="width:30px;height:30px;font-size:11px;">${escHtml(initials(u.name || u.email))}</div>
           <div><strong>${escHtml(u.name || '—')}</strong>${self ? ' <span class="chip" style="margin-left:4px;">bạn</span>' : ''}<br><span class="text-sm">${escHtml(u.email)}</span></div>
         </div></td>
-        <td><select style="width:auto;min-width:130px;" ${self ? 'disabled title="Không thể tự đổi vai trò của chính mình"' : ''} onchange="updateUser('${escHtml(u.id)}', { role: this.value })">
+        <td><select style="width:auto;min-width:130px;" ${self ? 'disabled title="Không thể tự đổi vai trò của chính mình"' : ''} onchange="updateUser('${jsStr(u.id)}', { role: this.value })">
           ${['ADMIN', 'ANALYST', 'VIEWER'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r}</option>`).join('')}
         </select></td>
         <td><label class="toggle" title="${active ? 'Đang hoạt động — click để vô hiệu hóa' : 'Đã vô hiệu hóa — click để kích hoạt'}">
-          <input type="checkbox" ${active ? 'checked' : ''} ${self ? 'disabled' : ''} onchange="updateUser('${escHtml(u.id)}', { is_active: this.checked })">
+          <input type="checkbox" ${active ? 'checked' : ''} ${self ? 'disabled' : ''} onchange="updateUser('${jsStr(u.id)}', { is_active: this.checked })">
           <span class="toggle-slider"></span></label></td>
         <td class="text-sm">${u.last_login_at ? fmtDate(u.last_login_at) : 'Chưa đăng nhập'}${u.created_at ? `<br><span style="color:var(--text3)">Tạo: ${fmtDate(u.created_at)}</span>` : ''}</td>
         <td style="white-space:nowrap;text-align:right;">
-          <button class="btn btn-ghost btn-sm" onclick="openResetPassword('${escHtml(u.id)}')">🔑 Đặt lại mật khẩu</button>
-          ${self ? '' : `<button class="btn btn-ghost btn-sm" title="Xóa người dùng" onclick="deleteUser('${escHtml(u.id)}')">🗑</button>`}
+          <button class="btn btn-ghost btn-sm" onclick="openResetPassword('${jsStr(u.id)}')">🔑 Đặt lại mật khẩu</button>
+          ${self ? '' : `<button class="btn btn-ghost btn-sm" title="Xóa người dùng" onclick="deleteUser('${jsStr(u.id)}')">🗑</button>`}
         </td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
@@ -5504,9 +5504,9 @@ function renderWebScans() {
       </div>
       ${body}
       <div class="flex mt-16" style="flex-wrap:wrap;">
-        ${w.status === 'COMPLETED' ? `<button class="btn btn-primary btn-sm" onclick="selectWebScan('${escHtml(w.id)}')">Xem ${w.summary?.total ?? ''} findings →</button>` : ''}
-        ${isActiveScan(w) ? `<button class="btn btn-ghost btn-sm" onclick="selectWebScan('${escHtml(w.id)}')">Xem findings tạm thời</button>` : ''}
-        <button class="btn btn-ghost btn-sm" onclick="deleteWebScan('${escHtml(w.id)}')" title="Xóa lần quét">🗑</button>
+        ${w.status === 'COMPLETED' ? `<button class="btn btn-primary btn-sm" onclick="selectWebScan('${jsStr(w.id)}')">Xem ${w.summary?.total ?? ''} findings →</button>` : ''}
+        ${isActiveScan(w) ? `<button class="btn btn-ghost btn-sm" onclick="selectWebScan('${jsStr(w.id)}')">Xem findings tạm thời</button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="deleteWebScan('${jsStr(w.id)}')" title="Xóa lần quét">🗑</button>
       </div>
     </div>`;
   }).join('')}</div>`;
@@ -5594,7 +5594,7 @@ function renderWebFindingRows() {
     return true;
   });
   tb.innerHTML = rows.length ? rows.map(f => `
-    <tr class="vuln-row" onclick="openFindingDrawer('${escHtml(f.id)}')">
+    <tr class="vuln-row" onclick="openFindingDrawer('${jsStr(f.id)}')">
       <td>${sevBadge(String(f.severity || 'info').toUpperCase())}</td>
       <td><div style="font-weight:500;">${escHtml(f.name || f.template_id)}</div><div class="text-mono text-sm">${escHtml(f.template_id || '')}${f.cve ? ` · <span style="color:var(--info)">${escHtml(f.cve)}</span>` : ''}</div></td>
       <td class="text-mono text-sm" style="max-width:340px;word-break:break-all;">${escHtml(f.matched_at || f.host || '')}</td>
@@ -5617,7 +5617,7 @@ function openFindingDrawer(id) {
   document.getElementById('wf-body').innerHTML = `
     <div class="form-group">
       <label>Trạng thái</label>
-      <select id="wf-status-select" style="max-width:240px;" onchange="setWebFindingStatus('${escHtml(f.id)}', this.value)">
+      <select id="wf-status-select" style="max-width:240px;" onchange="setWebFindingStatus('${jsStr(f.id)}', this.value)">
         ${['OPEN', 'FALSE_POSITIVE', 'ACCEPTED', 'FIXED'].map(st => `<option value="${st}" ${(f.status || 'OPEN') === st ? 'selected' : ''}>${{ OPEN: 'Open', FALSE_POSITIVE: 'False Positive', ACCEPTED: 'Accepted', FIXED: 'Fixed' }[st]}</option>`).join('')}
       </select>
     </div>
@@ -5742,14 +5742,22 @@ function ptPretty(v) {
   try { return typeof v === 'string' ? v : JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 // Code block, show-more nếu dài
+// Nội dung đầy đủ giữ trong JS (không nhúng vào attribute HTML).
+const PT_FULL = {};
+function ptExpand(id, btn) {
+  const el = document.getElementById(id);
+  if (el && PT_FULL[id] != null) el.textContent = PT_FULL[id];
+  btn.remove();
+}
 function ptCode(v, label) {
   const s = ptPretty(v);
   if (!s) return '';
   const head = label ? `<label style="margin-top:10px;">${escHtml(label)}</label>` : '';
   if (s.length <= 1400) return `${head}<div class="code-block">${escHtml(s)}</div>`;
   const id = 'ptc' + Math.random().toString(36).slice(2, 8);
+  PT_FULL[id] = s;
   return `${head}<div class="code-block" id="${id}">${escHtml(s.slice(0, 1400))}…</div>
-    <button class="btn btn-ghost btn-sm" onclick="(function(b){document.getElementById('${id}').textContent=${JSON.stringify(s)};b.remove();})(this)">Xem thêm (${s.length} ký tự)</button>`;
+    <button class="btn btn-ghost btn-sm" onclick="ptExpand('${id}',this)">Xem thêm (${s.length} ký tự)</button>`;
 }
 
 // ─── Engagement list ──────────────────────────────────────────
@@ -5785,7 +5793,7 @@ function renderEngagementCards(counts) {
       ? ptBadge('✓ Đã uỷ quyền', 'var(--low)')
       : (expired ? ptBadge('⌛ Hết hạn uỷ quyền', 'var(--critical)') : ptBadge('✗ Chưa uỷ quyền', 'var(--text3)'));
     const modeBadge = ptBadge(e.default_mode === 'GUIDED' ? 'GUIDED' : 'AUTONOMOUS', 'var(--info)');
-    return `<div class="card pt-eng-card vg-lift" onclick="openEngagement('${escHtml(e.id)}')">
+    return `<div class="card pt-eng-card vg-lift" onclick="openEngagement('${jsStr(e.id)}')">
       <div class="flex-between" style="align-items:flex-start;">
         <strong style="font-size:15px;word-break:break-word;">${escHtml(e.name)}</strong>
       </div>
@@ -5984,7 +5992,7 @@ function renderRunsList() {
   const runs = ptState.runs;
   if (!runs.length) return `<div class="card"><div class="empty-state"><div class="icon">⚡</div><p>Chưa có phiên chạy nào</p></div></div>`;
   return `<div class="table-wrap card" style="padding:0;overflow:hidden;"><table><thead><tr><th width="60">#</th><th>Mục tiêu</th><th width="150">Trạng thái</th><th width="90">Bước</th><th width="110">Finding</th><th width="170">Bắt đầu</th></tr></thead><tbody>
-    ${runs.map(r => `<tr class="vuln-row" onclick="openRun('${escHtml(r.id)}')">
+    ${runs.map(r => `<tr class="vuln-row" onclick="openRun('${jsStr(r.id)}')">
       <td class="text-mono">#${escHtml(r.run_number)}</td>
       <td style="max-width:360px;"><div style="word-break:break-word;">${escHtml((r.goal || '').slice(0, 120))}</div><div class="text-mono text-sm" style="color:var(--text3)">${escHtml((r.targets || []).join(', ').slice(0, 80))}</div></td>
       <td>${ptRunStatusBadge(r.status)}</td>
@@ -6088,8 +6096,8 @@ function renderRunDetail() {
         ${a.rationale ? `<div class="text-sm" style="margin-bottom:8px;color:var(--text2)">💭 ${escHtml(a.rationale)}</div>` : ''}
         ${ptCode(a.tool_input, 'Tham số (tool_input)')}
         <div class="flex mt-8">
-          <button class="btn btn-sm" style="background:var(--low);color:#05210f;border:none;" onclick="decideApproval('${escHtml(a.id)}',true)">✓ Duyệt</button>
-          <button class="btn btn-danger btn-sm" onclick="decideApproval('${escHtml(a.id)}',false)">✗ Từ chối</button>
+          <button class="btn btn-sm" style="background:var(--low);color:#05210f;border:none;" onclick="decideApproval('${jsStr(a.id)}',true)">✓ Duyệt</button>
+          <button class="btn btn-danger btn-sm" onclick="decideApproval('${jsStr(a.id)}',false)">✗ Từ chối</button>
         </div>
       </div>`).join('')}
     </div>` : ''}
@@ -6103,7 +6111,7 @@ function renderRunDetail() {
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="padding:14px 16px;border-bottom:1px solid var(--border);"><label style="margin:0;">🔎 Findings (${ptState.findings.length})</label></div>
       <div class="table-wrap"><table><thead><tr><th width="100">Severity</th><th>Tiêu đề</th><th>Target</th><th width="90">Verified</th></tr></thead><tbody>
-        ${ptState.findings.length ? ptState.findings.map(f => `<tr class="vuln-row" onclick="openPentestFindingDrawer('${escHtml(f.id)}')">
+        ${ptState.findings.length ? ptState.findings.map(f => `<tr class="vuln-row" onclick="openPentestFindingDrawer('${jsStr(f.id)}')">
           <td>${psevBadge(f.severity)}</td>
           <td style="word-break:break-word;">${escHtml(f.title)}${f.cve ? ` <span class="text-mono text-sm" style="color:var(--info)">${escHtml(f.cve)}</span>` : ''}</td>
           <td class="text-mono text-sm" style="word-break:break-all;">${escHtml(f.target || '—')}</td>
@@ -6175,12 +6183,12 @@ async function openPentestFindingDrawer(id) {
     ${f.reproduction ? `<div class="separator"></div><label>Tái hiện</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.reproduction)}</div>` : ''}
     ${f.remediation ? `<div class="separator"></div><label>Khắc phục</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.remediation)}</div>` : ''}
     ${f.evidence ? `<div class="separator"></div><label>Bằng chứng</label>${ptCode(f.evidence)}` : ''}
-    ${f.evidence_traffic_id ? `<div class="mt-8"><button class="btn btn-ghost btn-sm" onclick="closePentestFindingDrawer();openTrafficDrawer('${escHtml(f.evidence_traffic_id)}',{run:true})">🌐 Xem traffic bằng chứng</button></div>` : ''}
+    ${f.evidence_traffic_id ? `<div class="mt-8"><button class="btn btn-ghost btn-sm" onclick="closePentestFindingDrawer();openTrafficDrawer('${jsStr(f.evidence_traffic_id)}',{run:true})">🌐 Xem traffic bằng chứng</button></div>` : ''}
     <div class="separator"></div>
     <label>Gắn bằng chứng (traffic của run)</label>
     ${ptState.runTraffic.length ? `<div class="flex" style="flex-wrap:wrap;">
       <select id="pf-bind-sel" style="flex:1;min-width:200px;">${trafOptions}</select>
-      <button class="btn btn-primary btn-sm" onclick="bindEvidence('${escHtml(f.id)}')">Gắn</button>
+      <button class="btn btn-primary btn-sm" onclick="bindEvidence('${jsStr(f.id)}')">Gắn</button>
     </div>` : `<div class="field-hint">Chưa có traffic nào trong run để gắn làm bằng chứng.</div>`}
   `;
   document.getElementById('pf-drawer-overlay').classList.add('open');
@@ -6254,7 +6262,7 @@ const PT_SRC_COLOR = { http_probe: 'var(--info)', nuclei: 'var(--high)', proxy: 
 function trafficRow(t, runCtx) {
   const sc = t.status_code;
   const scColor = sc == null ? 'var(--text3)' : (sc >= 500 ? 'var(--critical)' : sc >= 400 ? 'var(--high)' : sc >= 300 ? 'var(--medium)' : 'var(--low)');
-  return `<tr class="vuln-row" onclick="openTrafficDrawer('${escHtml(t.id)}',{run:${runCtx ? 'true' : 'false'}})">
+  return `<tr class="vuln-row" onclick="openTrafficDrawer('${jsStr(t.id)}',{run:${runCtx ? 'true' : 'false'}})">
     <td>${ptBadge(t.source || '—', PT_SRC_COLOR[t.source] || 'var(--text3)')}</td>
     <td class="text-mono">${escHtml(t.method || '—')}</td>
     <td class="text-mono text-sm" style="word-break:break-all;max-width:360px;">${escHtml(t.url || t.host || '—')}</td>
@@ -6304,9 +6312,9 @@ function renderTrafficDrawer(t, runCtx) {
   const findings = runCtx ? ptState.findings : [];
   document.getElementById('ptt-body').innerHTML = `
     <div class="flex" style="flex-wrap:wrap;margin-bottom:12px;">
-      <button class="btn btn-primary btn-sm" onclick="replayTraffic('${escHtml(t.id)}')">🔁 Replay</button>
+      <button class="btn btn-primary btn-sm" onclick="replayTraffic('${jsStr(t.id)}')">🔁 Replay</button>
       ${findings.length ? `<select id="ptt-bind-finding" style="width:auto;min-width:160px;">${findings.map(f => `<option value="${escHtml(f.id)}">${escHtml((f.title || '').slice(0, 50))}</option>`).join('')}</select>
-      <button class="btn btn-ghost btn-sm" onclick="bindTrafficToFinding('${escHtml(t.id)}')">📎 Gắn vào finding</button>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="bindTrafficToFinding('${jsStr(t.id)}')">📎 Gắn vào finding</button>` : ''}
     </div>
     <div id="ptt-replay-result"></div>
     <label>⬆ Request headers</label>${ptCode(hdr(t.request_headers))}
@@ -6332,7 +6340,7 @@ async function replayTraffic(id) {
   box.innerHTML = '<div class="text-sm">Đang replay...</div>';
   try {
     const r = await api(`/api/pentest/traffic/${id}/replay`, { method: 'POST' });
-    box.innerHTML = `<div class="notice" style="margin-bottom:12px;">✅ Replay — status <strong>${escHtml(r.status_code)}</strong>${r.new_traffic_id ? ` · <a href="#" onclick="openTrafficDrawer('${escHtml(r.new_traffic_id)}',{run:false});return false;">xem traffic mới</a>` : ''}</div>
+    box.innerHTML = `<div class="notice" style="margin-bottom:12px;">✅ Replay — status <strong>${escHtml(r.status_code)}</strong>${r.new_traffic_id ? ` · <a href="#" onclick="openTrafficDrawer('${jsStr(r.new_traffic_id)}',{run:false});return false;">xem traffic mới</a>` : ''}</div>
       ${r.response_preview ? `<label>Response preview</label>${ptCode(r.response_preview)}` : ''}`;
     if (ptState.engTab === 'traffic') loadEngagementTraffic();
   } catch (e) { box.innerHTML = `<div class="notice" style="border-color:color-mix(in srgb,var(--critical) 40%,transparent);">Lỗi replay: ${escHtml(e.message)}</div>`; }
@@ -6361,7 +6369,7 @@ const EXPOSURE_LABEL = { INTERNET: 'Internet', INTERNAL: 'Nội bộ', ISOLATED:
 
 function riskBandBadge(band) {
   const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
-  return `<span class="badge ${cls[band] || 'badge-info'}">${RISK_BAND_LABEL[band] || band}</span>`;
+  return `<span class="badge ${cls[band] || 'badge-info'}">${escHtml(RISK_BAND_LABEL[band] || band)}</span>`;
 }
 function riskScoreCell(score, band) {
   const color = { CRITICAL: 'var(--critical)', HIGH: 'var(--high)', MEDIUM: 'var(--medium)', LOW: 'var(--low)', INFO: 'var(--text3)' }[band] || 'var(--text3)';
@@ -6425,7 +6433,7 @@ function renderAssetsTable(rows) {
       <th style="text-align:center;">Cảnh báo</th><th>Nguồn</th><th>Thấy lần cuối</th>
     </tr></thead>
     <tbody>${rows.map(a => `
-      <tr class="vuln-row" style="cursor:pointer;" onclick="openAssetDrawer('${escHtml(a.id)}')">
+      <tr class="vuln-row" style="cursor:pointer;" onclick="openAssetDrawer('${jsStr(a.id)}')">
         <td><div style="font-weight:600;">${escHtml(a.hostname || '—')}</div><div class="text-mono text-sm">${escHtml(a.ip || '')}</div></td>
         <td class="text-sm">${escHtml(a.os || '—')}${a.os_version ? ' <span style="color:var(--text3)">' + escHtml(a.os_version) + '</span>' : ''}</td>
         <td>${riskScoreCell(a.risk_score, a.risk_band)}</td>
@@ -6499,7 +6507,7 @@ function renderAssetDrawer(a) {
     <div class="form-group"><label>Tags (phân cách bởi dấu phẩy)</label><input id="ad-tags" value="${escHtml((a.tags || []).join(', '))}" placeholder="pci, db, prod"></div>
     <div class="flex">
       <button class="btn btn-primary btn-sm" onclick="saveAssetEdit()">💾 Lưu & tính lại</button>
-      <button class="btn btn-danger btn-sm" onclick="deleteAsset('${escHtml(a.id)}')">🗑️ Xoá asset</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteAsset('${jsStr(a.id)}')">🗑️ Xoá asset</button>
     </div>
 
     <!-- Risk breakdown -->
@@ -6770,7 +6778,7 @@ async function scmBrowse(id) {
     cell.innerHTML = repos.length ? `<div style="max-height:260px;overflow:auto;">${repos.map(r => `
       <div class="flex-between" style="padding:4px 0;border-bottom:1px solid var(--border);">
         <span class="text-mono text-sm">${escHtml(r.full_name)} <span style="color:var(--text2);">(${escHtml(r.default_branch)})</span></span>
-        <button class="btn btn-ghost btn-sm" onclick="scmAddRepo('${id}','${escHtml(r.full_name)}','${escHtml(r.default_branch)}')">+ Thêm</button>
+        <button class="btn btn-ghost btn-sm" onclick="scmAddRepo('${jsStr(id)}','${jsStr(r.full_name)}','${jsStr(r.default_branch)}')">+ Thêm</button>
       </div>`).join('')}</div>` : '<span class="text-sm">Không có repo.</span>';
   } catch (e) { cell.innerHTML = '<span class="text-sm" style="color:var(--critical);">' + escHtml(e.message) + '</span>'; }
 }
@@ -6893,7 +6901,7 @@ function renderConnectors(rows) {
           </div>
           <div class="text-sm" style="color:var(--text2);margin-top:3px;">${escHtml(connKindLabel(c.kind))}${c.base_url ? ' · <span class="text-mono">' + escHtml(c.base_url) + '</span>' : ''}</div>
         </div>
-        <label class="toggle" title="Bật/tắt kết nối"><input type="checkbox" ${c.enabled ? 'checked' : ''} onchange="toggleConnectorEnabled('${escHtml(c.id)}', this.checked)"><span class="toggle-slider"></span></label>
+        <label class="toggle" title="Bật/tắt kết nối"><input type="checkbox" ${c.enabled ? 'checked' : ''} onchange="toggleConnectorEnabled('${jsStr(c.id)}', this.checked)"><span class="toggle-slider"></span></label>
       </div>
       ${c.last_sync_message ? `<div class="notice ${c.last_sync_status === 'error' ? 'warn' : ''}" style="margin:10px 0 0;">${escHtml(c.last_sync_message)}</div>` : ''}
       <div class="flex text-sm" style="margin-top:10px;flex-wrap:wrap;gap:12px;color:var(--text2);">
@@ -6903,10 +6911,10 @@ function renderConnectors(rows) {
         ${c.last_sync_at ? `<span>· Đồng bộ lần cuối: ${fmtDate(c.last_sync_at)}</span>` : ''}
       </div>
       <div class="flex" style="margin-top:12px;flex-wrap:wrap;">
-        <button class="btn btn-ghost btn-sm" onclick="testConnector('${escHtml(c.id)}')">🔍 Kiểm tra</button>
-        <button class="btn btn-primary btn-sm" onclick="syncConnector('${escHtml(c.id)}')" ${c.enabled ? '' : 'disabled title="Bật kết nối trước"'}>🔄 Đồng bộ</button>
-        <button class="btn btn-ghost btn-sm" onclick="openConnectorModal('${escHtml(c.id)}')">✏️ Sửa</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteConnector('${escHtml(c.id)}')">🗑️ Xoá</button>
+        <button class="btn btn-ghost btn-sm" onclick="testConnector('${jsStr(c.id)}')">🔍 Kiểm tra</button>
+        <button class="btn btn-primary btn-sm" onclick="syncConnector('${jsStr(c.id)}')" ${c.enabled ? '' : 'disabled title="Bật kết nối trước"'}>🔄 Đồng bộ</button>
+        <button class="btn btn-ghost btn-sm" onclick="openConnectorModal('${jsStr(c.id)}')">✏️ Sửa</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteConnector('${jsStr(c.id)}')">🗑️ Xoá</button>
       </div>
     </div>`;
   }).join('')}</div>`;
