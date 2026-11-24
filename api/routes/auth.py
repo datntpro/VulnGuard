@@ -48,6 +48,9 @@ ADMIN_ONLY = [
     ("*", "/api/coworker"),
     ("*", "/api/connectors"),
     ("POST", "/api/intel/refresh"),
+    # File Assistant đọc file theo đường dẫn tuyệt đối trên host → chỉ ADMIN (H2).
+    # (WebSocket stream được chặn riêng trong route vì middleware HTTP không chạy cho WS.)
+    ("*", "/api/file-assistant"),
 ]
 
 
