@@ -102,6 +102,15 @@ RUN ARCH=${TARGETARCH:-amd64} \
 RUN git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists 2>/dev/null \
     || echo "⚠ SecLists clone failed — content_discovery cần chỉ định wordlist thủ công"
 
+# 9. Chromium headless + fonts — render báo cáo PDF đẹp server-side (/report?format=pdf).
+#    Font Liberation/DejaVu phủ tiếng Việt; Noto Color Emoji cho badge 🔥/💀 trong report.
+#    Nếu cài lỗi, ảnh vẫn build được và PDF đẹp tự fallback sang in từ trình duyệt.
+RUN (apt-get update && apt-get install -y --no-install-recommends \
+        chromium fonts-liberation fonts-dejavu fonts-noto-color-emoji \
+     && rm -rf /var/lib/apt/lists/*) \
+    || echo "⚠ Chromium install failed — PDF server-side sẽ fallback sang in trình duyệt"
+ENV CHROMIUM_PATH=/usr/bin/chromium
+
 # ─────────────────────────────────────────────
 # Python dependencies
 # ─────────────────────────────────────────────
