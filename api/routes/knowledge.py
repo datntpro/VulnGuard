@@ -71,6 +71,14 @@ async def import_offline(file: UploadFile = File(...), sha256: Optional[str] = N
             os.unlink(tmp.name)
 
 
+@router.get("/cwe")
+def cwe_knowledge(cwe: str = "", scan_type: str = ""):
+    """Tri thức CWE (là gì/tác động/PoC/khắc phục) cho modal chi tiết lỗ hổng."""
+    from scanner.knowledge import cwe_catalog
+    info = cwe_catalog.lookup(cwe or None, scan_type or None)
+    return {"found": bool(info), "info": info or {}}
+
+
 @router.post("/enrich")
 def enrich(q: EnrichQuery):
     """Tra cứu làm giàu 1 lỗ hổng/package (fix version, CVSS, CWE, refs)."""

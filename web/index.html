@@ -1522,6 +1522,7 @@
           <div class="flex"><span class="text-sm">Nguồn phân tích:</span><span id="ai-provider-chip" class="chip">—</span></div>
           <button class="btn btn-ghost btn-sm" id="ai-reanalyze-btn" onclick="reanalyzeVuln()">🔁 Phân tích lại bằng AI</button>
         </div>
+        <div id="ai-knowledge" style="margin-bottom:14px;"></div>
         <div id="ai-content" style="display:none">
           <div id="ai-verdict" style="margin-bottom:12px;"></div>
           <div class="ai-box">
@@ -2175,6 +2176,30 @@ function verdictFromReason(reason) {
   if (/false positive/i.test(r)) return 'false_positive';
   if (/review/i.test(r)) return 'needs_review';
   return null;
+}
+// Khối "Phân tích & Khắc phục (tri thức)" trong modal — LUÔN có nội dung (không cần AI)
+async function renderVulnKnowledge(v) {
+  const box = document.getElementById('ai-knowledge');
+  if (!box) return;
+  box.innerHTML = '';
+  try {
+    const r = await api(`/api/knowledge/cwe?cwe=${encodeURIComponent(v.cwe||'')}&scan_type=${encodeURIComponent(v.scan_type||'')}`);
+    if (!r.found) return;
+    const i = r.info;
+    const row = (icon, label, html, color) => html ? `<div style="margin-top:8px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${color||'#0369a1'};margin-bottom:2px;">${icon} ${label}</div>
+      <div style="font-size:13px;line-height:1.55;">${html}</div></div>` : '';
+    const title = (i.cwe ? escHtml(i.cwe)+': ' : '') + escHtml(i.ten||'');
+    const risk = kbBadges(v);
+    box.innerHTML = `<div class="ai-box" style="border-left:4px solid #0369a1;background:var(--bg2);">
+      <div class="ai-label" style="color:#075985;">🧠 Phân tích &amp; Khắc phục (tri thức)</div>
+      <div style="font-weight:700;color:#0c4a6e;">${title}</div>
+      <div style="font-size:13px;line-height:1.55;margin-top:2px;">${escHtml(i.mo_ta||'')}</div>
+      ${row('💥','Tác động', escHtml(i.tac_dong||''), '#b91c1c')}
+      ${row('🎯','Khả năng khai thác / PoC', escHtml(i.poc||'') + (risk?`<div style="margin-top:4px;">${risk}</div>`:''), '#9a3412')}
+      ${row('🔧','Khắc phục', escHtml(i.khac_phuc||'') + (v.fixed_version?`<div style="margin-top:4px;color:var(--fixed,#15803d)">✅ Bản vá: <strong>${escHtml(v.fixed_version)}</strong></div>`:''), '#15803d')}
+    </div>`;
+  } catch (e) { /* im lặng — không chặn modal */ }
 }
 // Badge tri thức khai thác (KEV/EPSS) — hiển thị cạnh severity
 function kbBadges(v) {
@@ -3082,8 +3107,9 @@ function renderScanCard(sc, projectId) {
         ${scannerLogsHtml}
         <div class="flex" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="openVulns('${sc.id}')">Xem ${s.total||0} Vulnerabilities →</button>
-          <button class="btn btn-sm btn-ai" onclick="openAIReport('${sc.id}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
-          <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${sc.id}')" title="Tải xuống báo cáo AI dạng file .html để gửi email hoặc lưu trữ">⬇ Tải .html</button>
+          <button class="btn btn-sm btn-ai" onclick="openAIReport('${sc.id}')" title="Xem báo cáo trong tab mới">📊 Xem Báo Cáo</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadReportPdf('${sc.id}', this)" title="Tải báo cáo PDF (bản đẹp, render server-side)">⬇ PDF</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${sc.id}')" title="Tải xuống báo cáo dạng file .html">⬇ .html</button>
           <button class="btn btn-ghost btn-sm" onclick="checkApprove('${projectId}','${sc.id}')">✅ Approve Check</button>
         </div>
       ` : sc.status === 'FAILED' ? `
@@ -3137,9 +3163,10 @@ function renderVulnTable() {
           <option value="recurrent">Chỉ Tái xuất hiện</option>
         </select>
         <label class="text-sm" title="Chỉ gồm lỗ hổng còn mở (loại Không khai thác được / Đã sửa)"><input type="checkbox" id="export-scope" style="width:auto;"> chỉ còn mở</label>
-        <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo AI trong tab mới">📊 Xem Báo Cáo AI</button>
-        <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo AI dạng file .html">⬇ Tải .html</button>
-        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','pdf')" title="Xuất báo cáo PDF (tiếng Việt)">⬇ PDF</button>
+        <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo trong tab mới">📊 Xem Báo Cáo</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadReportPdf('${currentScanId}', this)" title="Tải báo cáo PDF bản đẹp (render server-side)">⬇ PDF (đẹp)</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo dạng file .html">⬇ .html</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','pdf')" title="PDF rút gọn (fpdf2, không cần trình duyệt)">⬇ PDF nhanh</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','csv')" title="Export CSV (mở bằng Excel)">⬇ CSV</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','md')" title="Xuất Markdown — gọn cho AI đọc / commit repo">⬇ MD</button>
@@ -3205,6 +3232,31 @@ function downloadAIReport(scanId) {
   const a = document.createElement('a');
   a.href = url;
   a.click();
+}
+
+// Tải PDF báo cáo đẹp (render server-side bằng Chromium). Nếu máy chủ không có
+// trình duyệt (501) → mở báo cáo HTML để người dùng tự "Lưu PDF / In".
+async function downloadReportPdf(scanId, btn) {
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tạo PDF...'; }
+  try {
+    const r = await fetch(`${API}/api/scans/${scanId}/report?format=pdf`);
+    if (r.status === 501) {
+      toast('Máy chủ chưa có Chromium — mở báo cáo để lưu PDF từ trình duyệt', 'warn');
+      window.open(`${API}/api/scans/${scanId}/report`, '_blank');
+      return;
+    }
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `vulnguard_report_scan_${scanId.slice(0,8)}.pdf`;
+    a.click(); URL.revokeObjectURL(a.href);
+  } catch (e) {
+    toast('Lỗi tạo PDF: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
 }
 
 function exportScan(scanId, format, newTab) {
@@ -3294,6 +3346,7 @@ function openVulnDetail(vulnId) {
   }
 
   renderAIProviderChip(v);
+  renderVulnKnowledge(v);
 
   // Waiver tab
   const waiverExisting = document.getElementById('waiver-existing');
