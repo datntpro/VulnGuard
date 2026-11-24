@@ -328,3 +328,98 @@ def test_b4_nuclei_argv_contains_etags():
     argv = build_command("t.txt", ["high"], ["cve"], False, 50, exclude_tags=sorted(toolbelt.DANGEROUS_NUCLEI_TAGS))
     etags = argv[argv.index("-etags") + 1].split(",")
     assert {"dos", "intrusive", "fuzz"} <= set(etags)
+
+
+# ───── Verifier findings (PR #26 review) ─────
+FUZZ_RULES = [{"type": "domain", "value": "inscope.lab", "include_subdomains": True, "mode": "allow"}]
+
+
+@pytest.mark.parametrize("url", [
+    "http://FUZZ.inscope.lab/", "https://FUZZ.inscope.lab", "http://api.FUZZ.inscope.lab/x",
+    "http://FUZZ/", "http://inscope.lab:FUZZ/", "FUZZ.inscope.lab", "FUZZ://inscope.lab/",
+])
+def test_v1_ffuf_fuzz_in_authority_rejected(wl_env, url):
+    _, _, seen = wl_env
+    out = _run(toolbelt._content_discovery({"url": url}))
+    assert out["ran"] is False and "argv" not in seen
+
+
+def test_v1_ffuf_fuzz_in_path_and_default_still_ok(wl_env, monkeypatch):
+    _, allowed, seen = wl_env
+    monkeypatch.setattr(toolbelt, "resolve_wordlist", lambda p: str(allowed / "ok.txt"))
+    _run(toolbelt._content_discovery({"url": "http://Inscope.LAB/api/FUZZ"}))
+    assert seen["argv"][seen["argv"].index("-u") + 1] == "http://inscope.lab/api/FUZZ"
+    _run(toolbelt._content_discovery({"url": "http://inscope.lab:8080/"}))
+    assert seen["argv"][seen["argv"].index("-u") + 1] == "http://inscope.lab:8080/FUZZ"
+
+
+IDN_RULES = [{"type": "domain", "value": "fass.lab", "include_subdomains": False, "mode": "allow"},
+             {"type": "ip", "value": "10.1.0.5", "mode": "allow"}]
+
+
+@pytest.mark.parametrize("host", ["faß.lab", "http://faß.lab/x", "https://faß.lab:8443/", "fasß.lab"])
+def test_v2_idna_2003_vs_2008_mismatch_rejected(host):
+    with pytest.raises(ScopeError):
+        canonicalize_target(host)
+    assert check_target(host, IDN_RULES)[0] is False
+    assert check_target("fass.lab", IDN_RULES)[0] is True       # tên ASCII thật vẫn in-scope
+
+
+def test_v2_http_probe_does_not_send_idna_mismatch():
+    sent = []
+
+    def handler(req):
+        sent.append(str(req.url))
+        return httpx.Response(200, text="x")
+    out = _run(toolbelt._http_probe({"url": "http://faß.lab/toplevel"},
+                                    {"scope_rules": IDN_RULES, "_transport": httpx.MockTransport(handler)}))
+    assert sent == [] and out["ran"] is False
+
+
+def test_v2_idna_redirect_hop_blocked():
+    out, sent = _probe("http://faß.lab/idna", rules=IDN_RULES)
+    assert sent == ["http://10.1.0.5/start"] and "redirect_blocked" in out
+
+
+def test_v2_canonical_url_is_ascii_and_stable():
+    from scanner.pentest.scope import canonical_url
+    assert canonical_url("HTTP://bücher.example.com:8080/a?b=1") == "http://xn--bcher-kva.example.com:8080/a?b=1"
+    assert canonical_url("Example.COM.") == "example.com"
+    assert canonical_url("http://[2001:db8::1]:81/x") == "http://[2001:db8::1]:81/x"
+
+
+def test_v2_tools_receive_canonical_targets(nuclei_calls):
+    _run(toolbelt._web_vuln_scan({"targets": ["HTTP://Example.COM./a"]}, {}))
+    assert nuclei_calls[-1]["targets"] == ["http://example.com/a"]
+
+
+def test_v3_nuclei_agent_runs_disable_redirects_and_interactsh(nuclei_calls):
+    from scanner.crawler.nuclei_runner import build_command
+    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"]}, {}))
+    assert nuclei_calls[-1]["safe_net"] is True
+    argv = build_command("t.txt", ["high"], [], False, 50, safe_net=True)
+    assert "-dr" in argv and "-ni" in argv
+    assert "-dr" not in build_command("t.txt", ["high"], [], False, 50)   # webscans không đổi
+
+
+@pytest.mark.parametrize("inp", [
+    {"targets": "http://10.1.0.5/", "url": "http://evil.example"},   # C5: fallback `url`
+    {"url": "http://evil.example"}, {"targets": []}, {"targets": [1]}, {"targets": ["a b"]},
+])
+def test_v4_nuclei_targets_must_be_list_of_checked_strings(nuclei_calls, inp):
+    out = _run(toolbelt._web_vuln_scan(inp, {}))
+    assert out["ran"] is False and nuclei_calls == []
+
+
+def test_v7_cidr_refused_when_non_ip_deny_rule_present():
+    rules = NET24 + [{"type": "domain", "value": "db.corp", "mode": "deny"}]
+    assert check_target("10.1.0.0/25", rules)[0] is False
+    assert check_target("10.1.0.5", rules)[0] is True       # IP đơn không đổi
+
+
+def test_v8_single_host_cidr_consistent(monkeypatch):
+    async def fake(argv, timeout):
+        return {"ran": True, "argv": argv}
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    out = _run(toolbelt._port_scan({"host": "172.18.0.2/32"}))
+    assert out["ran"] is True and out["argv"][-1] == "172.18.0.2"

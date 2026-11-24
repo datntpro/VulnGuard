@@ -23,7 +23,7 @@ def is_nuclei_available() -> bool:
 
 def build_command(targets_file: str, severities: List[str], tags: List[str], fuzz: bool,
                   rate_limit: int, concurrency: int = 10, capture_traffic: bool = False,
-                  exclude_tags: List[str] = None) -> List[str]:
+                  exclude_tags: List[str] = None, safe_net: bool = False) -> List[str]:
     sev = [s for s in severities if s in VALID_SEVERITIES] or list(VALID_SEVERITIES[:4])
     cmd = [
         NUCLEI_BIN,
@@ -42,6 +42,10 @@ def build_command(targets_file: str, severities: List[str], tags: List[str], fuz
         cmd += ["-tags", ",".join(t.strip() for t in tags if t.strip())]
     if exclude_tags:
         cmd += ["-etags", ",".join(t.strip() for t in exclude_tags if t.strip())]  # P0.9
+    if safe_net:
+        # Pentest Agent: không theo redirect của template ra ngoài scope (-dr) và không gửi callback
+        # OAST tới server interactsh công cộng của bên thứ ba (-ni)
+        cmd += ["-dr", "-ni"]
     if capture_traffic:
         cmd.append("-irr")          # include request/response trong JSONL → làm bằng chứng
     if fuzz:
@@ -108,6 +112,7 @@ async def run_nuclei(
     on_finding: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     capture_traffic: bool = False,
     exclude_tags: List[str] = None,
+    safe_net: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Chạy nuclei → (findings, meta{error, timed_out, stderr_tail})."""
     if not is_nuclei_available():
@@ -123,7 +128,7 @@ async def run_nuclei(
         with open(tfile, "w") as f:
             f.write("\n".join(targets))
         cmd = build_command(tfile, severities, tags, fuzz, rate_limit,
-                            capture_traffic=capture_traffic, exclude_tags=exclude_tags)
+                            capture_traffic=capture_traffic, exclude_tags=exclude_tags, safe_net=safe_net)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
