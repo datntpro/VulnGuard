@@ -238,13 +238,56 @@ def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depend
     return {"user": UserOut.model_validate(user), "token": token}
 
 
+# M5: chống brute-force đăng nhập — khoá tạm theo (IP, email) sau nhiều lần sai.
+import threading
+import time as _time
+
+_LOGIN_FAILS: dict = {}            # key → [count, first_ts]
+_LOGIN_LOCK = threading.Lock()
+_MAX_FAILS = 5
+_LOCK_WINDOW = 15 * 60             # 15 phút
+
+
+def _login_key(request: Request, email: str) -> str:
+    ip = request.client.host if request.client else "?"
+    return f"{ip}|{(email or '').lower()}"
+
+
+def _check_lockout(key: str):
+    with _LOGIN_LOCK:
+        rec = _LOGIN_FAILS.get(key)
+        if not rec:
+            return
+        count, first = rec
+        if _time.time() - first > _LOCK_WINDOW:
+            _LOGIN_FAILS.pop(key, None)
+            return
+        if count >= _MAX_FAILS:
+            retry = int(_LOCK_WINDOW - (_time.time() - first))
+            raise HTTPException(status_code=429,
+                                detail=f"Quá nhiều lần đăng nhập sai. Thử lại sau {retry // 60 + 1} phút.")
+
+
+def _record_fail(key: str):
+    with _LOGIN_LOCK:
+        count, first = _LOGIN_FAILS.get(key, [0, _time.time()])
+        if _time.time() - first > _LOCK_WINDOW:
+            count, first = 0, _time.time()
+        _LOGIN_FAILS[key] = [count + 1, first]
+
+
 @router.post("/login")
-def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
+def login(payload: LoginIn, response: Response, request: Request, db: Session = Depends(get_db)):
+    key = _login_key(request, payload.email)
+    _check_lockout(key)
     user = db.query(User).filter(User.email == payload.email).first()
     # verify_password chạy cả khi user không tồn tại → không lộ timing "email có tồn tại"
     ok = verify_password(payload.password, user.password_hash if user else hash_password("x" * 12))
     if not user or not ok or not user.is_active:
+        _record_fail(key)
         raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không đúng")
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(key, None)        # reset khi đăng nhập thành công
     user.last_login_at = datetime.utcnow()
     db.commit()
     token = _set_session(response, user)
@@ -252,7 +295,15 @@ def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
 
 
 @router.post("/logout")
-def logout(response: Response):
+def logout(response: Response, request: Request, db: Session = Depends(get_db)):
+    # M5: thu hồi JWT — tăng token_version để MỌI token đã cấp mất hiệu lực ngay
+    # (current_user kiểm tra tv khớp token_version). Không chỉ xoá cookie.
+    user = getattr(request.state, "user", None)
+    if user is not None and getattr(user, "id", None):
+        row = db.query(User).filter(User.id == user.id).first()
+        if row:
+            row.token_version = (row.token_version or 0) + 1
+            db.commit()
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"ok": True}
 
