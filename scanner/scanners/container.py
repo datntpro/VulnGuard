@@ -82,14 +82,17 @@ class TrivyContainerScanner(BaseScanner):
         rc, stdout, stderr = await run_command(cmd, timeout=300, env=trivy_env())
 
         if not stdout.strip():
-            if rc != 0:
-                self._errors.append(f"trivy {image} (exit {rc}): {stderr[-300:]}")
+            # --format json luôn in JSON khi chạy đúng → rỗng = lỗi (kể cả rc 0)
+            self._errors.append(f"trivy {image} không in output (exit {rc}): {stderr[-300:]}")
             return []
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
             self._errors.append(f"trivy {image}: output không phải JSON (exit {rc}): {stderr[-300:]}")
+            return []
+        if not isinstance(data, dict):
+            self._errors.append(f"trivy {image}: output JSON không hợp lệ (exit {rc})")
             return []
 
         for result in data.get("Results", []):
@@ -136,13 +139,18 @@ class GrypeScanner(BaseScanner):
 
         rc, stdout, stderr = await run_command(cmd, timeout=300)
 
+        # grype -o json luôn in JSON (kể cả {"matches": []}) → rỗng / không phải JSON = tool hỏng
         if not stdout.strip():
-            return []
+            raise ScannerRunError(f"grype không in output (exit {rc}): {stderr[-500:]}")
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
-            return []
+            raise ScannerRunError(
+                f"grype output không phải JSON (exit {rc}): {stderr[-500:]}"
+            ) from None
+        if not isinstance(data, dict) or "matches" not in data:
+            raise ScannerRunError(f"grype output thiếu 'matches' (exit {rc})")
 
         for match in data.get("matches", []):
             artifact = match.get("artifact", {})

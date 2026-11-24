@@ -160,10 +160,8 @@ class SemgrepScanner(BaseScanner):
 
         if not stdout.strip():
             # Với --json, semgrep chạy đúng luôn in JSON (kể cả khi sạch / rc 1).
-            # stdout rỗng + exit khác 0 = tool hỏng (vd ImportError) → KHÔNG phải "0 findings".
-            if rc != 0:
-                raise ScannerRunError(f"semgrep thất bại (exit {rc}): {stderr[-500:]}")
-            return []
+            # stdout rỗng = tool hỏng (vd ImportError) → KHÔNG phải "0 findings".
+            raise ScannerRunError(f"semgrep không in output (exit {rc}): {stderr[-500:]}")
 
         try:
             data = json.loads(stdout)
@@ -171,6 +169,9 @@ class SemgrepScanner(BaseScanner):
             raise ScannerRunError(
                 f"semgrep output không phải JSON (exit {rc}): {stderr[-500:]}"
             ) from None
+
+        if not isinstance(data, dict) or "results" not in data:
+            raise ScannerRunError(f"semgrep output thiếu 'results' (exit {rc}): {stderr[-500:]}")
 
         if rc >= 2 or rc < 0:
             errors = data.get("errors") or []
@@ -230,20 +231,20 @@ class BanditScanner(BaseScanner):
 
         rc, stdout, stderr = await run_command(cmd, timeout=120)
 
-        # Bandit trả về exit code 1 khi có findings — bình thường
+        # Bandit exit 1 = có findings, NHƯNG một bandit bị crash (ImportError...) cũng exit 1.
+        # Với -f json bandit luôn in JSON ra stdout → chỉ coi là thành công khi parse được
+        # JSON có khóa "results"; còn lại là tool hỏng.
         if not stdout.strip():
-            if rc not in (0, 1):
-                raise ScannerRunError(f"bandit thất bại (exit {rc}): {stderr[-500:]}")
-            return []
+            raise ScannerRunError(f"bandit không in output (exit {rc}): {stderr[-500:]}")
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
-            if rc not in (0, 1):
-                raise ScannerRunError(
-                    f"bandit output không phải JSON (exit {rc}): {stderr[-500:]}"
-                ) from None
-            return []
+            raise ScannerRunError(
+                f"bandit output không phải JSON (exit {rc}): {stderr[-500:]}"
+            ) from None
+        if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+            raise ScannerRunError(f"bandit output thiếu 'results' (exit {rc}): {stderr[-500:]}")
 
         for result in data.get("results", []):
             file_path = result.get("filename", "")

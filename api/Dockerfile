@@ -152,12 +152,10 @@ ENV HOME=/home/appuser \
     XDG_CONFIG_HOME=/home/appuser/.config \
     TRIVY_CACHE_DIR=/app/storage/.trivy-cache
 
-# Pre-cache Semgrep rules (ghi vào SEMGREP_HOME mới). semgrep phải chạy được (hard check);
-# riêng bước tải rules có thể thất bại khi build offline → cảnh báo hiển thị, không im lặng.
-RUN semgrep --version \
- && (semgrep --config p/python --config p/security-audit --config p/owasp-top-ten \
-     --metrics=off --dry-run /dev/null \
-     || echo "⚠ semgrep rule pre-cache failed (offline build?)")
+# Semgrep phải chạy được (venv sau khi đã đặt HOME/SEMGREP_HOME) (hard check, build FAIL nếu hỏng).
+# Không pre-cache rule registry: semgrep không giữ lại config registry giữa các lần chạy,
+# nên scan online tải rule khi chạy; bundled rules (scanner/rules) luôn dùng được offline.
+RUN semgrep --version
 
 # ─────────────────────────────────────────────
 # Copy source code
