@@ -48,11 +48,15 @@ class TrivySCAScanner(BaseScanner):
         findings = []
         if not os.path.exists(self.scan_path):
             raise RuntimeError(f"Đường dẫn quét không tồn tại: {self.scan_path}")
+        skip_args = []
+        for d in ("node_modules", ".git", "venv", ".venv", "site-packages", "dist", "build", "vendor"):
+            skip_args += ["--skip-dirs", f"**/{d}/**"]
         cmd = [
             "trivy", "fs",
             "--format", "json",
             "--scanners", "vuln",
             "--severity", "CRITICAL,HIGH,MEDIUM,LOW",
+            *skip_args,
             "--quiet",
             self.scan_path,
         ]

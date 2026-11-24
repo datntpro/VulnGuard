@@ -130,6 +130,10 @@ class SemgrepScanner(BaseScanner):
 
     async def _run_semgrep(self, config_args: List[str], timeout: int = 90) -> List[Dict[str, Any]]:
         """Chạy semgrep với config args đã cho."""
+        from scanner.scanners.base import EXCLUDE_DIR_NAMES
+        exclude_args = []
+        for d in EXCLUDE_DIR_NAMES:
+            exclude_args += ["--exclude", d]
         cmd = [
             "semgrep",
             *config_args,
@@ -139,6 +143,7 @@ class SemgrepScanner(BaseScanner):
             "--timeout", "30",
             "--max-memory", "1500",
             "--no-git-ignore",
+            *exclude_args,         # loại thư viện bên thứ ba / venv
             "--quiet",
             self.scan_path,
         ]
@@ -193,12 +198,15 @@ class BanditScanner(BaseScanner):
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
+        from scanner.scanners.base import EXCLUDE_GLOBS
         cmd = [
             "bandit",
             "-r", self.scan_path,
             "-f", "json",
             "-ll",    # Minimum level: LOW
             "--quiet",
+            # Loại thư viện bên thứ ba / venv khỏi scan (tránh ngập site-packages)
+            "--exclude", ",".join(EXCLUDE_GLOBS),
         ]
 
         rc, stdout, stderr = await run_command(cmd, timeout=120)

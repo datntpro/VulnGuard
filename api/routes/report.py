@@ -135,6 +135,75 @@ def _esc(text: str) -> str:
             .replace('"', "&quot;"))
 
 
+def _knowledge_block(g: dict) -> str:
+    """
+    Khối 'Phân tích & Khắc phục (tri thức)' — LUÔN có nội dung, không phụ thuộc AI.
+    Ghép từ catalog CWE (là gì / tác động / PoC / khắc phục) + tri thức lỗ hổng
+    (EPSS/KEV/bản vá/summary/tham chiếu từ KB). Trả "" nếu không suy được gì.
+    """
+    from scanner.knowledge import cwe_catalog
+    cwe_field = g["items"][0].get("cwe") if g.get("items") else None
+    info = cwe_catalog.lookup(cwe_field, g.get("scan_type"))
+    if not info:
+        return ""
+
+    # Tri thức lỗ hổng cho SCA: summary + references từ KB (an toàn nếu KB vắng)
+    kb_summary, kb_refs = "", []
+    cves = g.get("cve_list") or []
+    if cves:
+        try:
+            from scanner.knowledge import store
+            e = store.enrich(cve=cves[0])
+            kb_summary = e.get("summary") or ""
+            kb_refs = e.get("references") or []
+        except Exception:
+            pass
+
+    head = info.get("cwe") or (f"CWE-{''.join(ch for ch in str(cwe_field) if ch.isdigit())}"
+                               if cwe_field else "")
+    # Tín hiệu rủi ro (badge KEV/EPSS/CVSS) để phần PoC có bối cảnh ưu tiên
+    risk = _exploit_badges(g)
+    cvss = g["items"][0].get("cvss_score") if g.get("items") else ""
+    if cvss:
+        risk += (f' <span class="badge" style="color:#374151;background:#f3f4f6;'
+                 f'border:1px solid #37415120">CVSS {_esc(cvss)}</span>')
+
+    def row(icon, label, text, color="#0369a1"):
+        if not text:
+            return ""
+        return (f'<div style="margin-top:8px;">'
+                f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
+                f'letter-spacing:.5px;color:{color};margin-bottom:3px;">{icon} {label}</div>'
+                f'<div style="font-size:13px;line-height:1.55;color:#1f2937;">{text}</div></div>')
+
+    refs_html = ""
+    ref_links = []
+    if head and head.startswith("CWE-"):
+        n = head.split("-", 1)[1]
+        ref_links.append(f'<a href="https://cwe.mitre.org/data/definitions/{n}.html" '
+                         f'style="color:#2563eb;">{_esc(head)} (MITRE)</a>')
+    for r in kb_refs[:5]:
+        ref_links.append(f'<a href="{_esc(r)}" style="color:#2563eb;word-break:break-all;">{_esc(r)}</a>')
+    if ref_links:
+        refs_html = row("📎", "Tham chiếu", " · ".join(ref_links), "#6b7280")
+
+    title = f'{_esc(head)}: {_esc(info["ten"])}' if head else _esc(info["ten"])
+    desc = _esc(info["mo_ta"])
+    if kb_summary:
+        desc += f'<br><em style="color:#475569;">{_esc(kb_summary)}</em>'
+
+    return f"""
+    <div class="ai-block" style="border-left:4px solid #0369a1;background:#f0f9ff;">
+      <div class="ai-label" style="color:#075985;">🧠 Phân tích &amp; Khắc phục (tri thức)</div>
+      <div style="font-weight:700;font-size:14px;color:#0c4a6e;margin-bottom:2px;">{title}</div>
+      <div style="font-size:13px;line-height:1.55;color:#1f2937;">{desc}</div>
+      {row("💥", "Tác động", _esc(info.get("tac_dong")), "#b91c1c")}
+      {row("🎯", "Khả năng khai thác / PoC", _esc(info.get("poc")) + (("<div style='margin-top:4px;'>" + risk + "</div>") if risk else ""), "#9a3412")}
+      {row("🔧", "Khắc phục", _esc(info.get("khac_phuc")), "#15803d")}
+      {refs_html}
+    </div>"""
+
+
 def _md_lite(text: str) -> str:
     """Markdown rút gọn → HTML an toàn: ```code```, `inline`, **bold**, bullet/number list.
     Dùng cho phần phân tích AI để dễ đọc thay vì 1 khối text phẳng."""
@@ -577,6 +646,9 @@ def _render_html(
             ai_priv      = g.get("ai_exploitability_private", "")
             has_ai       = bool(ai_expl and not _is_fallback_text(ai_expl))
 
+            # Khối tri thức LUÔN hiển thị (không phụ thuộc AI)
+            knowledge_html = _knowledge_block(g)
+
             ai_section_html = ""
             if has_ai:
                 # FP likelihood badge
@@ -657,14 +729,23 @@ def _render_html(
                   <div class="ai-label">🔧 Hướng dẫn khắc phục</div>
                   <div style="font-size:13px;line-height:1.6;">{_md_lite(ai_fix)}</div>
                 </div>"""
+            elif knowledge_html:
+                # Không có AI nhưng ĐÃ có khối tri thức → chỉ ghi chú nhỏ, không rỗng
+                ai_section_html = """
+                <div style="margin:8px 0 0;padding:5px 10px;background:#f8fafc;
+                            border:1px dashed #cbd5e1;border-radius:6px;
+                            font-size:11px;color:#94a3b8;">
+                  🤖 Bật "AI Analysis" khi scan để có thêm phân tích theo ngữ cảnh code cụ thể của bạn.
+                </div>"""
             else:
-                # Chưa có AI data — hiển thị badge nhỏ
                 ai_section_html = """
                 <div style="margin:8px 16px;padding:6px 12px;background:#f8fafc;
                             border:1px dashed #cbd5e1;border-radius:6px;
                             font-size:12px;color:#94a3b8;">
                   🤖 Chưa có phân tích AI — chạy lại scan với AI Analysis được bật
                 </div>"""
+            # Ghép khối tri thức lên TRƯỚC khối AI
+            ai_section_html = knowledge_html + ai_section_html
 
             # Locations / findings
             findings_html = ""
