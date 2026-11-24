@@ -27,6 +27,9 @@ services:
       # cho tính năng Co-work đọc/sửa file & chạy lệnh ngoài Docker
       - COWORKER_URL=${COWORKER_URL:-http://host.docker.internal:8765}
       - COWORKER_TIMEOUT=${COWORKER_TIMEOUT:-30}
+      # Token xác thực coworker_host (BẮT BUỘC). Đặt GIỐNG NHAU ở đây và khi chạy
+      # coworker_host/run.sh trên máy host. Để trống → Co-work gọi host sẽ bị 401.
+      - VULNGUARD_COWORKER_TOKEN=${VULNGUARD_COWORKER_TOKEN:-}
       - MAX_SCANS_PER_PROJECT=${MAX_SCANS_PER_PROJECT:-5}
       - APP_ENV=${APP_ENV:-production}
       # SonarQube (tuỳ chọn) — trỏ server sẵn có, hoặc dùng service bundled bên dưới

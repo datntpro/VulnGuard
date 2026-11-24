@@ -30,11 +30,20 @@ COWORKER_URL = settings.coworker_url
 COWORKER_TIMEOUT = settings.coworker_timeout
 
 
+def _coworker_headers() -> dict:
+    """Bearer token để xác thực với coworker_host (bắt buộc kể từ bản vá bảo mật).
+    Lấy từ VULNGUARD_COWORKER_TOKEN — phải đặt GIỐNG ở app và coworker_host."""
+    import os
+    tok = (os.environ.get("VULNGUARD_COWORKER_TOKEN") or "").strip()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
 async def _host_request(method: str, path: str, **kwargs):
     """Gọi sang coworker_host, map lỗi kết nối thành 503 dễ hiểu cho UI."""
+    headers = {**_coworker_headers(), **(kwargs.pop("headers", None) or {})}
     try:
         async with httpx.AsyncClient(timeout=COWORKER_TIMEOUT, trust_env=False) as client:
-            r = await client.request(method, f"{COWORKER_URL}{path}", **kwargs)
+            r = await client.request(method, f"{COWORKER_URL}{path}", headers=headers, **kwargs)
             if r.status_code >= 400:
                 try:
                     detail = r.json().get("detail", r.text)
