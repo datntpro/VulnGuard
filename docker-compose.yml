@@ -8,13 +8,21 @@ services:
       context: .
       dockerfile: api/Dockerfile
     container_name: vulnguard-api
+    # H4: chỉ phơi ra localhost theo mặc định (đổi VULNGUARD_BIND=0.0.0.0 nếu CỐ Ý
+    # muốn truy cập từ máy khác trong mạng — cần hiểu rủi ro).
     ports:
-      - "${VULNGUARD_PORT:-8080}:8080"
+      - "${VULNGUARD_BIND:-127.0.0.1}:${VULNGUARD_PORT:-8080}:8080"
       # Recording MITM proxy (Pentest Agent — bắt bằng chứng từ trình duyệt/công cụ)
-      - "${PENTEST_PROXY_PORT:-8788}:8788"
+      - "${VULNGUARD_BIND:-127.0.0.1}:${PENTEST_PROXY_PORT:-8788}:8788"
+    # H4: chặn leo thang đặc quyền trong container.
+    security_opt:
+      - no-new-privileges:true
     volumes:
+      # Lưu ý: container chạy non-root (uid 10001). Nếu ./storage không ghi được,
+      # chạy: mkdir -p storage && chmod -R 777 storage  (hoặc chown 10001).
       - ./storage:/app/storage
-      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      # docker.sock chỉ-đọc: đủ cho quét image (trivy/grype đọc), chặn tạo container.
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:ro
       - ${SCAN_WORKSPACE:-/tmp}:/workspace
     environment:
       - DEPLOY_MODE=docker
