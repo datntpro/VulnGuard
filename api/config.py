@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     max_webscans_per_domain: int = 5
     nuclei_timeout_minutes: int = 60
 
+    # ── Knowledge Base (DB tri thức lỗ hổng, kiểu Trivy DB) ──
+    # Máy đã cài tự tải snapshot KB mới nhất từ URL manifest (GitHub Releases).
+    # Để trống kb_manifest_url → tắt auto-update (chỉ import offline thủ công).
+    kb_manifest_url: str = "https://github.com/datntpro/vulnguard/releases/download/kb-latest/kb-manifest.json"
+    kb_auto_update: bool = True            # kiểm tra + tải bản mới hàng ngày
+    kb_update_interval_hours: int = 24     # chu kỳ kiểm tra
+
     @property
     def storage_dir(self) -> str:
         """Thư mục storage gốc — suy ra từ DATABASE_URL (…/storage/db/x.db → …/storage)."""

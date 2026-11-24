@@ -148,6 +148,43 @@ class Vulnerability(Base):
     scan = relationship("Scan", back_populates="vulnerabilities")
     waiver = relationship("Waiver", back_populates="vulnerability", uselist=False, cascade="all, delete-orphan")
 
+    # ── Tri thức khai thác (EPSS/KEV) + nâng ưu tiên — lưu trong raw_output
+    #    dưới khoá _vulnguard_kb (không cần cột mới). Expose qua property để VulnOut đọc.
+    @property
+    def _kb(self) -> dict:
+        ro = self.raw_output
+        return ro.get("_vulnguard_kb", {}) if isinstance(ro, dict) else {}
+
+    @property
+    def epss(self):
+        v = self._kb.get("epss")
+        return float(v) if isinstance(v, (int, float)) else None
+
+    @property
+    def epss_percentile(self):
+        v = self._kb.get("epss_percentile")
+        return float(v) if isinstance(v, (int, float)) else None
+
+    @property
+    def kev(self) -> bool:
+        return bool(self._kb.get("kev"))
+
+    @property
+    def kev_ransomware(self) -> bool:
+        return bool(self._kb.get("kev_ransomware"))
+
+    @property
+    def kev_due_date(self):
+        return self._kb.get("kev_due_date")
+
+    @property
+    def priority_reason(self):
+        return self._kb.get("priority_reason")
+
+    @property
+    def severity_original(self):
+        return self._kb.get("severity_original")
+
 
 # ─────────────────────────────────────────────
 class Waiver(Base):

@@ -183,6 +183,17 @@ class Orchestrator:
                 except Exception as cb_err:
                     logger.error(f"Progress callback error: {cb_err}")
 
+        # Làm giàu từ Knowledge Base (fix version, CWE, refs, EPSS, KEV) + nâng ưu
+        # tiên theo tri thức khai thác — không chặn nếu KB vắng.
+        try:
+            from scanner.knowledge.store import enrich_findings, prioritize_findings
+            enriched = enrich_findings(all_findings)
+            bumped = prioritize_findings(all_findings)
+            if enriched or bumped:
+                logger.info(f"✔ KB enriched {enriched} findings, nâng ưu tiên {bumped}")
+        except Exception as e:
+            logger.debug(f"KB enrich bỏ qua: {e}")
+
         logger.info(f"✔ Total findings after dedup: {len(all_findings)}")
         return all_findings, scanner_logs
 

@@ -1,0 +1,320 @@
+"""
+Knowledge Base store — DB tri thức lỗ hổng (CVE/advisory/fix version) tách RIÊNG
+khỏi DB ứng dụng, để cập nhật/hoán đổi nguyên khối (giống Trivy DB).
+
+File: <storage>/knowledge/kb.sqlite  (updater tải bản mới về rồi swap atomically).
+Đọc-nhiều, ghi khi build/import. Dùng để làm giàu finding: fix version, CVSS, CWE,
+exploit/KEV, tham chiếu.
+"""
+import json
+import os
+import sqlite3
+from contextlib import closing
+from typing import Any, Dict, List, Optional
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS advisory (
+  id TEXT PRIMARY KEY,
+  source TEXT, cve TEXT, ghsa TEXT, summary TEXT,
+  severity TEXT, cvss REAL, cwe TEXT,
+  ecosystem TEXT, package TEXT,
+  introduced TEXT, fixed TEXT,
+  refs TEXT, published TEXT, modified TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_adv_cve ON advisory(cve);
+CREATE INDEX IF NOT EXISTS ix_adv_pkg ON advisory(ecosystem, package);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+-- EPSS (FIRST): xác suất bị khai thác theo CVE, keyed riêng vì EPSS theo CVE
+-- chứ không theo package. Join khi enrich.
+CREATE TABLE IF NOT EXISTS epss (
+  cve TEXT PRIMARY KEY, epss REAL, percentile REAL, score_date TEXT
+);
+-- CISA KEV: lỗ hổng ĐANG bị khai thác thực tế (keyed theo CVE). Có mặt ở đây
+-- = ưu tiên fix cao nhất; ransomware=1 nếu liên quan chiến dịch ransomware.
+CREATE TABLE IF NOT EXISTS kev (
+  cve TEXT PRIMARY KEY, date_added TEXT, vendor_project TEXT, product TEXT,
+  vuln_name TEXT, ransomware INTEGER, due_date TEXT
+);
+"""
+
+
+def kb_path() -> str:
+    from api.config import settings
+    d = os.path.join(settings.storage_dir, "knowledge")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "kb.sqlite")
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db(path: str) -> None:
+    with closing(_connect(path)) as c:
+        c.executescript(_SCHEMA)
+        c.commit()
+
+
+def set_meta(path: str, **kv) -> None:
+    with closing(_connect(path)) as c:
+        for k, v in kv.items():
+            c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (k, json.dumps(v)))
+        c.commit()
+
+
+def get_meta(path: Optional[str] = None) -> Dict[str, Any]:
+    path = path or kb_path()
+    if not os.path.exists(path):
+        return {"available": False}
+    try:
+        with closing(_connect(path)) as c:
+            rows = c.execute("SELECT key,value FROM meta").fetchall()
+            n = c.execute("SELECT COUNT(*) FROM advisory").fetchone()[0]
+            try:
+                ne = c.execute("SELECT COUNT(*) FROM epss").fetchone()[0]
+            except sqlite3.OperationalError:
+                ne = 0
+            try:
+                nk = c.execute("SELECT COUNT(*) FROM kev").fetchone()[0]
+            except sqlite3.OperationalError:
+                nk = 0
+        out = {r["key"]: json.loads(r["value"]) for r in rows}
+        out.update({"available": True, "advisory_count": n, "epss_count": ne, "kev_count": nk})
+        return out
+    except Exception:
+        return {"available": False}
+
+
+def bulk_insert(path: str, rows: List[Dict[str, Any]]) -> int:
+    cols = ["id", "source", "cve", "ghsa", "summary", "severity", "cvss", "cwe",
+            "ecosystem", "package", "introduced", "fixed", "refs", "published", "modified"]
+    with closing(_connect(path)) as c:
+        c.executemany(
+            f"INSERT OR REPLACE INTO advisory({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
+            [[r.get(k) for k in cols] for r in rows])
+        c.commit()
+    return len(rows)
+
+
+def set_epss(path: str, rows: List[Dict[str, Any]]) -> int:
+    """Nạp EPSS: rows = [{cve, epss, percentile, score_date}]."""
+    with closing(_connect(path)) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO epss(cve,epss,percentile,score_date) VALUES(?,?,?,?)",
+            [[(r.get("cve") or "").upper(), r.get("epss"), r.get("percentile"),
+              r.get("score_date")] for r in rows])
+        c.commit()
+    return len(rows)
+
+
+def lookup_epss(cve: str, path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Trả {epss, percentile, score_date} cho 1 CVE, hoặc None."""
+    path = path or kb_path()
+    if not cve or not os.path.exists(path):
+        return None
+    try:
+        with closing(_connect(path)) as c:
+            r = c.execute("SELECT epss,percentile,score_date FROM epss WHERE cve=?",
+                          (cve.upper(),)).fetchone()
+    except sqlite3.OperationalError:          # KB cũ chưa có bảng epss
+        return None
+    return dict(r) if r else None
+
+
+def set_kev(path: str, rows: List[Dict[str, Any]]) -> int:
+    """Nạp KEV: rows = [{cve, date_added, vendor_project, product, vuln_name,
+    ransomware(bool), due_date}]."""
+    with closing(_connect(path)) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO kev(cve,date_added,vendor_project,product,"
+            "vuln_name,ransomware,due_date) VALUES(?,?,?,?,?,?,?)",
+            [[(r.get("cve") or "").upper(), r.get("date_added"), r.get("vendor_project"),
+              r.get("product"), r.get("vuln_name"), 1 if r.get("ransomware") else 0,
+              r.get("due_date")] for r in rows])
+        c.commit()
+    return len(rows)
+
+
+def lookup_kev(cve: str, path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Trả bản ghi KEV cho 1 CVE (có ransomware:bool), hoặc None nếu không có."""
+    path = path or kb_path()
+    if not cve or not os.path.exists(path):
+        return None
+    try:
+        with closing(_connect(path)) as c:
+            r = c.execute("SELECT date_added,vendor_project,product,vuln_name,"
+                          "ransomware,due_date FROM kev WHERE cve=?", (cve.upper(),)).fetchone()
+    except sqlite3.OperationalError:          # KB cũ chưa có bảng kev
+        return None
+    if not r:
+        return None
+    d = dict(r)
+    d["ransomware"] = bool(d.get("ransomware"))
+    return d
+
+
+def lookup_cve(cve: str, path: Optional[str] = None) -> List[Dict[str, Any]]:
+    path = path or kb_path()
+    if not cve or not os.path.exists(path):
+        return []
+    with closing(_connect(path)) as c:
+        rows = c.execute("SELECT * FROM advisory WHERE cve=? LIMIT 50", (cve.upper(),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def lookup_package(ecosystem: str, package: str, path: Optional[str] = None) -> List[Dict[str, Any]]:
+    path = path or kb_path()
+    if not package or not os.path.exists(path):
+        return []
+    with closing(_connect(path)) as c:
+        rows = c.execute("SELECT * FROM advisory WHERE ecosystem=? AND package=? LIMIT 100",
+                         ((ecosystem or "").lower(), package.lower())).fetchall()
+    return [dict(r) for r in rows]
+
+
+def enrich(cve: Optional[str] = None, ecosystem: Optional[str] = None,
+           package: Optional[str] = None, path: Optional[str] = None) -> Dict[str, Any]:
+    """Trả về làm giàu: fixed_versions, cvss, severity, cwe, ghsa, refs, summary."""
+    path = path or kb_path()
+    advs: List[Dict[str, Any]] = []
+    if cve:
+        advs += lookup_cve(cve, path)
+    if package:
+        advs += lookup_package(ecosystem, package, path)
+    # EPSS theo CVE: gom mọi CVE liên quan, lấy điểm cao nhất
+    cves = {cve.upper()} if cve else set()
+    cves |= {a["cve"].upper() for a in advs if a.get("cve")}
+    best_epss = None
+    kev_hit = None
+    for cv in cves:
+        e = lookup_epss(cv, path)
+        if e and e.get("epss") is not None:
+            if best_epss is None or e["epss"] > best_epss.get("epss", -1):
+                best_epss = e
+        if kev_hit is None:
+            kev_hit = lookup_kev(cv, path)
+    if not advs and not best_epss and not kev_hit:
+        return {}
+    fixed = sorted({a["fixed"] for a in advs if a.get("fixed")})
+    cvss = max((a["cvss"] for a in advs if a.get("cvss") is not None), default=None)
+    refs = []
+    for a in advs:
+        try:
+            refs += json.loads(a.get("refs") or "[]")
+        except Exception:
+            pass
+    return {
+        "fixed_versions": fixed,
+        "cvss": cvss,
+        "severity": next((a["severity"] for a in advs if a.get("severity")), None),
+        "cwe": next((a["cwe"] for a in advs if a.get("cwe")), None),
+        "ghsa": next((a["ghsa"] for a in advs if a.get("ghsa")), None),
+        "summary": next((a["summary"] for a in advs if a.get("summary")), None),
+        "references": sorted(set(refs))[:10],
+        "source_count": len(advs),
+        "epss": best_epss.get("epss") if best_epss else None,
+        "epss_percentile": best_epss.get("percentile") if best_epss else None,
+        "epss_date": best_epss.get("score_date") if best_epss else None,
+        "kev": bool(kev_hit),
+        "kev_ransomware": bool(kev_hit and kev_hit.get("ransomware")),
+        "kev_date_added": kev_hit.get("date_added") if kev_hit else None,
+        "kev_due_date": kev_hit.get("due_date") if kev_hit else None,
+    }
+
+
+# map ecosystem Trivy/scanner → tên ecosystem trong KB (OSV)
+_ECO_MAP = {
+    "pip": "pypi", "python-pkg": "pypi", "python": "pypi",
+    "node-pkg": "npm", "npm": "npm", "yarn": "npm",
+    "gomod": "go", "go": "go",
+    "maven": "maven", "jar": "maven", "gradle": "maven",
+    "gem": "rubygems", "rubygems": "rubygems", "bundler": "rubygems",
+    "cargo": "crates.io", "composer": "packagist", "nuget": "nuget",
+}
+
+
+def enrich_findings(findings: List[Dict[str, Any]], path: Optional[str] = None) -> int:
+    """
+    Làm giàu các finding SCA tại chỗ (chỉ điền chỗ TRỐNG — không ghi đè dữ liệu
+    scanner đã có). Thêm key 'kb' chứa refs/summary. Trả số finding được làm giàu.
+    An toàn khi KB chưa có: trả 0, không lỗi.
+    """
+    path = path or kb_path()
+    if not os.path.exists(path):
+        return 0
+    n = 0
+    for f in findings:
+        cve = f.get("cve")
+        pkg = f.get("package_name")
+        eco = _ECO_MAP.get((f.get("package_ecosystem") or f.get("pkg_type") or "").lower())
+        if not cve and not pkg:
+            continue
+        data = enrich(cve=cve, ecosystem=eco, package=pkg, path=path)
+        if not data:
+            continue
+        if not f.get("fixed_version") and data.get("fixed_versions"):
+            f["fixed_version"] = ", ".join(data["fixed_versions"])
+        if not f.get("cwe") and data.get("cwe"):
+            f["cwe"] = data["cwe"]
+        if not f.get("cvss_score") and data.get("cvss") is not None:
+            f["cvss_score"] = str(data["cvss"])
+        if data.get("epss") is not None:
+            f["epss"] = data["epss"]
+            f["epss_percentile"] = data.get("epss_percentile")
+        if data.get("kev"):
+            f["kev"] = True
+            f["kev_ransomware"] = data.get("kev_ransomware", False)
+        f["kb"] = {"references": data.get("references", []),
+                   "summary": data.get("summary"), "source_count": data.get("source_count", 0),
+                   "epss": data.get("epss"), "epss_percentile": data.get("epss_percentile"),
+                   "kev": data.get("kev", False), "kev_ransomware": data.get("kev_ransomware", False),
+                   "kev_due_date": data.get("kev_due_date")}
+        n += 1
+    return n
+
+
+_SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+# Ngưỡng EPSS để coi là "nhiều khả năng bị khai thác" → nâng tối thiểu HIGH.
+EPSS_HIGH_THRESHOLD = 0.5
+
+
+def _max_sev(a: str, b: str) -> str:
+    try:
+        return a if _SEV_ORDER.index(a) >= _SEV_ORDER.index(b) else b
+    except ValueError:
+        return a
+
+
+def prioritize_findings(findings: List[Dict[str, Any]],
+                        epss_threshold: float = EPSS_HIGH_THRESHOLD) -> int:
+    """
+    Nâng mức ưu tiên dựa trên tri thức khai thác (chạy SAU enrich_findings):
+      - KEV + ransomware → tối thiểu CRITICAL
+      - KEV               → tối thiểu HIGH
+      - EPSS >= ngưỡng    → tối thiểu HIGH
+    Chỉ NÂNG, không bao giờ hạ. Ghi lại severity gốc + lý do để hiển thị/kiểm toán.
+    Trả số finding bị nâng.
+    """
+    bumped = 0
+    for f in findings:
+        cur = (f.get("severity") or "INFO").upper()
+        floor, reason = None, None
+        if f.get("kev_ransomware"):
+            floor, reason = "CRITICAL", "KEV + ransomware"
+        elif f.get("kev"):
+            floor, reason = "HIGH", "CISA KEV (đang bị khai thác)"
+        elif isinstance(f.get("epss"), (int, float)) and f["epss"] >= epss_threshold:
+            floor, reason = "HIGH", f"EPSS cao ({f['epss']:.2f})"
+        if not floor:
+            continue
+        new = _max_sev(cur, floor)
+        if new != cur:
+            f["severity_original"] = cur
+            f["severity"] = new
+            f["priority_reason"] = reason
+            bumped += 1
+        else:
+            f.setdefault("priority_reason", reason)   # đã đủ cao: vẫn ghi vì sao đáng chú ý
+    return bumped
