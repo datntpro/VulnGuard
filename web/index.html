@@ -940,6 +940,7 @@
       <div class="tab" id="st-tab-scanners" onclick="switchTab(this,'st-scanners')">🛠️ Scanner Tools</div>
       <div class="tab" id="st-tab-ai" onclick="switchTab(this,'st-ai');loadAIConfig()">☁️ AI Provider</div>
       <div class="tab" id="st-tab-report" onclick="switchTab(this,'st-report');loadReportBranding()">📄 Báo cáo</div>
+      <div class="tab" id="st-tab-knowledge" onclick="switchTab(this,'st-knowledge');loadKnowledge()">📚 Tri thức</div>
       <div class="tab" id="st-tab-users" onclick="switchTab(this,'st-users');loadUsers()" style="display:none;">👥 Người dùng</div>
     </div>
     <div class="tab-content active" id="st-ollama">
@@ -1359,6 +1360,40 @@
         <div id="users-list"></div>
       </div>
     </div><!-- /st-users -->
+
+    <div class="tab-content" id="st-knowledge">
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:6px;">
+          <h2 style="margin-bottom:0;">📚 Knowledge Base (DB tri thức lỗ hổng)</h2>
+          <span id="kb-badge" class="text-sm" style="color:var(--text2);"></span>
+        </div>
+        <div class="notice" style="margin-bottom:12px;">
+          KB chứa dữ liệu lỗ hổng từ nguồn mở (OSV: CVE/GHSA theo ecosystem) để
+          <strong>làm giàu kết quả scan</strong> (fix version, CWE, tham chiếu). Vendor build
+          hàng ngày và publish bản snapshot; máy đã cài <strong>tự tải về</strong> theo lịch
+          (giống Trivy DB). Dữ liệu <strong>công khai</strong> — không gửi dữ liệu máy bạn đi đâu.
+        </div>
+        <div id="kb-status" class="notice" style="margin-bottom:12px;">Đang tải...</div>
+        <div class="flex" style="gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="kbUpdateNow(false)">🔄 Cập nhật ngay</button>
+          <button class="btn btn-sm" onclick="kbUpdateNow(true)">⬇️ Tải lại (force)</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2 style="margin-bottom:6px;">📦 Import offline (air-gap)</h2>
+        <div class="notice" style="margin-bottom:12px;">
+          Môi trường cô lập không ra Internet: tải <span class="text-mono">kb.sqlite.gz</span>
+          từ máy khác rồi upload tại đây. Hệ thống kiểm tra tính hợp lệ và hoán đổi an toàn.
+        </div>
+        <div class="flex" style="gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <div style="flex:1;min-width:260px;">
+            <label>File KB (.sqlite hoặc .gz)</label>
+            <input type="file" id="kb-file" accept=".sqlite,.db,.gz">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="kbImport()">Import</button>
+        </div>
+      </div>
+    </div><!-- /st-knowledge -->
   </div>
 
 </div><!-- /main -->
@@ -1988,6 +2023,49 @@ async function api(path, opts = {}) {
   if (!r.ok) { const t = await r.text(); throw new Error(errText(t)); }
   if (r.status === 204) return null;
   return r.json();
+}
+
+// ─── Knowledge Base (DB tri thức) ─────────────────────────────
+async function loadKnowledge() {
+  const box = document.getElementById('kb-status');
+  const badge = document.getElementById('kb-badge');
+  try {
+    const s = await api('/api/knowledge/status');
+    if (!s.available) {
+      badge.textContent = 'chưa có KB';
+      box.innerHTML = '⚠️ Chưa có dữ liệu KB. Bấm <strong>Cập nhật ngay</strong> để tải, hoặc import offline bên dưới.';
+      return;
+    }
+    badge.textContent = 'v' + (s.version || '?');
+    const ecos = Object.entries(s.ecosystems || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    box.innerHTML =
+      `✅ <strong>Phiên bản:</strong> ${s.version || '?'} · <strong>Advisory:</strong> ${(s.advisory_count || 0).toLocaleString()}<br>` +
+      `<span class="text-sm" style="color:var(--text2);">Build: ${s.built_at || '?'} · Nguồn: ${(s.sources || []).join(', ') || '?'}` +
+      (s.auto_update ? ` · Tự cập nhật mỗi ${s.update_interval_hours}h` : ' · Tự cập nhật: TẮT') + '</span>' +
+      (ecos ? `<br><span class="text-sm" style="color:var(--text2);">${ecos}</span>` : '');
+  } catch (e) {
+    box.innerHTML = '❌ Lỗi tải trạng thái KB: ' + e.message;
+  }
+}
+async function kbUpdateNow(force) {
+  const box = document.getElementById('kb-status');
+  box.innerHTML = '⏳ Đang kiểm tra & tải bản mới nhất...';
+  try {
+    const r = await api('/api/knowledge/update?force=' + (force ? 'true' : 'false'), { method: 'POST' });
+    if (r.updated) toast(`KB cập nhật: ${r.from || '—'} → ${r.to}`, 'success');
+    else toast('KB: ' + (r.reason || 'không có bản mới'), 'info');
+  } catch (e) { toast('Lỗi cập nhật KB: ' + e.message, 'error'); }
+  loadKnowledge();
+}
+async function kbImport() {
+  const f = document.getElementById('kb-file').files[0];
+  if (!f) { toast('Chọn file KB trước', 'warn'); return; }
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const r = await apiUpload('/api/knowledge/import', fd);
+    toast(`Import OK: v${r.version} (${(r.advisory_count || 0).toLocaleString()} advisory)`, 'success');
+  } catch (e) { toast('Lỗi import: ' + e.message, 'error'); }
+  loadKnowledge();
 }
 
 // ─── Severity utils ───────────────────────────────────────────

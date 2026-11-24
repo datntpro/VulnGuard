@@ -1,0 +1,66 @@
+# Build Knowledge Base (DB tri thức lỗ hổng) HÀNG NGÀY từ nguồn mở (OSV) và
+# publish snapshot lên GitHub Releases (tag kb-latest). Máy đã cài tự tải về
+# qua kb-manifest.json (xem scanner/knowledge/updater.py).
+name: KB Build
+
+on:
+  schedule:
+    - cron: "17 2 * * *"   # 02:17 UTC mỗi ngày
+  workflow_dispatch:        # chạy tay khi cần
+
+permissions:
+  contents: write           # cần để tạo/ghi release
+
+jobs:
+  build:
+    name: Build & publish KB snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install -q --upgrade pip
+          pip install -q httpx
+
+      - name: Build KB from OSV
+        run: |
+          python -m scanner.knowledge.build kb.sqlite
+
+      - name: Package + manifest
+        id: pkg
+        run: |
+          set -euo pipefail
+          VERSION=$(python -c "import json;from scanner.knowledge.store import get_meta;print(get_meta('kb.sqlite').get('version'))")
+          gzip -k -9 kb.sqlite
+          SHA=$(sha256sum kb.sqlite.gz | cut -d' ' -f1)
+          COUNT=$(python -c "from scanner.knowledge.store import get_meta;print(get_meta('kb.sqlite').get('advisory_count',0))")
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/kb-latest/kb.sqlite.gz"
+          cat > kb-manifest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "sha256": "${SHA}",
+            "url": "${URL}",
+            "advisory_count": ${COUNT},
+            "format": "sqlite+gzip"
+          }
+          EOF
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          cat kb-manifest.json
+
+      - name: Publish release (kb-latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="kb-latest"
+          # xóa release+tag cũ để 'latest/download' luôn trỏ bản mới nhất
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" \
+            kb.sqlite.gz kb-manifest.json \
+            --title "Knowledge Base ${{ steps.pkg.outputs.version }}" \
+            --notes "Snapshot KB tri thức lỗ hổng (OSV). version=${{ steps.pkg.outputs.version }}. Máy đã cài tự tải qua updater."

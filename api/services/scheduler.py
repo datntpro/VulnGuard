@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 _task = None
 _TICK_SECONDS = 60
+_last_kb_check = None   # datetime lần cuối kiểm tra KB
 
 
 def enabled() -> bool:
@@ -57,6 +58,27 @@ async def _tick():
         asyncio.create_task(run_repo_scan(repo_id, email_report=email_report, schedule_id=sch_id))
 
 
+async def _kb_tick():
+    """Kiểm tra + tải bản KB mới theo chu kỳ kb_update_interval_hours."""
+    global _last_kb_check
+    from datetime import timedelta
+
+    from api.config import settings
+    if not (settings.kb_auto_update and settings.kb_manifest_url):
+        return
+    now = datetime.utcnow()
+    interval = timedelta(hours=max(1, settings.kb_update_interval_hours))
+    if _last_kb_check is not None and (now - _last_kb_check) < interval:
+        return
+    _last_kb_check = now
+    from scanner.knowledge import updater
+    res = await asyncio.to_thread(updater.check_and_update)
+    if res.get("updated"):
+        logger.info("[scheduler] KB cập nhật %s → %s", res.get("from"), res.get("to"))
+    else:
+        logger.debug("[scheduler] KB: %s", res.get("reason"))
+
+
 async def _loop():
     logger.info("[scheduler] khởi động — kiểm tra lịch mỗi %ss", _TICK_SECONDS)
     while True:
@@ -64,6 +86,10 @@ async def _loop():
             await _tick()
         except Exception as e:
             logger.warning(f"[scheduler] tick lỗi: {e}")
+        try:
+            await _kb_tick()
+        except Exception as e:
+            logger.warning(f"[scheduler] KB tick lỗi: {e}")
         await asyncio.sleep(_TICK_SECONDS)
 
 

@@ -1,0 +1,166 @@
+"""KB: store (schema/lookup/enrich), build (OSV parse), updater (version/verify/import)."""
+import gzip
+import io
+import json
+import os
+import tempfile
+import zipfile
+
+import pytest
+
+
+# ── store ──
+def _seed(path):
+    from scanner.knowledge.store import init_db, bulk_insert
+    init_db(path)
+    bulk_insert(path, [{
+        "id": "OSV-1::pypi/django", "source": "osv", "cve": "CVE-2024-1",
+        "ghsa": "GHSA-xxxx", "summary": "SQLi in Django", "severity": "HIGH",
+        "cvss": None, "cwe": "CWE-89", "ecosystem": "pypi", "package": "django",
+        "introduced": "0", "fixed": "4.2.11", "refs": json.dumps(["https://x/1"]),
+        "published": "2024-01-01", "modified": "2024-01-02",
+    }])
+
+
+def test_store_lookup_cve_and_package():
+    from scanner.knowledge.store import lookup_cve, lookup_package
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    assert lookup_cve("CVE-2024-1", p)[0]["package"] == "django"
+    assert lookup_cve("cve-2024-1", p)                       # case-insensitive
+    assert lookup_package("pypi", "DJANGO", p)[0]["fixed"] == "4.2.11"
+    assert lookup_cve("CVE-9999-0", p) == []
+
+
+def test_store_enrich_merges():
+    from scanner.knowledge.store import enrich
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    e = enrich(cve="CVE-2024-1", path=p)
+    assert e["fixed_versions"] == ["4.2.11"]
+    assert e["cwe"] == "CWE-89" and e["ghsa"] == "GHSA-xxxx"
+    assert "https://x/1" in e["references"]
+
+
+def test_store_get_meta_absent():
+    from scanner.knowledge.store import get_meta
+    assert get_meta("/nonexistent/kb.sqlite") == {"available": False}
+
+
+def test_enrich_findings_fills_only_blanks():
+    from scanner.knowledge.store import enrich_findings
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    findings = [
+        {"cve": "CVE-2024-1", "package_name": "django", "package_ecosystem": "pip",
+         "fixed_version": "", "cwe": ""},                       # trống → điền
+        {"cve": "CVE-2024-1", "package_name": "django", "fixed_version": "9.9.9"},  # đã có → giữ
+    ]
+    n = enrich_findings(findings, path=p)
+    assert n == 2
+    assert findings[0]["fixed_version"] == "4.2.11" and findings[0]["cwe"] == "CWE-89"
+    assert findings[1]["fixed_version"] == "9.9.9"             # không ghi đè
+    assert findings[0]["kb"]["source_count"] >= 1
+
+
+def test_enrich_findings_no_kb_is_safe():
+    from scanner.knowledge.store import enrich_findings
+    assert enrich_findings([{"cve": "CVE-1"}], path="/nope/kb.sqlite") == 0
+
+
+# ── build: parse OSV ──
+def test_parse_osv_basic():
+    from scanner.knowledge.build import parse_osv
+    rec = {
+        "id": "GHSA-abc", "aliases": ["CVE-2023-5", "GHSA-abc"],
+        "summary": "RCE", "database_specific": {"severity": "critical", "cwe_ids": ["CWE-78"]},
+        "references": [{"url": "https://ref/1"}],
+        "affected": [{"package": {"ecosystem": "PyPI", "name": "Flask"},
+                      "ranges": [{"type": "ECOSYSTEM",
+                                  "events": [{"introduced": "0"}, {"fixed": "2.3.0"}]}]}],
+        "published": "2023-01-01", "modified": "2023-02-01",
+    }
+    rows = parse_osv(rec)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["cve"] == "CVE-2023-5" and r["ghsa"] == "GHSA-abc"
+    assert r["ecosystem"] == "pypi" and r["package"] == "flask"
+    assert r["fixed"] == "2.3.0" and r["severity"] == "CRITICAL" and r["cwe"] == "CWE-78"
+
+
+def test_parse_osv_no_package_still_row():
+    from scanner.knowledge.build import parse_osv
+    rows = parse_osv({"id": "OSV-x", "aliases": ["CVE-2020-9"], "affected": []})
+    assert len(rows) == 1 and rows[0]["cve"] == "CVE-2020-9" and rows[0]["package"] is None
+
+
+def test_ingest_osv_zip():
+    from scanner.knowledge.build import ingest_osv_zip
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("GHSA-1.json", json.dumps({
+            "id": "GHSA-1", "aliases": ["CVE-1"],
+            "affected": [{"package": {"ecosystem": "npm", "name": "lodash"},
+                          "ranges": [{"events": [{"introduced": "0"}, {"fixed": "4.17.21"}]}]}]}))
+        z.writestr("bad.json", "{not json")
+        z.writestr("skip.txt", "ignore me")
+    rows = ingest_osv_zip(buf.getvalue())
+    assert len(rows) == 1 and rows[0]["package"] == "lodash" and rows[0]["fixed"] == "4.17.21"
+
+
+def test_build_with_fake_fetch():
+    from scanner.knowledge.build import build
+    from scanner.knowledge.store import get_meta
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("a.json", json.dumps({
+            "id": "OSV-a", "aliases": ["CVE-2"],
+            "affected": [{"package": {"ecosystem": "PyPI", "name": "requests"},
+                          "ranges": [{"events": [{"fixed": "2.31.0"}]}]}]}))
+    data = buf.getvalue()
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite")
+    res = build(p, ecosystems=["PyPI"], _fetch=lambda url: data)
+    assert res["total"] == 1
+    meta = get_meta(p)
+    assert meta["available"] and meta["advisory_count"] == 1
+
+
+# ── updater ──
+def test_needs_update():
+    from scanner.knowledge.updater import needs_update
+    assert needs_update(None, "2026.01.01") is True
+    assert needs_update("2026.01.01", "2026.01.02") is True
+    assert needs_update("2026.01.02", "2026.01.01") is False
+    assert needs_update("2026.01.01", "2026.01.01") is False
+    assert needs_update("2026.01.01", None) is False
+
+
+def test_validate_manifest():
+    from scanner.knowledge.updater import validate_manifest
+    validate_manifest({"version": "1", "sha256": "a" * 64, "url": "http://x"})
+    for bad in ({}, {"version": "1"}, {"version": "1", "sha256": "short", "url": "u"}):
+        with pytest.raises(ValueError):
+            validate_manifest(bad)
+
+
+def test_import_file_gz_and_sha_check():
+    from scanner.knowledge.updater import import_file, sha256_file
+    # tạo 1 KB hợp lệ rồi gzip
+    d = tempfile.mkdtemp(); src = os.path.join(d, "kb.sqlite"); _seed(src)
+    gz = src + ".gz"
+    with open(src, "rb") as fi, gzip.open(gz, "wb") as fo:
+        fo.write(fi.read())
+    dest = os.path.join(d, "live", "kb.sqlite")
+    sha = sha256_file(gz)
+    meta = import_file(gz, dest, expected_sha256=sha)
+    assert meta["available"] and meta["advisory_count"] == 1
+    # sha sai → raise, dest không đổi
+    with pytest.raises(ValueError):
+        import_file(gz, dest, expected_sha256="b" * 64)
+
+
+def test_import_file_rejects_garbage():
+    from scanner.knowledge.updater import import_file
+    d = tempfile.mkdtemp()
+    junk = os.path.join(d, "x.sqlite")
+    with open(junk, "w") as f:
+        f.write("not a sqlite db")
+    with pytest.raises(ValueError):
+        import_file(junk, os.path.join(d, "dest.sqlite"))
