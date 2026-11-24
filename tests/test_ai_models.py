@@ -13,12 +13,23 @@ def _cfg():
 
 
 def test_static_fallback_no_key():
-    for prov in ("anthropic", "openai", "openrouter"):
+    # anthropic & openai KHÓA theo key: không key → static, KHÔNG gọi mạng (tất định).
+    # (openrouter /models là public nên có thể trả 'api' khi CI có mạng → không test ở đây)
+    for prov in ("anthropic", "openai"):
         r = list_models(prov, _cfg())
-        assert r["source"] == "static"
-        assert r["models"] == STATIC_MODELS[prov] or set(r["models"]) == set(STATIC_MODELS[prov])
+        assert r["source"] == "static", f"{prov} phải fallback static khi không có key"
+        assert set(r["models"]) == set(STATIC_MODELS[prov])
         assert r["error"] is None
         assert r["models"], "phải có ít nhất 1 model mặc định"
+
+
+def test_openrouter_always_returns_models():
+    # OpenRouter liệt kê model công khai (không cần key). Dù online (source=api) hay
+    # offline (source=static) đều phải trả danh sách dùng được, không raise.
+    r = list_models("openrouter", _cfg())
+    assert r["source"] in ("api", "static")
+    assert r["models"], "phải luôn có model để chọn"
+    assert r["error"] is None
 
 
 def test_anthropic_wif_uses_static():
