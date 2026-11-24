@@ -133,8 +133,9 @@ class ChatEngine:
 
         try:
             if stream:
-                # Return streaming response
-                return await self.ollama.generate_stream(
+                # generate_stream là async generator → KHÔNG await (await sẽ TypeError).
+                # Trả thẳng generator; caller dùng `async for`.
+                return self.ollama.generate_stream(
                     model=self.model,
                     prompt=user_message,
                     context=full_context

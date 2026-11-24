@@ -391,10 +391,30 @@ async def get_file_chunk(
 # WebSocket for Streaming (Optional)
 # ─────────────────────────────────────────────
 
+def _ws_is_admin(websocket: WebSocket) -> bool:
+    """H2: chỉ ADMIN được dùng File Assistant (middleware HTTP không chạy cho WS)."""
+    if not settings.auth_enabled:
+        return True
+    try:
+        from api.security import COOKIE_NAME, decode_token
+        token = websocket.cookies.get(COOKIE_NAME) or ""
+        if not token:
+            auth = websocket.headers.get("authorization") or ""
+            token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        payload = decode_token(token) if token else None
+        return bool(payload) and str(payload.get("role", "")).upper() == "ADMIN"
+    except Exception:
+        return False
+
+
 @router.websocket("/sessions/{session_id}/chat/stream")
 async def websocket_chat(websocket: WebSocket, session_id: str, db: Session = Depends(get_db)):
     """WebSocket endpoint for streaming chat responses"""
     await websocket.accept()
+    if not _ws_is_admin(websocket):
+        await websocket.send_json({"error": "Chỉ ADMIN được dùng File Assistant"})
+        await websocket.close(code=1008)
+        return
 
     try:
         session = db.query(FileAssistantSession).filter(
