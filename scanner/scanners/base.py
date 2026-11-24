@@ -37,6 +37,19 @@ async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
         return -1, "", f"Tool not found: {cmd[0]}"
 
 
+# Thư mục rác KHÔNG phải mã nguồn của người dùng — loại khỏi mọi scan để báo cáo
+# tập trung vào code của họ, không ngập phát hiện trong thư viện bên thứ ba.
+# (site-packages bắt mọi virtualenv dù tên lạ như .coworker_venv/.venv-demo)
+EXCLUDE_DIR_NAMES = [
+    "node_modules", ".git", "__pycache__", ".tox", "venv", ".venv", "env",
+    "site-packages", "dist", "build", ".next", ".nuxt", "vendor", ".gradle",
+    ".mvn", "target", ".idea", ".vscode", ".pytest_cache", ".mypy_cache",
+    "bower_components", ".terraform",
+]
+# Glob cho các tool nhận --exclude dạng path glob (bandit, semgrep)
+EXCLUDE_GLOBS = [f"*/{d}/*" for d in EXCLUDE_DIR_NAMES] + ["*venv*/*"]
+
+
 def normalize_severity(raw: str) -> str:
     """Chuẩn hóa severity về CRITICAL/HIGH/MEDIUM/LOW/INFO."""
     mapping = {
