@@ -46,35 +46,44 @@ class GitleaksScanner(BaseScanner):
     tool_name = "gitleaks"
 
     async def scan(self) -> List[Dict[str, Any]]:
+        import tempfile
         findings = []
 
+        # F3: report file RIÊNG cho mỗi lần quét — tránh các scan song song/liên tiếp
+        # ghi đè & đọc lẫn kết quả của nhau (trước đây dùng chung /tmp/gitleaks-report.json).
+        fd, report_path = tempfile.mkstemp(prefix="gitleaks-", suffix=".json")
+        os.close(fd)
+        results = []
         cmd = [
             "gitleaks",
             "detect",
             "--source", self.scan_path,
             "--report-format", "json",
-            "--report-path", "/tmp/gitleaks-report.json",
+            "--report-path", report_path,
             "--no-git",
             "--exit-code=0",   # Không fail khi tìm thấy secret (Gitleaks v8)
             "--redact",        # Che giá trị secret trong output
             "--quiet",
         ]
 
-        rc, stdout, stderr = await run_command(cmd, timeout=120)
-
-        # Đọc report file
         try:
-            if os.path.exists("/tmp/gitleaks-report.json"):
-                with open("/tmp/gitleaks-report.json", "r") as f:
-                    content = f.read().strip()
-                if content and content != "null":
-                    results = json.loads(content)
+            rc, stdout, stderr = await run_command(cmd, timeout=120)
+
+            # Đọc report file
+            try:
+                if os.path.exists(report_path):
+                    with open(report_path, "r") as f:
+                        content = f.read().strip()
+                    results = json.loads(content) if content and content != "null" else []
                 else:
                     results = []
-            else:
+            except Exception:
                 results = []
-        except Exception:
-            results = []
+        finally:
+            try:
+                os.unlink(report_path)
+            except OSError:
+                pass
 
         for result in (results or []):
             rule_id = result.get("RuleID", "")
