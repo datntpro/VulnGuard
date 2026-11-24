@@ -2039,7 +2039,8 @@ async function loadKnowledge() {
     badge.textContent = 'v' + (s.version || '?');
     const ecos = Object.entries(s.ecosystems || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
     box.innerHTML =
-      `✅ <strong>Phiên bản:</strong> ${s.version || '?'} · <strong>Advisory:</strong> ${(s.advisory_count || 0).toLocaleString()}<br>` +
+      `✅ <strong>Phiên bản:</strong> ${s.version || '?'} · <strong>Advisory:</strong> ${(s.advisory_count || 0).toLocaleString()}` +
+      (s.epss_count ? ` · <strong>EPSS:</strong> ${(s.epss_count).toLocaleString()} CVE` : '') + '<br>' +
       `<span class="text-sm" style="color:var(--text2);">Build: ${s.built_at || '?'} · Nguồn: ${(s.sources || []).join(', ') || '?'}` +
       (s.auto_update ? ` · Tự cập nhật mỗi ${s.update_interval_hours}h` : ' · Tự cập nhật: TẮT') + '</span>' +
       (ecos ? `<br><span class="text-sm" style="color:var(--text2);">${ecos}</span>` : '');

@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS advisory (
 CREATE INDEX IF NOT EXISTS ix_adv_cve ON advisory(cve);
 CREATE INDEX IF NOT EXISTS ix_adv_pkg ON advisory(ecosystem, package);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+-- EPSS (FIRST): xác suất bị khai thác theo CVE, keyed riêng vì EPSS theo CVE
+-- chứ không theo package. Join khi enrich.
+CREATE TABLE IF NOT EXISTS epss (
+  cve TEXT PRIMARY KEY, epss REAL, percentile REAL, score_date TEXT
+);
 """
 
 
@@ -61,8 +66,12 @@ def get_meta(path: Optional[str] = None) -> Dict[str, Any]:
         with closing(_connect(path)) as c:
             rows = c.execute("SELECT key,value FROM meta").fetchall()
             n = c.execute("SELECT COUNT(*) FROM advisory").fetchone()[0]
+            try:
+                ne = c.execute("SELECT COUNT(*) FROM epss").fetchone()[0]
+            except sqlite3.OperationalError:
+                ne = 0
         out = {r["key"]: json.loads(r["value"]) for r in rows}
-        out.update({"available": True, "advisory_count": n})
+        out.update({"available": True, "advisory_count": n, "epss_count": ne})
         return out
     except Exception:
         return {"available": False}
@@ -77,6 +86,31 @@ def bulk_insert(path: str, rows: List[Dict[str, Any]]) -> int:
             [[r.get(k) for k in cols] for r in rows])
         c.commit()
     return len(rows)
+
+
+def set_epss(path: str, rows: List[Dict[str, Any]]) -> int:
+    """Nạp EPSS: rows = [{cve, epss, percentile, score_date}]."""
+    with closing(_connect(path)) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO epss(cve,epss,percentile,score_date) VALUES(?,?,?,?)",
+            [[(r.get("cve") or "").upper(), r.get("epss"), r.get("percentile"),
+              r.get("score_date")] for r in rows])
+        c.commit()
+    return len(rows)
+
+
+def lookup_epss(cve: str, path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Trả {epss, percentile, score_date} cho 1 CVE, hoặc None."""
+    path = path or kb_path()
+    if not cve or not os.path.exists(path):
+        return None
+    try:
+        with closing(_connect(path)) as c:
+            r = c.execute("SELECT epss,percentile,score_date FROM epss WHERE cve=?",
+                          (cve.upper(),)).fetchone()
+    except sqlite3.OperationalError:          # KB cũ chưa có bảng epss
+        return None
+    return dict(r) if r else None
 
 
 def lookup_cve(cve: str, path: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -107,7 +141,16 @@ def enrich(cve: Optional[str] = None, ecosystem: Optional[str] = None,
         advs += lookup_cve(cve, path)
     if package:
         advs += lookup_package(ecosystem, package, path)
-    if not advs:
+    # EPSS theo CVE: gom mọi CVE liên quan, lấy điểm cao nhất
+    cves = {cve.upper()} if cve else set()
+    cves |= {a["cve"].upper() for a in advs if a.get("cve")}
+    best_epss = None
+    for cv in cves:
+        e = lookup_epss(cv, path)
+        if e and e.get("epss") is not None:
+            if best_epss is None or e["epss"] > best_epss.get("epss", -1):
+                best_epss = e
+    if not advs and not best_epss:
         return {}
     fixed = sorted({a["fixed"] for a in advs if a.get("fixed")})
     cvss = max((a["cvss"] for a in advs if a.get("cvss") is not None), default=None)
@@ -126,6 +169,9 @@ def enrich(cve: Optional[str] = None, ecosystem: Optional[str] = None,
         "summary": next((a["summary"] for a in advs if a.get("summary")), None),
         "references": sorted(set(refs))[:10],
         "source_count": len(advs),
+        "epss": best_epss.get("epss") if best_epss else None,
+        "epss_percentile": best_epss.get("percentile") if best_epss else None,
+        "epss_date": best_epss.get("score_date") if best_epss else None,
     }
 
 
@@ -165,7 +211,11 @@ def enrich_findings(findings: List[Dict[str, Any]], path: Optional[str] = None) 
             f["cwe"] = data["cwe"]
         if not f.get("cvss_score") and data.get("cvss") is not None:
             f["cvss_score"] = str(data["cvss"])
+        if data.get("epss") is not None:
+            f["epss"] = data["epss"]
+            f["epss_percentile"] = data.get("epss_percentile")
         f["kb"] = {"references": data.get("references", []),
-                   "summary": data.get("summary"), "source_count": data.get("source_count", 0)}
+                   "summary": data.get("summary"), "source_count": data.get("source_count", 0),
+                   "epss": data.get("epss"), "epss_percentile": data.get("epss_percentile")}
         n += 1
     return n

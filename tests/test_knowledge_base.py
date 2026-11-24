@@ -156,6 +156,56 @@ def test_import_file_gz_and_sha_check():
         import_file(gz, dest, expected_sha256="b" * 64)
 
 
+# ── EPSS ──
+_EPSS_CSV = """#model_version:v2025.03.14,score_date:2025-03-20T00:00:00+0000
+cve,epss,percentile
+CVE-2024-1,0.97123,0.99988
+CVE-2020-9,0.00042,0.10111
+bad,row
+CVE-BADFLOAT,x,y
+"""
+
+
+def test_parse_epss_csv():
+    from scanner.knowledge.build import parse_epss_csv
+    rows = parse_epss_csv(_EPSS_CSV)
+    assert len(rows) == 2                      # bỏ comment/header/dòng hỏng
+    r0 = {x["cve"]: x for x in rows}
+    assert r0["CVE-2024-1"]["epss"] == pytest.approx(0.97123)
+    assert r0["CVE-2024-1"]["percentile"] == pytest.approx(0.99988)
+    assert r0["CVE-2024-1"]["score_date"] == "2025-03-20T00:00:00+0000"
+
+
+def test_enrich_includes_epss():
+    from scanner.knowledge.store import set_epss, enrich
+    from scanner.knowledge.build import parse_epss_csv
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    set_epss(p, parse_epss_csv(_EPSS_CSV))
+    e = enrich(cve="CVE-2024-1", path=p)
+    assert e["epss"] == pytest.approx(0.97123)
+    assert e["epss_percentile"] == pytest.approx(0.99988)
+    # package-only lookup cũng kéo được EPSS qua CVE của advisory (eco đã chuẩn hoá)
+    e2 = enrich(ecosystem="pypi", package="django", path=p)
+    assert e2["epss"] == pytest.approx(0.97123)
+
+
+def test_enrich_findings_sets_epss():
+    from scanner.knowledge.store import set_epss, enrich_findings
+    from scanner.knowledge.build import parse_epss_csv
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    set_epss(p, parse_epss_csv(_EPSS_CSV))
+    findings = [{"cve": "CVE-2024-1", "package_name": "django"}]
+    enrich_findings(findings, path=p)
+    assert findings[0]["epss"] == pytest.approx(0.97123)
+    assert findings[0]["kb"]["epss_percentile"] == pytest.approx(0.99988)
+
+
+def test_lookup_epss_missing_table_safe():
+    from scanner.knowledge.store import lookup_epss
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    assert lookup_epss("CVE-NOPE", p) is None
+
+
 def test_import_file_rejects_garbage():
     from scanner.knowledge.updater import import_file
     d = tempfile.mkdtemp()

@@ -31,6 +31,7 @@ def status():
         "version": meta.get("version"),
         "built_at": meta.get("built_at"),
         "advisory_count": meta.get("advisory_count", 0),
+        "epss_count": meta.get("epss_count", 0),
         "sources": meta.get("sources", []),
         "ecosystems": meta.get("ecosystems", {}),
         "auto_update": settings.kb_auto_update,

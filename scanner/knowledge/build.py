@@ -16,6 +16,48 @@ from typing import Any, Dict, List
 OSV_BASE = "https://osv-vulnerabilities.storage.googleapis.com"
 DEFAULT_ECOSYSTEMS = ["PyPI", "npm", "Go", "Maven", "RubyGems", "crates.io", "Packagist", "NuGet"]
 
+# EPSS (FIRST) — file bulk hằng ngày, host mới empiricalsecurity.com. CSV gzip:
+#   dòng #model_version,score_date → header cve,epss,percentile → dữ liệu.
+EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+
+
+def parse_epss_csv(text: str) -> List[Dict[str, Any]]:
+    """Pure: nội dung CSV EPSS (đã gunzip) → [{cve, epss, percentile, score_date}]."""
+    score_date = None
+    rows: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):                       # vd #model_version:...,score_date:2025-..
+            for part in line.lstrip("#").split(","):
+                if part.strip().startswith("score_date"):
+                    score_date = part.split(":", 1)[1].strip() if ":" in part else None
+            continue
+        if line.lower().startswith("cve,"):            # header
+            continue
+        cols = line.split(",")
+        if len(cols) < 3:
+            continue
+        try:
+            rows.append({"cve": cols[0].strip().upper(), "epss": float(cols[1]),
+                         "percentile": float(cols[2]), "score_date": score_date})
+        except ValueError:
+            continue
+    return rows
+
+
+def ingest_epss(dest_path: str, _fetch=None) -> int:
+    """Tải EPSS gz → parse → set_epss. Trả số CVE nạp."""
+    import gzip
+    import httpx
+    from scanner.knowledge.store import set_epss
+    data = _fetch(EPSS_URL) if _fetch else httpx.get(EPSS_URL, timeout=120, follow_redirects=True).content
+    text = gzip.decompress(data).decode("utf-8", "replace")
+    rows = parse_epss_csv(text)
+    set_epss(dest_path, rows)
+    return len(rows)
+
 
 def parse_osv(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Pure: 1 OSV record → list advisory rows."""
@@ -89,10 +131,18 @@ def build(dest_path: str, ecosystems: List[str] = None, _fetch=None) -> Dict[str
             per[eco] = len(rows); total += len(rows)
         except Exception as e:
             per[eco] = f"ERR: {str(e)[:80]}"
+    # EPSS (xác suất bị khai thác) — không chặn build nếu lỗi tải
+    sources = ["osv"]
+    epss_count = 0
+    try:
+        epss_count = ingest_epss(dest_path, _fetch=_fetch)
+        sources.append("epss")
+    except Exception as e:
+        per["_epss_error"] = str(e)[:80]
     version = datetime.datetime.utcnow().strftime("%Y.%m.%d")
     set_meta(dest_path, version=version, built_at=datetime.datetime.utcnow().isoformat() + "Z",
-             sources=["osv"], ecosystems=per, total=total)
-    return {"version": version, "total": total, "ecosystems": per}
+             sources=sources, ecosystems=per, total=total, epss_count=epss_count)
+    return {"version": version, "total": total, "ecosystems": per, "epss_count": epss_count}
 
 
 if __name__ == "__main__":
