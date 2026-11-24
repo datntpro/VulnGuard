@@ -2088,13 +2088,13 @@ async function loadKnowledge() {
       return;
     }
     badge.textContent = 'v' + (s.version || '?');
-    const ecos = Object.entries(s.ecosystems || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    const ecos = Object.entries(s.ecosystems || {}).map(([k, v]) => `${escHtml(k)}: ${escHtml(v)}`).join(' · ');
     box.innerHTML =
-      `✅ <strong>Phiên bản:</strong> ${s.version || '?'} · <strong>Advisory:</strong> ${(s.advisory_count || 0).toLocaleString()}` +
+      `✅ <strong>Phiên bản:</strong> ${escHtml(s.version || '?')} · <strong>Advisory:</strong> ${(s.advisory_count || 0).toLocaleString()}` +
       (s.epss_count ? ` · <strong>EPSS:</strong> ${(s.epss_count).toLocaleString()} CVE` : '') +
       (s.kev_count ? ` · <strong>KEV:</strong> ${(s.kev_count).toLocaleString()} 🔥` : '') + '<br>' +
-      `<span class="text-sm" style="color:var(--text2);">Build: ${s.built_at || '?'} · Nguồn: ${(s.sources || []).join(', ') || '?'}` +
-      (s.auto_update ? ` · Tự cập nhật mỗi ${s.update_interval_hours}h` : ' · Tự cập nhật: TẮT') + '</span>' +
+      `<span class="text-sm" style="color:var(--text2);">Build: ${escHtml(s.built_at || '?')} · Nguồn: ${escHtml((s.sources || []).join(', ') || '?')}` +
+      (s.auto_update ? ` · Tự cập nhật mỗi ${escHtml(s.update_interval_hours)}h` : ' · Tự cập nhật: TẮT') + '</span>' +
       (ecos ? `<br><span class="text-sm" style="color:var(--text2);">${ecos}</span>` : '');
   } catch (e) {
     box.innerHTML = '❌ Lỗi tải trạng thái KB: ' + escHtml(e.message);
@@ -2206,7 +2206,7 @@ function kbBadges(v) {
   let out = '';
   if (v.kev) {
     const t = v.kev_due_date ? `CISA KEV · đang bị khai thác · hạn ${v.kev_due_date}` : 'CISA KEV · đang bị khai thác';
-    out += `<span class="badge badge-critical" title="${t}">🔥 KEV</span>`;
+    out += `<span class="badge badge-critical" title="${escHtml(t)}">🔥 KEV</span>`;
     if (v.kev_ransomware) out += ` <span class="badge badge-critical" title="Liên quan chiến dịch ransomware">💀 Ransomware</span>`;
   }
   if (typeof v.epss === 'number') {

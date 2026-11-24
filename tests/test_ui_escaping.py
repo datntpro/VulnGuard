@@ -122,3 +122,10 @@ def test_browser_poc_sinks_do_not_execute():
     finally:
         browser.close()
         pw.stop()
+
+
+def test_kb_status_and_kev_badge_escaped():
+    for raw in ("${s.version || '?'}", "${s.built_at || '?'}", "${(s.sources || []).join(', ') || '?'}",
+                "${s.update_interval_hours}", "`${k}: ${v}`", 'title="${t}"'):
+        assert raw not in INDEX, raw
+    assert 'title="${escHtml(t)}"' in INDEX
