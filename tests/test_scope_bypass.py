@@ -256,3 +256,75 @@ def test_b3_allowlisted_wordlist_still_works(wl_env):
 def test_b3_default_wordlist_is_allowlisted():
     assert toolbelt.DEFAULT_WORDLIST.startswith("/usr/share/seclists/")
     assert any(toolbelt.DEFAULT_WORDLIST.startswith(d) for d in ["/usr/share/seclists"])
+
+
+# ───── B4: nuclei tag dos/intrusive/fuzz chạy không cần duyệt ─────
+NUCLEI_RULES = [{"type": "ip", "value": "10.1.0.5", "mode": "allow"}]
+
+
+def _nuclei_tool():
+    t = toolbelt.get_tool("web_vuln_scan")
+    return t
+
+
+@pytest.fixture
+def nuclei_calls(monkeypatch):
+    calls = []
+
+    async def fake_run_nuclei(**kw):
+        calls.append(kw)
+        return [], {"error": None}
+    import scanner.crawler.nuclei_runner as nr
+    monkeypatch.setattr(nr, "run_nuclei", fake_run_nuclei)
+    return calls
+
+
+@pytest.mark.parametrize("tags", [
+    ["dos"], ["fuzz"], ["intrusive"], ["dos", "fuzz", "intrusive"], ["cve", "DoS"], ["cve,dos"],
+    [" Intrusive "], ["bruteforce"], ["dast"], "dos", ["cve", 5], {"dos": 1},
+])
+def test_b4_dangerous_tags_need_approval_in_every_mode(tags, monkeypatch):
+    t = _nuclei_tool()
+    monkeypatch.setattr(t, "available", lambda: True)
+    for mode in (AutonomyMode.AUTONOMOUS_IN_SCOPE, AutonomyMode.GUIDED):
+        d, _ = decide_action(t, {"targets": ["http://10.1.0.5/"], "tags": tags}, mode, NUCLEI_RULES)
+        assert d == "needs_approval", (tags, mode)
+
+
+def test_b4_safe_tags_still_autorun(monkeypatch):
+    t = _nuclei_tool()
+    monkeypatch.setattr(t, "available", lambda: True)
+    for tags in (None, [], ["cve", "exposure", "misconfig"]):
+        inp = {"targets": ["http://10.1.0.5/"]}
+        if tags is not None:
+            inp["tags"] = tags
+        d, _ = decide_action(t, inp, AutonomyMode.AUTONOMOUS_IN_SCOPE, NUCLEI_RULES)
+        assert d == "execute"
+
+
+def test_b4_runner_refuses_dangerous_tags_without_approval(nuclei_calls):
+    out = _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["dos", "fuzz", "intrusive"]},
+                                       {"run_id": None}))
+    assert out["ran"] is False and nuclei_calls == []
+    out = _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["cve", 1]}, {"approved": True}))
+    assert out["ran"] is False and nuclei_calls == []   # kiểu lạ: fail closed kể cả khi đã duyệt
+
+
+def test_b4_runner_always_excludes_dangerous_tags_by_default(nuclei_calls):
+    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["cve"]}, {"run_id": None}))
+    kw = nuclei_calls[-1]
+    assert {"dos", "intrusive", "fuzz", "bruteforce"} <= set(kw["exclude_tags"])
+    assert kw["tags"] == ["cve"] and kw["fuzz"] is False
+
+
+def test_b4_approved_run_only_unblocks_requested_tags(nuclei_calls):
+    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["dos"]}, {"approved": True}))
+    kw = nuclei_calls[-1]
+    assert "dos" not in kw["exclude_tags"] and "intrusive" in kw["exclude_tags"]
+
+
+def test_b4_nuclei_argv_contains_etags():
+    from scanner.crawler.nuclei_runner import build_command
+    argv = build_command("t.txt", ["high"], ["cve"], False, 50, exclude_tags=sorted(toolbelt.DANGEROUS_NUCLEI_TAGS))
+    etags = argv[argv.index("-etags") + 1].split(",")
+    assert {"dos", "intrusive", "fuzz"} <= set(etags)
