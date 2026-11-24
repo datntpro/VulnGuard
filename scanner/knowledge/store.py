@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS epss (
   cve TEXT PRIMARY KEY, epss REAL, percentile REAL, score_date TEXT
 );
+-- CISA KEV: lỗ hổng ĐANG bị khai thác thực tế (keyed theo CVE). Có mặt ở đây
+-- = ưu tiên fix cao nhất; ransomware=1 nếu liên quan chiến dịch ransomware.
+CREATE TABLE IF NOT EXISTS kev (
+  cve TEXT PRIMARY KEY, date_added TEXT, vendor_project TEXT, product TEXT,
+  vuln_name TEXT, ransomware INTEGER, due_date TEXT
+);
 """
 
 
@@ -70,8 +76,12 @@ def get_meta(path: Optional[str] = None) -> Dict[str, Any]:
                 ne = c.execute("SELECT COUNT(*) FROM epss").fetchone()[0]
             except sqlite3.OperationalError:
                 ne = 0
+            try:
+                nk = c.execute("SELECT COUNT(*) FROM kev").fetchone()[0]
+            except sqlite3.OperationalError:
+                nk = 0
         out = {r["key"]: json.loads(r["value"]) for r in rows}
-        out.update({"available": True, "advisory_count": n, "epss_count": ne})
+        out.update({"available": True, "advisory_count": n, "epss_count": ne, "kev_count": nk})
         return out
     except Exception:
         return {"available": False}
@@ -113,6 +123,38 @@ def lookup_epss(cve: str, path: Optional[str] = None) -> Optional[Dict[str, Any]
     return dict(r) if r else None
 
 
+def set_kev(path: str, rows: List[Dict[str, Any]]) -> int:
+    """Nạp KEV: rows = [{cve, date_added, vendor_project, product, vuln_name,
+    ransomware(bool), due_date}]."""
+    with closing(_connect(path)) as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO kev(cve,date_added,vendor_project,product,"
+            "vuln_name,ransomware,due_date) VALUES(?,?,?,?,?,?,?)",
+            [[(r.get("cve") or "").upper(), r.get("date_added"), r.get("vendor_project"),
+              r.get("product"), r.get("vuln_name"), 1 if r.get("ransomware") else 0,
+              r.get("due_date")] for r in rows])
+        c.commit()
+    return len(rows)
+
+
+def lookup_kev(cve: str, path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Trả bản ghi KEV cho 1 CVE (có ransomware:bool), hoặc None nếu không có."""
+    path = path or kb_path()
+    if not cve or not os.path.exists(path):
+        return None
+    try:
+        with closing(_connect(path)) as c:
+            r = c.execute("SELECT date_added,vendor_project,product,vuln_name,"
+                          "ransomware,due_date FROM kev WHERE cve=?", (cve.upper(),)).fetchone()
+    except sqlite3.OperationalError:          # KB cũ chưa có bảng kev
+        return None
+    if not r:
+        return None
+    d = dict(r)
+    d["ransomware"] = bool(d.get("ransomware"))
+    return d
+
+
 def lookup_cve(cve: str, path: Optional[str] = None) -> List[Dict[str, Any]]:
     path = path or kb_path()
     if not cve or not os.path.exists(path):
@@ -145,12 +187,15 @@ def enrich(cve: Optional[str] = None, ecosystem: Optional[str] = None,
     cves = {cve.upper()} if cve else set()
     cves |= {a["cve"].upper() for a in advs if a.get("cve")}
     best_epss = None
+    kev_hit = None
     for cv in cves:
         e = lookup_epss(cv, path)
         if e and e.get("epss") is not None:
             if best_epss is None or e["epss"] > best_epss.get("epss", -1):
                 best_epss = e
-    if not advs and not best_epss:
+        if kev_hit is None:
+            kev_hit = lookup_kev(cv, path)
+    if not advs and not best_epss and not kev_hit:
         return {}
     fixed = sorted({a["fixed"] for a in advs if a.get("fixed")})
     cvss = max((a["cvss"] for a in advs if a.get("cvss") is not None), default=None)
@@ -172,6 +217,10 @@ def enrich(cve: Optional[str] = None, ecosystem: Optional[str] = None,
         "epss": best_epss.get("epss") if best_epss else None,
         "epss_percentile": best_epss.get("percentile") if best_epss else None,
         "epss_date": best_epss.get("score_date") if best_epss else None,
+        "kev": bool(kev_hit),
+        "kev_ransomware": bool(kev_hit and kev_hit.get("ransomware")),
+        "kev_date_added": kev_hit.get("date_added") if kev_hit else None,
+        "kev_due_date": kev_hit.get("due_date") if kev_hit else None,
     }
 
 
@@ -214,8 +263,13 @@ def enrich_findings(findings: List[Dict[str, Any]], path: Optional[str] = None) 
         if data.get("epss") is not None:
             f["epss"] = data["epss"]
             f["epss_percentile"] = data.get("epss_percentile")
+        if data.get("kev"):
+            f["kev"] = True
+            f["kev_ransomware"] = data.get("kev_ransomware", False)
         f["kb"] = {"references": data.get("references", []),
                    "summary": data.get("summary"), "source_count": data.get("source_count", 0),
-                   "epss": data.get("epss"), "epss_percentile": data.get("epss_percentile")}
+                   "epss": data.get("epss"), "epss_percentile": data.get("epss_percentile"),
+                   "kev": data.get("kev", False), "kev_ransomware": data.get("kev_ransomware", False),
+                   "kev_due_date": data.get("kev_due_date")}
         n += 1
     return n

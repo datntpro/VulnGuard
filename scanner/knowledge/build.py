@@ -59,6 +59,43 @@ def ingest_epss(dest_path: str, _fetch=None) -> int:
     return len(rows)
 
 
+# CISA KEV — catalog lỗ hổng đang bị khai thác thực tế (JSON công khai, không auth).
+KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+
+
+def parse_kev_json(data: Any) -> List[Dict[str, Any]]:
+    """Pure: nội dung KEV JSON (dict hoặc chuỗi) → list row. Bỏ mục thiếu cveID."""
+    if isinstance(data, (bytes, bytearray)):
+        data = data.decode("utf-8", "replace")
+    if isinstance(data, str):
+        data = json.loads(data)
+    out: List[Dict[str, Any]] = []
+    for v in (data or {}).get("vulnerabilities", []) or []:
+        cve = (v.get("cveID") or "").strip().upper()
+        if not cve:
+            continue
+        out.append({
+            "cve": cve,
+            "date_added": v.get("dateAdded"),
+            "vendor_project": v.get("vendorProject"),
+            "product": v.get("product"),
+            "vuln_name": v.get("vulnerabilityName"),
+            "ransomware": str(v.get("knownRansomwareCampaignUse") or "").strip().lower() == "known",
+            "due_date": v.get("dueDate"),
+        })
+    return out
+
+
+def ingest_kev(dest_path: str, _fetch=None) -> int:
+    """Tải CISA KEV JSON → parse → set_kev. Trả số CVE nạp."""
+    import httpx
+    from scanner.knowledge.store import set_kev
+    data = _fetch(KEV_URL) if _fetch else httpx.get(KEV_URL, timeout=120, follow_redirects=True).content
+    rows = parse_kev_json(data)
+    set_kev(dest_path, rows)
+    return len(rows)
+
+
 def parse_osv(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Pure: 1 OSV record → list advisory rows."""
     aliases = rec.get("aliases") or []
@@ -133,16 +170,24 @@ def build(dest_path: str, ecosystems: List[str] = None, _fetch=None) -> Dict[str
             per[eco] = f"ERR: {str(e)[:80]}"
     # EPSS (xác suất bị khai thác) — không chặn build nếu lỗi tải
     sources = ["osv"]
-    epss_count = 0
+    epss_count = kev_count = 0
     try:
         epss_count = ingest_epss(dest_path, _fetch=_fetch)
         sources.append("epss")
     except Exception as e:
         per["_epss_error"] = str(e)[:80]
+    # CISA KEV (đang bị khai thác thực tế) — không chặn build nếu lỗi tải
+    try:
+        kev_count = ingest_kev(dest_path, _fetch=_fetch)
+        sources.append("kev")
+    except Exception as e:
+        per["_kev_error"] = str(e)[:80]
     version = datetime.datetime.utcnow().strftime("%Y.%m.%d")
     set_meta(dest_path, version=version, built_at=datetime.datetime.utcnow().isoformat() + "Z",
-             sources=sources, ecosystems=per, total=total, epss_count=epss_count)
-    return {"version": version, "total": total, "ecosystems": per, "epss_count": epss_count}
+             sources=sources, ecosystems=per, total=total,
+             epss_count=epss_count, kev_count=kev_count)
+    return {"version": version, "total": total, "ecosystems": per,
+            "epss_count": epss_count, "kev_count": kev_count}
 
 
 if __name__ == "__main__":

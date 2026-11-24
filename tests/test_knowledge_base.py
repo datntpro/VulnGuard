@@ -206,6 +206,64 @@ def test_lookup_epss_missing_table_safe():
     assert lookup_epss("CVE-NOPE", p) is None
 
 
+# ── CISA KEV ──
+_KEV = {
+    "catalogVersion": "2025.03.20",
+    "vulnerabilities": [
+        {"cveID": "CVE-2024-1", "vendorProject": "Acme", "product": "Web",
+         "vulnerabilityName": "Acme RCE", "dateAdded": "2024-05-01",
+         "knownRansomwareCampaignUse": "Known", "dueDate": "2024-05-15"},
+        {"cveID": "CVE-2020-9", "vendorProject": "X", "product": "Y",
+         "vulnerabilityName": "X SQLi", "dateAdded": "2020-02-02",
+         "knownRansomwareCampaignUse": "Unknown", "dueDate": "2020-02-20"},
+        {"product": "no-cve"},                         # bỏ: thiếu cveID
+    ],
+}
+
+
+def test_parse_kev_json():
+    from scanner.knowledge.build import parse_kev_json
+    rows = parse_kev_json(_KEV)
+    assert len(rows) == 2
+    m = {r["cve"]: r for r in rows}
+    assert m["CVE-2024-1"]["ransomware"] is True
+    assert m["CVE-2020-9"]["ransomware"] is False
+    assert m["CVE-2024-1"]["due_date"] == "2024-05-15"
+    # chấp nhận cả chuỗi JSON
+    assert len(parse_kev_json(json.dumps(_KEV))) == 2
+
+
+def test_enrich_includes_kev():
+    from scanner.knowledge.store import set_kev, enrich
+    from scanner.knowledge.build import parse_kev_json
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    set_kev(p, parse_kev_json(_KEV))
+    e = enrich(cve="CVE-2024-1", path=p)
+    assert e["kev"] is True and e["kev_ransomware"] is True
+    assert e["kev_date_added"] == "2024-05-01"
+    # package-only cũng kéo được KEV qua CVE của advisory
+    assert enrich(ecosystem="pypi", package="django", path=p)["kev"] is True
+    # CVE không trong KEV
+    assert enrich(cve="CVE-0000-0", path=p) == {} or enrich(cve="CVE-0000-0", path=p).get("kev") is False
+
+
+def test_enrich_findings_sets_kev():
+    from scanner.knowledge.store import set_kev, enrich_findings
+    from scanner.knowledge.build import parse_kev_json
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    set_kev(p, parse_kev_json(_KEV))
+    findings = [{"cve": "CVE-2024-1", "package_name": "django"}]
+    enrich_findings(findings, path=p)
+    assert findings[0]["kev"] is True and findings[0]["kev_ransomware"] is True
+    assert findings[0]["kb"]["kev_due_date"] == "2024-05-15"
+
+
+def test_lookup_kev_missing_table_safe():
+    from scanner.knowledge.store import lookup_kev
+    d = tempfile.mkdtemp(); p = os.path.join(d, "kb.sqlite"); _seed(p)
+    assert lookup_kev("CVE-NOPE", p) is None
+
+
 def test_import_file_rejects_garbage():
     from scanner.knowledge.updater import import_file
     d = tempfile.mkdtemp()
