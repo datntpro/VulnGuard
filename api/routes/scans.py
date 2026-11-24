@@ -144,6 +144,17 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
 
         # Persist findings
         for finding in findings:
+            # Gói tri thức khai thác (EPSS/KEV) + nâng ưu tiên vào raw_output
+            # (không cần cột DB mới) để VulnOut expose qua property.
+            kb_meta = {k: finding[k] for k in (
+                "epss", "epss_percentile", "kev", "kev_ransomware",
+                "priority_reason", "severity_original") if finding.get(k) is not None}
+            if isinstance(finding.get("kb"), dict):
+                kb_meta.setdefault("kev_due_date", finding["kb"].get("kev_due_date"))
+            raw = finding.get("raw")
+            if kb_meta:
+                raw = ({**raw, "_vulnguard_kb": kb_meta} if isinstance(raw, dict)
+                       else {"_raw": raw, "_vulnguard_kb": kb_meta})
             vuln = Vulnerability(
                 scan_id=scan_id,
                 tool=finding.get("tool", "unknown"),
@@ -162,7 +173,7 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
                 package_name=finding.get("package_name"),
                 package_version=finding.get("package_version"),
                 fixed_version=finding.get("fixed_version"),
-                raw_output=finding.get("raw"),
+                raw_output=raw,
                 fingerprint=finding.get("fingerprint"),
             )
             db.add(vuln)

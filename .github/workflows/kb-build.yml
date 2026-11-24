@@ -5,7 +5,7 @@ name: KB Build
 
 on:
   schedule:
-    - cron: "17 2 * * *"   # 02:17 UTC mỗi ngày
+    - cron: "17 14 * * *"   # 14:17 UTC — sau khi EPSS publish (~13:30 UTC) để lấy bản mới nhất
   workflow_dispatch:        # chạy tay khi cần
 
 permissions:

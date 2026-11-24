@@ -273,3 +273,48 @@ def enrich_findings(findings: List[Dict[str, Any]], path: Optional[str] = None) 
                    "kev_due_date": data.get("kev_due_date")}
         n += 1
     return n
+
+
+_SEV_ORDER = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+# Ngưỡng EPSS để coi là "nhiều khả năng bị khai thác" → nâng tối thiểu HIGH.
+EPSS_HIGH_THRESHOLD = 0.5
+
+
+def _max_sev(a: str, b: str) -> str:
+    try:
+        return a if _SEV_ORDER.index(a) >= _SEV_ORDER.index(b) else b
+    except ValueError:
+        return a
+
+
+def prioritize_findings(findings: List[Dict[str, Any]],
+                        epss_threshold: float = EPSS_HIGH_THRESHOLD) -> int:
+    """
+    Nâng mức ưu tiên dựa trên tri thức khai thác (chạy SAU enrich_findings):
+      - KEV + ransomware → tối thiểu CRITICAL
+      - KEV               → tối thiểu HIGH
+      - EPSS >= ngưỡng    → tối thiểu HIGH
+    Chỉ NÂNG, không bao giờ hạ. Ghi lại severity gốc + lý do để hiển thị/kiểm toán.
+    Trả số finding bị nâng.
+    """
+    bumped = 0
+    for f in findings:
+        cur = (f.get("severity") or "INFO").upper()
+        floor, reason = None, None
+        if f.get("kev_ransomware"):
+            floor, reason = "CRITICAL", "KEV + ransomware"
+        elif f.get("kev"):
+            floor, reason = "HIGH", "CISA KEV (đang bị khai thác)"
+        elif isinstance(f.get("epss"), (int, float)) and f["epss"] >= epss_threshold:
+            floor, reason = "HIGH", f"EPSS cao ({f['epss']:.2f})"
+        if not floor:
+            continue
+        new = _max_sev(cur, floor)
+        if new != cur:
+            f["severity_original"] = cur
+            f["severity"] = new
+            f["priority_reason"] = reason
+            bumped += 1
+        else:
+            f.setdefault("priority_reason", reason)   # đã đủ cao: vẫn ghi vì sao đáng chú ý
+    return bumped

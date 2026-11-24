@@ -264,6 +264,38 @@ def test_lookup_kev_missing_table_safe():
     assert lookup_kev("CVE-NOPE", p) is None
 
 
+# ── prioritize_findings (nâng ưu tiên theo tri thức khai thác) ──
+def test_prioritize_kev_ransomware_to_critical():
+    from scanner.knowledge.store import prioritize_findings
+    f = [{"severity": "MEDIUM", "kev": True, "kev_ransomware": True}]
+    assert prioritize_findings(f) == 1
+    assert f[0]["severity"] == "CRITICAL" and f[0]["severity_original"] == "MEDIUM"
+    assert "ransomware" in f[0]["priority_reason"].lower()
+
+
+def test_prioritize_kev_to_high():
+    from scanner.knowledge.store import prioritize_findings
+    f = [{"severity": "LOW", "kev": True}]
+    prioritize_findings(f)
+    assert f[0]["severity"] == "HIGH"
+
+
+def test_prioritize_epss_threshold():
+    from scanner.knowledge.store import prioritize_findings
+    f = [{"severity": "LOW", "epss": 0.8}, {"severity": "LOW", "epss": 0.1}]
+    prioritize_findings(f)
+    assert f[0]["severity"] == "HIGH"          # trên ngưỡng
+    assert f[1]["severity"] == "LOW"           # dưới ngưỡng → giữ nguyên
+
+
+def test_prioritize_never_downgrades():
+    from scanner.knowledge.store import prioritize_findings
+    f = [{"severity": "CRITICAL", "kev": True}]
+    prioritize_findings(f)
+    assert f[0]["severity"] == "CRITICAL" and "severity_original" not in f[0]
+    assert f[0]["priority_reason"]             # vẫn ghi lý do đáng chú ý
+
+
 def test_import_file_rejects_garbage():
     from scanner.knowledge.updater import import_file
     d = tempfile.mkdtemp()

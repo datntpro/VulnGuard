@@ -128,6 +128,14 @@ class VulnOut(BaseModel):
     ai_fix_suggestion: Optional[str]
     ai_analyzed_at: Optional[datetime]
     ai_provider: Optional[str] = None
+    # Tri thức khai thác (từ KB) + nâng ưu tiên
+    epss: Optional[float] = None
+    epss_percentile: Optional[float] = None
+    kev: bool = False
+    kev_ransomware: bool = False
+    kev_due_date: Optional[str] = None
+    priority_reason: Optional[str] = None
+    severity_original: Optional[str] = None
     fingerprint: Optional[str]
     triage_note: Optional[str] = None
     triage_by: Optional[str] = None

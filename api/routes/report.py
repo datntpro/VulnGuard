@@ -105,6 +105,24 @@ def _severity_badge(sev: str) -> str:
     return f'<span class="badge" style="color:{color};background:{bg};border:1px solid {color}20">{label}</span>'
 
 
+def _exploit_badges(g: dict) -> str:
+    """Badge KEV/EPSS cho report (HTML inline, không phụ thuộc CSS class)."""
+    out = ""
+    if g.get("kev"):
+        out += ('<span class="badge" style="color:#991b1b;background:#fee2e2;'
+                'border:1px solid #991b1b20">🔥 KEV</span>')
+        if g.get("kev_ransomware"):
+            out += (' <span class="badge" style="color:#991b1b;background:#fee2e2;'
+                    'border:1px solid #991b1b20">💀 Ransomware</span>')
+    epss = g.get("epss")
+    if isinstance(epss, (int, float)):
+        pct = f"{epss * 100:.0f}" if epss >= 0.1 else f"{epss * 100:.1f}"
+        col = "#991b1b" if epss >= 0.5 else ("#92400e" if epss >= 0.1 else "#374151")
+        out += (f' <span class="badge" style="color:{col};background:#f3f4f6;'
+                f'border:1px solid {col}20" title="EPSS: xác suất bị khai thác 30 ngày">EPSS {pct}%</span>')
+    return out
+
+
 def _esc(text: str) -> str:
     """HTML escape"""
     if not text:
@@ -224,10 +242,18 @@ def _dedup_and_group(vulns: List[Vulnerability]):
             if scan_type == "SCA" and package_name:
                 title = f"{package_name} {package_version}".strip()
 
+            # Tổng hợp tín hiệu khai thác (KEV/EPSS) trong group
+            grp_kev = any(it.get("kev") for it in items)
+            grp_ransom = any(it.get("kev_ransomware") for it in items)
+            grp_epss = max((it["epss"] for it in items if isinstance(it.get("epss"), (int, float))),
+                           default=None)
             groups.append({
                 "group_key":             gk,
                 "title":                 title,
                 "severity":              highest_sev,
+                "kev":                   grp_kev,
+                "kev_ransomware":        grp_ransom,
+                "epss":                  grp_epss,
                 "tools":                 all_tools,
                 "items":                 sorted(items, key=lambda x: SEVERITY_ORDER.get(x["severity"], 99)),
                 "count":                 len(items),
@@ -284,6 +310,13 @@ def _vuln_to_dict(v: Vulnerability) -> dict:
         "package_name":        v.package_name or "",
         "package_version":     v.package_version or "",
         "fixed_version":       v.fixed_version or "",
+        "epss":                v.epss,
+        "epss_percentile":     v.epss_percentile,
+        "kev":                 v.kev,
+        "kev_ransomware":      v.kev_ransomware,
+        "kev_due_date":        v.kev_due_date or "",
+        "priority_reason":     v.priority_reason or "",
+        "severity_original":   v.severity_original or "",
         "fingerprint":         v.fingerprint or "",
         "status":              v.status.value if v.status else "OPEN",
         "ai_explanation":      v.ai_explanation or "",
@@ -415,7 +448,7 @@ def _render_html(
             {cve_display}
           </td>
           <td class="num">{g["count"]}</td>
-          <td>{_severity_badge(g["severity"])}</td>
+          <td>{_severity_badge(g["severity"])}{(' ' + _exploit_badges(g)) if (g.get("kev") or isinstance(g.get("epss"), (int, float))) else ''}</td>
           <td class="tools-cell"><span class="tool-tag">{_esc(tools_display)}</span></td>
           <td class="assessment-cell">{_esc(assessment)}</td>
         </tr>""")

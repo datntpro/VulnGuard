@@ -2075,6 +2075,22 @@ function sevBadge(s) {
   const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
   return `<span class="badge ${cls[s] || 'badge-info'}">${s}</span>`;
 }
+// Badge tri thức khai thác (KEV/EPSS) — hiển thị cạnh severity
+function kbBadges(v) {
+  let out = '';
+  if (v.kev) {
+    const t = v.kev_due_date ? `CISA KEV · đang bị khai thác · hạn ${v.kev_due_date}` : 'CISA KEV · đang bị khai thác';
+    out += `<span class="badge badge-critical" title="${t}">🔥 KEV</span>`;
+    if (v.kev_ransomware) out += ` <span class="badge badge-critical" title="Liên quan chiến dịch ransomware">💀 Ransomware</span>`;
+  }
+  if (typeof v.epss === 'number') {
+    const pct = (v.epss * 100).toFixed(v.epss >= 0.1 ? 0 : 1);
+    const cls = v.epss >= 0.5 ? 'badge-high' : (v.epss >= 0.1 ? 'badge-medium' : 'badge-info');
+    const pp = (typeof v.epss_percentile === 'number') ? ` (top ${(100 - v.epss_percentile * 100).toFixed(1)}%)` : '';
+    out += ` <span class="badge ${cls}" title="EPSS: xác suất bị khai thác trong 30 ngày${pp}">EPSS ${pct}%</span>`;
+  }
+  return out;
+}
 // Trạng thái triage kiểu Checkmarx
 const TRIAGE_STATES = [
   { v: 'OPEN', lbl: 'Cần xác minh', cls: 'badge-open' },
@@ -3020,12 +3036,13 @@ function renderVulnTable() {
         <tbody>
           ${filtered.length ? filtered.map(v => `
             <tr class="vuln-row" onclick="openVulnDetail('${v.id}')">
-              <td>${sevBadge(v.severity)}</td>
+              <td>${sevBadge(v.severity)}${v.severity_original && v.severity_original !== v.severity ? `<span class="text-sm" style="color:var(--text2)" title="Nâng từ ${v.severity_original} do ${v.priority_reason||''}">↑</span>` : ''}</td>
               <td><span class="tag">${v.scan_type}</span></td>
               <td>
                 <div>${v.title}</div>
                 ${v.cve ? `<span class="text-mono text-sm" style="color:var(--info)">${v.cve}</span>` : ''}
                 ${v.package_name ? `<span class="text-sm"> ${v.package_name}@${v.package_version||''}</span>` : ''}
+                ${(v.kev || typeof v.epss === 'number') ? `<div style="margin-top:4px;">${kbBadges(v)}</div>` : ''}
               </td>
               <td class="text-mono text-sm">${(v.file_path||'').slice(-30)}${v.line_start ? ':'+v.line_start : ''}</td>
               <td class="text-sm">${v.tool}</td>
@@ -3086,7 +3103,9 @@ function openVulnDetail(vulnId) {
   const v = allVulns.find(x => x.id === vulnId);
   if (!v) return;
 
-  document.getElementById('modal-severity-badge').innerHTML = sevBadge(v.severity);
+  document.getElementById('modal-severity-badge').innerHTML = sevBadge(v.severity) + ' ' + kbBadges(v) +
+    (v.severity_original && v.severity_original !== v.severity
+      ? `<div class="text-sm" style="color:var(--text2);margin-top:4px;">⬆ Nâng từ <strong>${v.severity_original}</strong> — ${v.priority_reason||''}</div>` : '');
   document.getElementById('modal-title').textContent = v.title;
   document.getElementById('modal-tool').textContent = v.tool;
   document.getElementById('modal-scan-type').innerHTML = `<span class="tag">${v.scan_type}</span>`;
