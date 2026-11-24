@@ -3,7 +3,8 @@ Cloud AI provider API.
   GET  /api/ai/config            — cấu hình hiện tại (không lộ secret)
   PUT  /api/ai/config            — cập nhật (ADMIN; api_key là write-only)
   POST /api/ai/test              — gọi thử provider cloud
-  POST /api/vulns/{id}/reanalyze — phân tích lại 1 vuln bằng Claude
+  GET  /api/ai/models            — model provider hỗ trợ (cho dropdown)
+  POST /api/vulns/{id}/reanalyze — phân tích lại 1 vuln bằng cloud AI
 """
 import time
 from datetime import datetime
@@ -31,6 +32,18 @@ def put_ai_config(payload: Dict[str, Any], _=Depends(require_admin)):
         return public_config(validate_and_save(payload))
     except (ValueError, TypeError, KeyError) as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/api/ai/models")
+def list_ai_models(provider: str, _=Depends(require_admin)):
+    """Danh sách model provider hỗ trợ (để UI chọn dropdown thay vì gõ tay).
+
+    provider ∈ anthropic | bedrock | openai | openrouter. Dùng key đã lưu; offline
+    hoặc chưa có key → trả danh sách mặc định (source=static)."""
+    from api.services.ai_models import STATIC_MODELS, list_models
+    if provider not in STATIC_MODELS:
+        raise HTTPException(status_code=422, detail="provider không hợp lệ")
+    return {"provider": provider, **list_models(provider, load_config())}
 
 
 @router.post("/api/ai/test")

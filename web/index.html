@@ -1081,7 +1081,7 @@
         <span id="sonar-badge" class="text-sm" style="color:var(--text2);"></span>
       </div>
       <div class="notice" style="margin-bottom:12px;">
-        Trỏ tới SonarQube server (Community) để chạy SAST theo data-flow, giảm false positive.
+        Trỏ tới SonarQube server của bạn (bản nào cũng được) để chạy SAST theo data-flow, giảm false positive.
         Dùng server sẵn có hoặc bật bundled: <span class="text-mono">docker compose --profile sonar up -d</span>.
         Tạo token tại SonarQube → <em>My Account → Security</em>. Token được <strong>mã hoá</strong>, không hiển thị lại.
       </div>
@@ -1128,10 +1128,10 @@
             <div class="opt-desc">Chỉ dùng Ollama — dữ liệu không rời máy.</div></label>
           <label class="opt-card"><input type="radio" name="ai-mode" value="hybrid" onchange="onAIModeChange()">
             <div class="opt-title">⚖️ Hybrid</div>
-            <div class="opt-desc">Ollama chấm trước; finding mức ≥ ngưỡng hoặc FP% nằm trong vùng không chắc chắn (fp_band) sẽ được gửi lên Claude để xác minh.</div></label>
+            <div class="opt-desc">Ollama chấm trước; finding mức ≥ ngưỡng hoặc FP% nằm trong vùng không chắc chắn (fp_band) sẽ được gửi lên cloud AI để xác minh.</div></label>
           <label class="opt-card"><input type="radio" name="ai-mode" value="cloud_only" onchange="onAIModeChange()">
             <div class="opt-title">☁️ Chỉ cloud</div>
-            <div class="opt-desc">Mọi finding đều được phân tích bằng Claude (cloud provider bên dưới).</div></label>
+            <div class="opt-desc">Mọi finding đều được phân tích bằng cloud AI (provider cấu hình bên dưới).</div></label>
         </div>
 
         <!-- Hybrid options -->
@@ -1140,14 +1140,14 @@
           <h3>⚖️ Ngưỡng escalate lên cloud (Hybrid)</h3>
           <div class="grid2">
             <div class="form-group">
-              <label>Mức severity tối thiểu gửi lên Claude</label>
+              <label>Mức severity tối thiểu gửi lên cloud AI</label>
               <select id="ai-escalate-sev">
                 <option value="CRITICAL">CRITICAL</option>
                 <option value="HIGH">HIGH trở lên</option>
                 <option value="MEDIUM">MEDIUM trở lên</option>
                 <option value="LOW">LOW trở lên</option>
               </select>
-              <div class="field-hint">Finding có severity ≥ mức này luôn được Claude xác minh lại.</div>
+              <div class="field-hint">Finding có severity ≥ mức này luôn được cloud AI xác minh lại.</div>
             </div>
             <div class="form-group">
               <label>Vùng không chắc chắn của FP% (Ollama)</label>
@@ -1158,7 +1158,7 @@
                 <span class="text-sm">%</span>
               </div>
               <div class="band-bar"><div class="band" id="ai-fp-band"></div></div>
-              <div class="field-hint" id="ai-fp-band-hint">FP% nằm trong khoảng này → gửi Claude xác minh.</div>
+              <div class="field-hint" id="ai-fp-band-hint">FP% nằm trong khoảng này → gửi cloud AI xác minh.</div>
             </div>
           </div>
         </div>
@@ -1195,8 +1195,10 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Model</label>
-              <input id="ai-anth-model" class="text-mono" placeholder="claude-opus-5-5">
+              <label>Model <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('anthropic');return false;">⟳ Tải model theo license</a></label>
+              <input id="ai-anth-model" class="text-mono" list="dl-anth-model" placeholder="claude-opus-5-5" autocomplete="off">
+              <datalist id="dl-anth-model"></datalist>
+              <div class="field-hint" id="ai-anth-model-note">Bấm "Tải model" để lấy đúng danh sách model key của bạn hỗ trợ (hoặc tự gõ).</div>
             </div>
           </div>
           <div id="ai-auth-apikey">
@@ -1235,7 +1237,12 @@
               </select>
             </div>
             <div class="form-group"><label>Region</label><input id="ai-br-region" class="text-mono" placeholder="us-east-1"></div>
-            <div class="form-group"><label>Model ID</label><input id="ai-br-model" class="text-mono" placeholder="anthropic.claude-opus-5-5"></div>
+            <div class="form-group">
+              <label>Model ID <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('bedrock');return false;">⟳ Tải model</a></label>
+              <input id="ai-br-model" class="text-mono" list="dl-br-model" placeholder="anthropic.claude-opus-5-5" autocomplete="off">
+              <datalist id="dl-br-model"></datalist>
+              <div class="field-hint" id="ai-br-model-note"></div>
+            </div>
           </div>
           <div id="ai-br-profile-wrap" class="form-group" style="display:none;">
             <label>AWS profile</label>
@@ -1254,7 +1261,12 @@
         <div class="settings-section" id="ai-openai-section" style="display:none;">
           <div class="separator"></div>
           <div class="grid2">
-            <div class="form-group"><label>Model</label><input id="ai-oai-model" class="text-mono" placeholder="gpt-4o"></div>
+            <div class="form-group">
+              <label>Model <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('openai');return false;">⟳ Tải model</a></label>
+              <input id="ai-oai-model" class="text-mono" list="dl-oai-model" placeholder="gpt-4o" autocomplete="off">
+              <datalist id="dl-oai-model"></datalist>
+              <div class="field-hint" id="ai-oai-model-note"></div>
+            </div>
             <div class="form-group"><label>Base URL (tùy chọn)</label><input id="ai-oai-base" class="text-mono" placeholder="https://api.openai.com/v1"></div>
           </div>
           <div class="form-group">
@@ -1270,7 +1282,12 @@
           <div class="separator"></div>
           <div class="notice">OpenRouter định tuyến tới nhiều nhà cung cấp. Model dạng <span class="text-mono">nhà-cung-cấp/model</span>, ví dụ <span class="text-mono">anthropic/claude-3.5-sonnet</span>, <span class="text-mono">openai/gpt-4o</span>, <span class="text-mono">meta-llama/llama-3.1-70b-instruct</span>.</div>
           <div class="grid2">
-            <div class="form-group"><label>Model</label><input id="ai-or-model" class="text-mono" placeholder="anthropic/claude-3.5-sonnet"></div>
+            <div class="form-group">
+              <label>Model <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('openrouter');return false;">⟳ Tải model</a></label>
+              <input id="ai-or-model" class="text-mono" list="dl-or-model" placeholder="anthropic/claude-3.5-sonnet" autocomplete="off">
+              <datalist id="dl-or-model"></datalist>
+              <div class="field-hint" id="ai-or-model-note"></div>
+            </div>
             <div class="form-group">
               <label>API key</label>
               <input id="ai-or-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-or-...">
@@ -1323,15 +1340,15 @@
         <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;">
           <div style="flex:1;min-width:280px;">
             <label>Tên tổ chức (góc phải bìa)</label>
-            <input id="rb-org-name" placeholder="VulnGuard">
+            <input id="rb-org-name" placeholder="VulnGuard" oninput="renderReportPreview()">
             <label style="margin-top:12px;">Dòng phụ dưới tên tổ chức</label>
-            <input id="rb-org-tagline" placeholder="DevSecOps Security Platform">
+            <input id="rb-org-tagline" placeholder="DevSecOps Security Platform" oninput="renderReportPreview()">
             <label style="margin-top:12px;">Tiêu đề báo cáo (xuống dòng bằng Enter)</label>
-            <textarea id="rb-report-title" rows="2" placeholder="BÁO CÁO QUÉT BẢO MẬT&#10;MÃ NGUỒN &amp; THÀNH PHẦN"></textarea>
+            <textarea id="rb-report-title" rows="2" placeholder="BÁO CÁO QUÉT BẢO MẬT&#10;MÃ NGUỒN &amp; THÀNH PHẦN" oninput="renderReportPreview()"></textarea>
             <label style="margin-top:12px;">Chữ footer (trái)</label>
-            <input id="rb-footer-text" placeholder="VulnGuard · Báo cáo quét bảo mật">
+            <input id="rb-footer-text" placeholder="VulnGuard · Báo cáo quét bảo mật" oninput="renderReportPreview()">
             <label style="margin-top:12px;">Nhãn bảo mật (footer)</label>
-            <input id="rb-confidential" placeholder="BẢO MẬT / CONFIDENTIAL">
+            <input id="rb-confidential" placeholder="BẢO MẬT / CONFIDENTIAL" oninput="renderReportPreview()">
           </div>
           <div style="width:220px;">
             <label>Logo (PNG/JPG, ≤ 2MB)</label>
@@ -1341,6 +1358,38 @@
               <button class="btn btn-ghost btn-sm" onclick="document.getElementById('rb-logo-file').click()">⬆️ Tải logo</button>
               <button class="btn btn-ghost btn-sm" onclick="resetReportLogo()" style="margin-top:6px;">↩️ Logo mặc định</button>
               <div id="rb-logo-msg" class="text-sm" style="margin-top:8px;color:var(--text2);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live preview trang bìa -->
+      <div class="card">
+        <div class="flex-between" style="margin-bottom:10px;">
+          <h2 style="margin-bottom:0;">👁️ Xem trước (cập nhật theo thời gian thực)</h2>
+          <span class="text-sm" style="color:var(--text2);">Mô phỏng bìa PDF — thay đổi hiển thị ngay</span>
+        </div>
+        <div id="rb-preview" style="max-width:520px;margin:0 auto;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff;color:#1a1a2e;box-shadow:0 6px 24px rgba(0,0,0,.12);">
+          <div style="height:8px;background:linear-gradient(90deg,#7c3aed,#2563eb);"></div>
+          <div style="padding:26px 28px;min-height:300px;display:flex;flex-direction:column;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+              <img id="rb-pv-logo" alt="" style="max-width:120px;max-height:52px;object-fit:contain;">
+              <div style="text-align:right;">
+                <div id="rb-pv-org" style="font-weight:800;font-size:16px;">VulnGuard</div>
+                <div id="rb-pv-tagline" style="font-size:11px;color:#555;">DevSecOps Security Platform</div>
+              </div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:center;margin:28px 0;">
+              <div id="rb-pv-title" style="font-size:24px;font-weight:800;line-height:1.3;letter-spacing:.5px;"></div>
+              <div style="margin-top:14px;font-size:12px;color:#555;">Dự án: <strong>Demo Project</strong> · Ngày: <span id="rb-pv-date"></span></div>
+              <div style="margin-top:6px;display:inline-flex;gap:6px;">
+                <span style="background:#fee2e2;color:#991b1b;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">2 CRITICAL</span>
+                <span style="background:#ffedd5;color:#9a3412;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;">5 HIGH</span>
+              </div>
+            </div>
+            <div style="border-top:1px solid #e5e7eb;padding-top:10px;display:flex;justify-content:space-between;font-size:10px;color:#777;">
+              <span id="rb-pv-footer">VulnGuard · Báo cáo quét bảo mật</span>
+              <span id="rb-pv-confidential" style="font-weight:700;color:#991b1b;">BẢO MẬT / CONFIDENTIAL</span>
             </div>
           </div>
         </div>
@@ -1471,13 +1520,14 @@
         <div id="ai-loading" class="loading"><div class="spinner"></div>AI đang phân tích...</div>
         <div class="ai-toolbar">
           <div class="flex"><span class="text-sm">Nguồn phân tích:</span><span id="ai-provider-chip" class="chip">—</span></div>
-          <button class="btn btn-ghost btn-sm" id="ai-reanalyze-btn" onclick="reanalyzeVuln()">🔁 Phân tích lại bằng Claude</button>
+          <button class="btn btn-ghost btn-sm" id="ai-reanalyze-btn" onclick="reanalyzeVuln()">🔁 Phân tích lại bằng AI</button>
         </div>
         <div id="ai-content" style="display:none">
+          <div id="ai-verdict" style="margin-bottom:12px;"></div>
           <div class="ai-box">
             <div class="ai-label">False Positive Likelihood</div>
             <div id="ai-fp" style="font-size:22px;font-weight:700;"></div>
-            <div id="ai-fp-reason" class="text-sm mt-16"></div>
+            <div id="ai-fp-reason" class="text-sm mt-16" style="line-height:1.6;"></div>
           </div>
           <div class="grid2 mt-16">
             <div class="ai-box">
@@ -1495,13 +1545,13 @@
           </div>
           <div class="ai-box mt-16">
             <div class="ai-label">🔧 Gợi ý Fix</div>
-            <div id="ai-fix" style="line-height:1.7;font-size:13px;white-space:pre-wrap;"></div>
+            <div id="ai-fix" style="line-height:1.7;font-size:13px;"></div>
           </div>
         </div>
         <div id="ai-unavailable" style="display:none" class="empty-state">
           <div class="icon">🤖</div>
           <p>AI chưa phân tích vulnerability này</p>
-          <button class="btn btn-primary mt-16" onclick="requestAI()">🔁 Phân tích ngay bằng Claude</button>
+          <button class="btn btn-primary mt-16" onclick="requestAI()">🔁 Phân tích ngay bằng AI</button>
         </div>
       </div>
       <div class="tab-content" id="tab-waiver">
@@ -2074,6 +2124,57 @@ async function kbImport() {
 function sevBadge(s) {
   const cls = { CRITICAL: 'badge-critical', HIGH: 'badge-high', MEDIUM: 'badge-medium', LOW: 'badge-low', INFO: 'badge-info' };
   return `<span class="badge ${cls[s] || 'badge-info'}">${s}</span>`;
+}
+// Markdown-lite → HTML an toàn: ```code```, `inline`, **bold**, bullet/number list, đoạn.
+function mdLite(text) {
+  if (!text) return '—';
+  const esc = (s) => escHtml(s);
+  // tách code fence ```...```
+  const parts = String(text).split(/```/);
+  let out = '';
+  parts.forEach((seg, i) => {
+    if (i % 2 === 1) {                       // trong code fence
+      const body = seg.replace(/^[a-zA-Z0-9_+-]*\n/, '');   // bỏ tên ngôn ngữ ở dòng đầu
+      out += `<pre style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;overflow:auto;font-size:12px;line-height:1.5;margin:8px 0;"><code>${esc(body.replace(/\n$/,''))}</code></pre>`;
+      return;
+    }
+    // ngoài code: xử lý theo dòng
+    const lines = seg.split('\n');
+    let inList = null;   // 'ul' | 'ol'
+    const closeList = () => { if (inList) { out += `</${inList}>`; inList = null; } };
+    let para = [];
+    const flushPara = () => {
+      if (para.length) { out += `<p style="margin:6px 0;">${para.join('<br>')}</p>`; para = []; }
+    };
+    const inline = (s) => esc(s)
+      .replace(/`([^`]+)`/g, '<code style="background:var(--bg2);padding:1px 5px;border-radius:4px;font-size:12px;">$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    lines.forEach(raw => {
+      const line = raw.trimEnd();
+      const mUl = line.match(/^\s*[-*]\s+(.*)/);
+      const mOl = line.match(/^\s*\d+[.)]\s+(.*)/);
+      if (mUl) { flushPara(); if (inList !== 'ul') { closeList(); out += '<ul style="margin:6px 0 6px 18px;">'; inList = 'ul'; } out += `<li style="margin:2px 0;">${inline(mUl[1])}</li>`; }
+      else if (mOl) { flushPara(); if (inList !== 'ol') { closeList(); out += '<ol style="margin:6px 0 6px 18px;">'; inList = 'ol'; } out += `<li style="margin:2px 0;">${inline(mOl[1])}</li>`; }
+      else if (!line.trim()) { flushPara(); closeList(); }
+      else { if (inList) closeList(); para.push(inline(line)); }
+    });
+    flushPara(); closeList();
+  });
+  return out;
+}
+// Badge verdict phân tích AI
+const _VERDICT_META = {
+  true_positive: { lbl: 'Lỗi thật', cls: 'badge-critical', icon: '🛑' },
+  false_positive: { lbl: 'Khả năng cao là False Positive', cls: 'badge-fp', icon: '✅' },
+  needs_review: { lbl: 'Cần review thủ công', cls: 'badge-medium', icon: '🔍' },
+};
+// Suy ra verdict từ nhãn tiếng Việt lưu trong fp_reason ("[Lỗi thật] ...")
+function verdictFromReason(reason) {
+  const r = String(reason || '');
+  if (/^\[\s*Lỗi thật/i.test(r)) return 'true_positive';
+  if (/false positive/i.test(r)) return 'false_positive';
+  if (/review/i.test(r)) return 'needs_review';
+  return null;
 }
 // Badge tri thức khai thác (KEV/EPSS) — hiển thị cạnh severity
 function kbBadges(v) {
@@ -3137,12 +3238,20 @@ function openVulnDetail(vulnId) {
   if (v.ai_explanation) {
     aiLoading.style.display = 'none'; aiNA.style.display = 'none'; aiContent.style.display = 'block';
     const fpColor = parseFloat(v.ai_false_positive_likelihood) > 50 ? 'var(--low)' : 'var(--critical)';
+    // Verdict badge + KEV/EPSS cạnh nó
+    const verdict = verdictFromReason(v.ai_false_positive_reason);
+    const vm = _VERDICT_META[verdict];
+    document.getElementById('ai-verdict').innerHTML =
+      (vm ? `<span class="badge ${vm.cls}" style="font-size:13px;">${vm.icon} ${vm.lbl}</span>` : '') +
+      ' ' + kbBadges(v);
     document.getElementById('ai-fp').innerHTML = `<span style="color:${fpColor}">${v.ai_false_positive_likelihood || '?'}</span>`;
-    document.getElementById('ai-fp-reason').textContent = v.ai_false_positive_reason || '';
-    document.getElementById('ai-exploit-public').textContent = v.ai_exploitability_public || '—';
-    document.getElementById('ai-exploit-private').textContent = v.ai_exploitability_private || '—';
-    document.getElementById('ai-explanation').textContent = v.ai_explanation || '—';
-    document.getElementById('ai-fix').textContent = v.ai_fix_suggestion || '—';
+    // bỏ tiền tố "[nhãn]" khỏi lý do vì đã có badge
+    const reason = String(v.ai_false_positive_reason || '').replace(/^\s*\[[^\]]+\]\s*/, '');
+    document.getElementById('ai-fp-reason').innerHTML = mdLite(reason);
+    document.getElementById('ai-exploit-public').innerHTML = mdLite(v.ai_exploitability_public);
+    document.getElementById('ai-exploit-private').innerHTML = mdLite(v.ai_exploitability_private);
+    document.getElementById('ai-explanation').innerHTML = mdLite(v.ai_explanation);
+    document.getElementById('ai-fix').innerHTML = mdLite(v.ai_fix_suggestion);
   } else {
     aiLoading.style.display = 'none'; aiContent.style.display = 'none'; aiNA.style.display = 'block';
   }
@@ -3912,7 +4021,29 @@ async function loadReportBranding() {
     img.onerror = () => { img.style.display = 'none'; };
     img.style.display = '';
     document.getElementById('rb-logo-msg').textContent = b.has_custom_logo ? 'Logo tùy chỉnh' : 'Logo mặc định VulnGuard';
+    renderReportPreview();
   } catch (e) { /* chưa đăng nhập / lỗi */ }
+}
+
+// Live preview bìa báo cáo — phản ánh ngay các thay đổi branding
+function renderReportPreview() {
+  const g = (id) => (document.getElementById(id)?.value || '').trim();
+  const org = g('rb-org-name') || 'VulnGuard';
+  const tagline = g('rb-org-tagline') || 'DevSecOps Security Platform';
+  const title = g('rb-report-title') || 'BÁO CÁO QUÉT BẢO MẬT\nMÃ NGUỒN & THÀNH PHẦN';
+  const footer = g('rb-footer-text') || 'VulnGuard · Báo cáo quét bảo mật';
+  const conf = g('rb-confidential') || 'BẢO MẬT / CONFIDENTIAL';
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('rb-pv-org', org);
+  set('rb-pv-tagline', tagline);
+  set('rb-pv-footer', footer);
+  set('rb-pv-confidential', conf);
+  const t = document.getElementById('rb-pv-title');
+  if (t) t.innerHTML = escHtml(title).replace(/\n/g, '<br>');
+  const d = document.getElementById('rb-pv-date');
+  if (d) d.textContent = new Date().toLocaleDateString('vi-VN');
+  const lg = document.getElementById('rb-pv-logo'), src = document.getElementById('rb-logo-preview');
+  if (lg && src) { lg.src = src.src; lg.onerror = () => { lg.style.display = 'none'; }; lg.style.display = ''; }
 }
 
 async function saveReportBranding() {
@@ -3940,6 +4071,7 @@ async function uploadReportLogo() {
     msg.textContent = '✅ Đã cập nhật logo';
     const img = document.getElementById('rb-logo-preview');
     img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
+    img.onload = renderReportPreview;
   } catch (e) { msg.textContent = '❌ ' + e.message; }
 }
 
@@ -3949,6 +4081,7 @@ async function resetReportLogo() {
     document.getElementById('rb-logo-msg').textContent = 'Đã về logo mặc định';
     const img = document.getElementById('rb-logo-preview');
     img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
+    img.onload = renderReportPreview;
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
@@ -5024,7 +5157,32 @@ function renderFpBand() {
   const band = document.getElementById('ai-fp-band');
   band.style.left = lo + '%'; band.style.width = (hi - lo) + '%';
   document.getElementById('ai-fp-band-hint').textContent =
-    `FP% từ ${lo}% đến ${hi}% → chưa chắc chắn, gửi Claude xác minh. Dưới ${lo}% coi là lỗi thật, trên ${hi}% coi là false positive.`;
+    `FP% từ ${lo}% đến ${hi}% → chưa chắc chắn, gửi cloud AI xác minh. Dưới ${lo}% coi là lỗi thật, trên ${hi}% coi là false positive.`;
+}
+// Tải danh sách model provider hỗ trợ → đổ vào <datalist> cho user chọn
+const _MODEL_UI = {
+  anthropic: { input: 'ai-anth-model', list: 'dl-anth-model', note: 'ai-anth-model-note' },
+  bedrock:   { input: 'ai-br-model',   list: 'dl-br-model',   note: 'ai-br-model-note' },
+  openai:    { input: 'ai-oai-model',  list: 'dl-oai-model',  note: 'ai-oai-model-note' },
+  openrouter:{ input: 'ai-or-model',   list: 'dl-or-model',   note: 'ai-or-model-note' },
+};
+async function loadModelList(provider) {
+  const ui = _MODEL_UI[provider]; if (!ui) return;
+  const note = document.getElementById(ui.note);
+  if (note) note.textContent = 'Đang tải danh sách model…';
+  try {
+    const r = await api('/api/ai/models?provider=' + encodeURIComponent(provider));
+    const dl = document.getElementById(ui.list);
+    dl.innerHTML = (r.models || []).map(m => `<option value="${escHtml(m)}"></option>`).join('');
+    if (note) {
+      const src = r.source === 'api' ? `✅ ${r.models.length} model từ license của bạn` : `ℹ️ danh sách mặc định (${(r.models||[]).length})`;
+      note.textContent = src + (r.note ? ' — ' + r.note : '') + '. Bấm vào ô để chọn, hoặc tự gõ model khác.';
+    }
+    // mở gợi ý ngay
+    const inp = document.getElementById(ui.input); if (inp) { inp.focus(); }
+  } catch (e) {
+    if (note) note.textContent = '❌ Lỗi tải model: ' + e.message + ' (vẫn có thể tự gõ).';
+  }
 }
 function renderPrivacyWarning() {
   const mode = radioVal('ai-mode') || 'local_only';
@@ -5130,7 +5288,7 @@ async function reanalyzeVuln() {
   const aiContent = document.getElementById('ai-content');
   const aiNA = document.getElementById('ai-unavailable');
   const prev = { content: aiContent.style.display, na: aiNA.style.display };
-  btn.disabled = true; btn.textContent = '⏳ Claude đang phân tích...';
+  btn.disabled = true; btn.textContent = '⏳ AI đang phân tích...';
   aiContent.style.display = 'none'; aiNA.style.display = 'none'; aiLoading.style.display = 'flex';
   try {
     const r = await api(`/api/vulns/${currentVulnId}/reanalyze`, { method: 'POST' });
@@ -5138,11 +5296,11 @@ async function reanalyzeVuln() {
     if (idx >= 0 && r) Object.assign(allVulns[idx], r);
     openVulnDetail(currentVulnId);
     switchTab(document.querySelector('#vuln-modal .tab:nth-child(2)'), 'tab-ai');
-    toast('Đã phân tích lại bằng ' + (AI_PROVIDER_LABEL[r?.ai_provider] || 'Claude'), 'success');
+    toast('Đã phân tích lại bằng ' + (AI_PROVIDER_LABEL[r?.ai_provider] || 'AI'), 'success');
   } catch (e) {
     aiLoading.style.display = 'none'; aiContent.style.display = prev.content; aiNA.style.display = prev.na;
     toast('Lỗi phân tích lại: ' + e.message, 'error');
-  } finally { btn.disabled = false; btn.textContent = '🔁 Phân tích lại bằng Claude'; }
+  } finally { btn.disabled = false; btn.textContent = '🔁 Phân tích lại bằng AI'; }
 }
 // Nút "Phân tích ngay" (khi vuln chưa có AI) — trước đây gọi hàm không tồn tại
 function requestAI() { return reanalyzeVuln(); }

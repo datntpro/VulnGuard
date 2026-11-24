@@ -60,6 +60,7 @@ class TrivyContainerScanner(BaseScanner):
 
     async def _scan_image(self, image: str) -> List[Dict[str, Any]]:
         findings = []
+        from scanner.scanners.sca import trivy_env
         cmd = [
             "trivy", "image",
             "--format", "json",
@@ -68,7 +69,7 @@ class TrivyContainerScanner(BaseScanner):
             image,
         ]
 
-        rc, stdout, stderr = await run_command(cmd, timeout=300)
+        rc, stdout, stderr = await run_command(cmd, timeout=300, env=trivy_env())
 
         if not stdout.strip():
             return []

@@ -46,7 +46,7 @@ TOOL_REGISTRY = [
     {
         "tool": "sonar-scanner",
         "label": "SonarQube",
-        "description": "SAST sâu theo data-flow (Community) — giảm false positive; cần SONARQUBE_URL + token (server sẵn có hoặc docker compose --profile sonar).",
+        "description": "SAST sâu theo data-flow — giảm false positive; trỏ tới SonarQube server (SONARQUBE_URL + token).",
         "scan_type": "SAST",
         "check_cmd": ["sonar-scanner", "--version"],
         "install_hint": "docker compose --profile sonar up -d  (hoặc trỏ SONARQUBE_URL tới server sẵn có)",

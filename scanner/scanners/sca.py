@@ -5,9 +5,38 @@ SCA Scanners — Software Composition Analysis:
 """
 import json
 import glob
+import os
+import tempfile
 from typing import List, Dict, Any
 
 from scanner.scanners.base import BaseScanner, run_command, normalize_severity, make_fingerprint
+
+
+def _trivy_err(stderr: str, rc: int) -> str:
+    """Dịch lỗi trivy thường gặp thành thông báo dễ hiểu."""
+    s = (stderr or "").strip()
+    low = s.lower()
+    if any(k in low for k in ("failed to download", "db update", "unable to", "dial tcp",
+                              "no such host", "timeout", "tls", "ghcr.io", "connection refused")):
+        return ("Trivy không tải được vuln DB (cần mạng ra ghcr.io ở lần chạy đầu). "
+                "Nếu máy offline: tải DB sẵn hoặc dùng Knowledge Base nội bộ. Chi tiết: "
+                + s[-400:])
+    if "permission denied" in low or "mkdir" in low:
+        return ("Trivy không ghi được cache dir (TRIVY_CACHE_DIR). Kiểm tra quyền ghi của "
+                "thư mục storage. Chi tiết: " + s[-400:])
+    return f"Trivy lỗi (rc={rc}): {s[-500:] or 'không có stderr'}"
+
+
+def trivy_env() -> dict:
+    """Env cho trivy: cache dir GHI ĐƯỢC (service có thể chạy dưới user không có HOME
+    → trivy không tạo được ~/.cache/trivy và báo lỗi khó hiểu). Trỏ về storage."""
+    try:
+        from api.config import settings
+        cache = os.path.join(settings.storage_dir, ".trivy-cache")
+    except Exception:
+        cache = os.path.join(tempfile.gettempdir(), "vulnguard-trivy-cache")
+    os.makedirs(cache, exist_ok=True)
+    return {"TRIVY_CACHE_DIR": cache}
 
 
 class TrivySCAScanner(BaseScanner):
@@ -17,6 +46,8 @@ class TrivySCAScanner(BaseScanner):
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
+        if not os.path.exists(self.scan_path):
+            raise RuntimeError(f"Đường dẫn quét không tồn tại: {self.scan_path}")
         cmd = [
             "trivy", "fs",
             "--format", "json",
@@ -26,14 +57,20 @@ class TrivySCAScanner(BaseScanner):
             self.scan_path,
         ]
 
-        rc, stdout, stderr = await run_command(cmd, timeout=300)
+        rc, stdout, stderr = await run_command(cmd, timeout=300, env=trivy_env())
 
         if not stdout.strip():
+            # rc != 0 và không có JSON → lỗi thật (tải DB, cache, path…). KHÔNG im lặng
+            # trả 0 lỗi — nêu rõ để orchestrator ghi status "error".
+            if rc != 0:
+                raise RuntimeError(_trivy_err(stderr, rc))
             return []
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
+            if rc != 0:
+                raise RuntimeError(_trivy_err(stderr, rc))
             return []
 
         for result in data.get("Results", []):
