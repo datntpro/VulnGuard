@@ -2504,16 +2504,16 @@ async function loadProjects() {
     }
     el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
       ${projects.map(p => `
-        <div class="card" style="cursor:pointer" onclick="openProjectScans('${p.id}','${p.name}')">
+        <div class="card" style="cursor:pointer" onclick="openProjectScans('${p.id}','${jsStr(p.name)}')">
           <div class="flex-between">
-            <strong style="font-size:16px;">${p.name}</strong>
+            <strong style="font-size:16px;">${escHtml(p.name)}</strong>
             <span class="text-sm">${p.scan_count} scan(s)</span>
           </div>
-          <div class="text-sm" style="margin-top:4px;">${p.description || 'Không có mô tả'}</div>
-          <div style="margin-top:10px;">${(p.language_stacks||[]).map(s => `<span class="tag">${s}</span>`).join('')}</div>
+          <div class="text-sm" style="margin-top:4px;">${escHtml(p.description) || 'Không có mô tả'}</div>
+          <div style="margin-top:10px;">${(p.language_stacks||[]).map(s => `<span class="tag">${escHtml(s)}</span>`).join('')}</div>
           <div class="flex" style="margin-top:12px;gap:6px;">
             <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openScanModal('${p.id}')">🚀 Scan</button>
-            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteProject('${p.id}','${p.name}')">🗑️</button>
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteProject('${p.id}','${jsStr(p.name)}')">🗑️</button>
           </div>
         </div>
       `).join('')}
@@ -2911,7 +2911,7 @@ async function loadScansLanding() {
       <div class="notice" style="margin-bottom:14px;">Scan thuộc về từng <strong>Project</strong>. Chọn một project để xem lịch sử scan hoặc bắt đầu scan mới.</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
       ${projects.map(p => `
-        <div class="card" style="cursor:pointer" onclick="openProjectScans('${p.id}', ${JSON.stringify(p.name)})">
+        <div class="card" style="cursor:pointer" onclick="openProjectScans('${p.id}', '${jsStr(p.name)}')">
           <div class="flex-between">
             <strong style="font-size:16px;">${escHtml(p.name)}</strong>
             <span class="text-sm">${p.scan_count ?? 0} scan(s)</span>
@@ -2919,7 +2919,7 @@ async function loadScansLanding() {
           <div class="text-sm" style="margin-top:4px;">${escHtml(p.description || 'Không có mô tả')}</div>
           <div class="flex" style="margin-top:12px;gap:6px;">
             <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openScanModal('${p.id}')">🚀 Scan mới</button>
-            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openProjectScans('${p.id}', ${JSON.stringify(p.name)})">📜 Lịch sử</button>
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openProjectScans('${p.id}', '${jsStr(p.name)}')">📜 Lịch sử</button>
           </div>
         </div>`).join('')}
       </div>`;
@@ -3048,7 +3048,7 @@ function renderScanCard(sc, projectId) {
         </div>
         <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;"></div></div>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px;">${toolsHtml}</div>
-        <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openProgressModal('${sc.id}','${sc.scan_path}',${JSON.stringify(sc.scan_types||[])});pollScanProgress('${sc.id}')">Xem tiến độ chi tiết →</button>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openProgressModal('${sc.id}','${jsStr(sc.scan_path)}',${escHtml(JSON.stringify(sc.scan_types||[]))});pollScanProgress('${sc.id}')">Xem tiến độ chi tiết →</button>
       </div>`;
   } else if (sc.status === 'RUNNING') {
     runningProgressHtml = `<div class="loading" style="margin-top:8px;"><div class="spinner"></div>Đang khởi động scanners...</div>`;
@@ -3204,12 +3204,12 @@ function renderVulnTable() {
               <td>${sevBadge(v.severity)}${v.severity_original && v.severity_original !== v.severity ? `<span class="text-sm" style="color:var(--text2)" title="Nâng từ ${v.severity_original} do ${v.priority_reason||''}">↑</span>` : ''}</td>
               <td><span class="tag">${v.scan_type}</span></td>
               <td>
-                <div>${v.title}</div>
-                ${v.cve ? `<span class="text-mono text-sm" style="color:var(--info)">${v.cve}</span>` : ''}
-                ${v.package_name ? `<span class="text-sm"> ${v.package_name}@${v.package_version||''}</span>` : ''}
+                <div>${escHtml(v.title)}</div>
+                ${v.cve ? `<span class="text-mono text-sm" style="color:var(--info)">${escHtml(v.cve)}</span>` : ''}
+                ${v.package_name ? `<span class="text-sm"> ${escHtml(v.package_name)}@${escHtml(v.package_version||'')}</span>` : ''}
                 ${(v.kev || typeof v.epss === 'number') ? `<div style="margin-top:4px;">${kbBadges(v)}</div>` : ''}
               </td>
-              <td class="text-mono text-sm">${(v.file_path||'').slice(-30)}${v.line_start ? ':'+v.line_start : ''}</td>
+              <td class="text-mono text-sm">${escHtml((v.file_path||'').slice(-30))}${v.line_start ? ':'+v.line_start : ''}</td>
               <td class="text-sm">${v.tool}</td>
               <td>${statusBadge(v.status)}</td>
             </tr>
@@ -3793,7 +3793,12 @@ function closeProgressAndViewVulns() {
 
 function escHtml(str) {
   if (!str) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+// An toàn khi nhúng chuỗi người dùng vào JS string nháy đơn BÊN TRONG HTML attribute
+// nháy kép (vd onclick="fn('...')") — escape \ và ' cho JS rồi HTML-escape.
+function jsStr(s) {
+  return escHtml(String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
 }
 
 // ─── APPROVE CHECK ────────────────────────────────────────────
@@ -3825,7 +3830,7 @@ async function checkApprove(projectId, scanId) {
 async function loadCompareProjects() {
   const sel = document.getElementById('compare-project');
   const projects = await api('/api/projects');
-  sel.innerHTML = '<option value="">— Chọn project —</option>' + projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  sel.innerHTML = '<option value="">— Chọn project —</option>' + projects.map(p => `<option value="${escHtml(p.id)}">${escHtml(p.name)}</option>`).join('');
 }
 
 async function loadCompareScans() {
@@ -3883,7 +3888,7 @@ function renderCompareSection(title, vulns, cls) {
       <table style="margin-top:8px;">
         <thead><tr><th>Severity</th><th>Title</th><th>File</th><th>Tool</th></tr></thead>
         <tbody>
-          ${vulns.map(v => `<tr><td>${sevBadge(v.severity)}</td><td>${v.title.slice(0,50)}</td><td class="text-mono text-sm">${(v.file_path||'').slice(-30)}</td><td class="text-sm">${v.tool}</td></tr>`).join('')}
+          ${vulns.map(v => `<tr><td>${sevBadge(v.severity)}</td><td>${escHtml(v.title.slice(0,50))}</td><td class="text-mono text-sm">${escHtml((v.file_path||'').slice(-30))}</td><td class="text-sm">${escHtml(v.tool)}</td></tr>`).join('')}
         </tbody>
       </table>
     </div>`;
@@ -4456,9 +4461,9 @@ async function cwLoadTree(path) {
     treeEl.innerHTML = parentBtn + data.entries.map(e => {
       const fullPath = cwState.currentPath ? `${cwState.currentPath}/${e.name}` : e.name;
       if (e.is_dir) {
-        return `<div style="cursor:pointer;padding:4px 0;" onclick="cwLoadTree('${fullPath.replace(/'/g, "\\'")}')">📁 ${e.name}</div>`;
+        return `<div style="cursor:pointer;padding:4px 0;" onclick="cwLoadTree('${jsStr(fullPath)}')">📁 ${escHtml(e.name)}</div>`;
       }
-      return `<div style="cursor:pointer;padding:4px 0;" onclick="cwOpenFile('${fullPath.replace(/'/g, "\\'")}')">📄 ${e.name}</div>`;
+      return `<div style="cursor:pointer;padding:4px 0;" onclick="cwOpenFile('${jsStr(fullPath)}')">📄 ${escHtml(e.name)}</div>`;
     }).join('') || '<div class="text-sm">(trống)</div>';
   } catch (e) {
     treeEl.innerHTML = `<div class="text-sm" style="color:var(--critical);">${e.message}</div>`;
