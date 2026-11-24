@@ -131,9 +131,17 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ─────────────────────────────────────────────
-# Pre-cache Semgrep rules
+# Người dùng không phải root (H4 — hardening). Cache của tool trỏ vào thư mục
+# ghi-được của user để chạy non-root không lỗi quyền.
 # ─────────────────────────────────────────────
-ENV SEMGREP_HOME=/root/.semgrep
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
+ENV HOME=/home/appuser \
+    SEMGREP_HOME=/home/appuser/.semgrep \
+    XDG_CACHE_HOME=/home/appuser/.cache \
+    XDG_CONFIG_HOME=/home/appuser/.config \
+    TRIVY_CACHE_DIR=/app/storage/.trivy-cache
+
+# Pre-cache Semgrep rules (ghi vào SEMGREP_HOME mới)
 RUN semgrep --config p/python --config p/security-audit --config p/owasp-top-ten \
     --metrics=off --dry-run /dev/null 2>/dev/null || true
 
@@ -144,8 +152,13 @@ COPY api/ ./api/
 COPY scanner/ ./scanner/
 COPY web/ ./web/
 
-RUN mkdir -p /app/storage/db /app/storage/reports
+RUN mkdir -p /app/storage/db /app/storage/reports /app/storage/.trivy-cache \
+    && chown -R appuser:appuser /app /home/appuser
+
+USER appuser
 
 EXPOSE 8080
 
+# host 0.0.0.0 bên TRONG container là bình thường (bị cô lập); việc KHÔNG phơi ra
+# ngoài host do docker-compose bind 127.0.0.1 đảm nhiệm.
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"]
