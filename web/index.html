@@ -2519,7 +2519,7 @@ async function loadProjects() {
       `).join('')}
     </div>`;
   } catch(e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -2606,7 +2606,7 @@ async function loadDomains() {
         </table>
       </div>`;
   } catch(e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -2672,7 +2672,7 @@ async function loadDomainCrawls(domainId) {
       clearInterval(domainPollInterval);
     }
   } catch(e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -2869,7 +2869,7 @@ async function loadEndpoints() {
         </table>
       </div>`;
   } catch(e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -2957,7 +2957,7 @@ async function loadScans(projectId) {
       clearInterval(pollInterval);
     }
   } catch(e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -3007,7 +3007,7 @@ async function runInlineCompare(projectId) {
   try {
     const r = await api(`/api/projects/${projectId}/compare?scan_old_id=${oldId}&scan_new_id=${newId}`);
     const { diff, summary } = r;
-    const note = summary.settings_changed ? `<div class="notice warn" style="margin-bottom:12px;">⚠️ Scan settings đổi (${(summary.old_types||[]).join(',')||'—'} → ${(summary.new_types||[]).join(',')||'—'}) — có mục "Chưa đánh giá".</div>` : '';
+    const note = summary.settings_changed ? `<div class="notice warn" style="margin-bottom:12px;">⚠️ Scan settings đổi (${escHtml((summary.old_types||[]).join(','))||'—'} → ${escHtml((summary.new_types||[]).join(','))||'—'}) — có mục "Chưa đánh giá".</div>` : '';
     el.innerHTML = `${note}
       <div class="grid4 mb-16">
         <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 Mới</div></div>
@@ -3131,7 +3131,7 @@ async function openVulns(scanId) {
     allVulns = await api(`/api/projects/scans/${scanId}/vulns`);
     renderVulnTable();
   } catch(e) {
-    el.innerHTML += `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+    el.innerHTML += `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
   }
 }
 
@@ -3201,7 +3201,7 @@ function renderVulnTable() {
         <tbody>
           ${filtered.length ? filtered.map(v => `
             <tr class="vuln-row" onclick="openVulnDetail('${v.id}')">
-              <td>${sevBadge(v.severity)}${v.severity_original && v.severity_original !== v.severity ? `<span class="text-sm" style="color:var(--text2)" title="Nâng từ ${v.severity_original} do ${v.priority_reason||''}">↑</span>` : ''}</td>
+              <td>${sevBadge(v.severity)}${v.severity_original && v.severity_original !== v.severity ? `<span class="text-sm" style="color:var(--text2)" title="Nâng từ ${escHtml(v.severity_original)} do ${escHtml(v.priority_reason||'')}">↑</span>` : ''}</td>
               <td><span class="tag">${v.scan_type}</span></td>
               <td>
                 <div>${escHtml(v.title)}</div>
@@ -3295,7 +3295,7 @@ function openVulnDetail(vulnId) {
 
   document.getElementById('modal-severity-badge').innerHTML = sevBadge(v.severity) + ' ' + kbBadges(v) +
     (v.severity_original && v.severity_original !== v.severity
-      ? `<div class="text-sm" style="color:var(--text2);margin-top:4px;">⬆ Nâng từ <strong>${v.severity_original}</strong> — ${v.priority_reason||''}</div>` : '');
+      ? `<div class="text-sm" style="color:var(--text2);margin-top:4px;">⬆ Nâng từ <strong>${escHtml(v.severity_original)}</strong> — ${escHtml(v.priority_reason||'')}</div>` : '');
   document.getElementById('modal-title').textContent = v.title;
   document.getElementById('modal-tool').textContent = v.tool;
   document.getElementById('modal-scan-type').innerHTML = `<span class="tag">${v.scan_type}</span>`;
@@ -3810,13 +3810,13 @@ async function checkApprove(projectId, scanId) {
       <div style="position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:300;display:flex;align-items:center;justify-content:center;" onclick="this.remove()">
         <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:28px;max-width:480px;width:90%;" onclick="event.stopPropagation()">
           <div class="${isBlocked ? 'approve-blocked' : 'approve-ok'}" style="font-size:15px;font-weight:600;margin-bottom:16px;">
-            ${result.message}
+            ${escHtml(result.message)}
           </div>
           ${isBlocked ? `
             <h3 style="font-size:13px;margin-bottom:8px;">Vulnerabilities cần xử lý:</h3>
             ${result.blocked_vulns.map(v => `
               <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;">
-                ${sevBadge(v.severity)} <span>${v.title.slice(0,50)}</span>
+                ${sevBadge(v.severity)} <span>${escHtml(String(v.title || '').slice(0, 50))}</span>
               </div>`).join('')}
           ` : '<p class="text-sm" style="color:var(--text2);">Scan đủ điều kiện deploy lên production.</p>'}
           <button class="btn btn-primary" style="margin-top:16px;width:100%;" onclick="this.closest('[onclick]').remove()">Đóng</button>
@@ -3858,13 +3858,13 @@ async function runCompare() {
 
     const settingsNote = summary.settings_changed ? `
       <div class="notice warn" style="margin-bottom:16px;">
-        ⚠️ Scan settings đã thay đổi giữa 2 lần quét (cũ: ${(summary.old_types||[]).join(', ')||'—'} → mới: ${(summary.new_types||[]).join(', ')||'—'}).
+        ⚠️ Scan settings đã thay đổi giữa 2 lần quét (cũ: ${escHtml((summary.old_types||[]).join(', '))||'—'} → mới: ${escHtml((summary.new_types||[]).join(', '))||'—'}).
         Các finding thuộc loại quét không chạy lại được xếp vào <strong>Chưa đánh giá</strong> để không báo nhầm "đã khắc phục".
       </div>` : '';
     el.innerHTML = `
       ${settingsNote}
       <div class="${summary.approve_status === 'BLOCKED' ? 'approve-blocked' : 'approve-ok'}" style="margin-bottom:16px;font-weight:600;">
-        ${summary.approve_message}
+        ${escHtml(summary.approve_message)}
       </div>
       <div class="grid4 mb-16 vg-stagger">
         <div class="stat-card"><div class="stat-num compare-new">${summary.new_count}</div><div class="stat-label">🆕 Mới</div></div>
@@ -3877,14 +3877,14 @@ async function runCompare() {
       ${renderCompareSection('✅ Đã khắc phục (Resolved)', diff.fixed, 'compare-fixed')}
       ${renderCompareSection('➖ Chưa đánh giá (Not Evaluated)', diff.not_evaluated || [], '')}
     `;
-  } catch(e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`; }
+  } catch(e) { el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`; }
 }
 
 function renderCompareSection(title, vulns, cls) {
-  if (!vulns.length) return `<div class="card"><strong>${title}</strong>: <span style="color:var(--text2)">Không có</span></div>`;
+  if (!vulns.length) return `<div class="card"><strong>${escHtml(title)}</strong>: <span style="color:var(--text2)">Không có</span></div>`;
   return `
     <div class="card" style="margin-bottom:12px;">
-      <h2><span class="${cls}">${title} (${vulns.length})</span></h2>
+      <h2><span class="${escHtml(cls)}">${escHtml(title)} (${vulns.length})</span></h2>
       <table style="margin-top:8px;">
         <thead><tr><th>Severity</th><th>Title</th><th>File</th><th>Tool</th></tr></thead>
         <tbody>
@@ -4190,7 +4190,7 @@ async function loadInstalledModels() {
 
     // Update dropdown
     sel.innerHTML = models.length
-      ? models.map(m => `<option value="${m.name}" ${m.name === active ? 'selected' : ''}>${m.name} (${m.size_gb} GB)</option>`).join('')
+      ? models.map(m => `<option value="${escHtml(m.name)}" ${m.name === active ? 'selected' : ''}>${escHtml(m.name)} (${escHtml(m.size_gb)} GB)</option>`).join('')
       : '<option value="">— Chưa có model nào —</option>';
 
     if (!models.length) {
@@ -4203,19 +4203,19 @@ async function loadInstalledModels() {
       <tbody>
         ${models.map(m => `
           <tr>
-            <td class="text-mono">${m.name}</td>
+            <td class="text-mono">${escHtml(m.name)}</td>
             <td>${m.size_gb} GB</td>
             <td class="text-sm">${m.modified_at ? new Date(m.modified_at).toLocaleDateString('vi-VN') : '—'}</td>
             <td>${m.is_active ? '<span class="badge badge-approved">Active</span>' : ''}</td>
             <td>
-              ${!m.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteModel('${m.name}')">Xóa</button>` : ''}
+              ${!m.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteModel('${jsStr(m.name)}')">Xóa</button>` : ''}
             </td>
           </tr>
         `).join('')}
       </tbody>
     </table>`;
   } catch(e) {
-    el.innerHTML = `<p class="text-sm" style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+    el.innerHTML = `<p class="text-sm" style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
   }
   loadVisionModel();
 }
@@ -4378,7 +4378,7 @@ async function cwRefreshHealth() {
     bar.className = 'path-warning';
     bar.innerHTML = `⚠️ Coworker Host Service chưa chạy hoặc không kết nối được.<br>
       Chạy trên máy host: <span class="text-mono">bash coworker_host/run.sh</span><br>
-      <span class="text-sm">${e.message}</span>`;
+      <span class="text-sm">${escHtml(e.message)}</span>`;
   }
 }
 
@@ -4389,7 +4389,7 @@ async function cwLoadFolders() {
 
   cwState.folders = data.folders || [];
   const sel = document.getElementById('cw-folder-select');
-  sel.innerHTML = cwState.folders.map(f => `<option value="${f.id}">${f.label} — ${f.path}</option>`).join('');
+  sel.innerHTML = cwState.folders.map(f => `<option value="${escHtml(f.id)}">${escHtml(f.label)} — ${escHtml(f.path)}</option>`).join('');
 
   if (!cwState.folders.length) {
     document.getElementById('cw-empty-state').style.display = 'block';
@@ -4466,7 +4466,7 @@ async function cwLoadTree(path) {
       return `<div style="cursor:pointer;padding:4px 0;" onclick="cwOpenFile('${jsStr(fullPath)}')">📄 ${escHtml(e.name)}</div>`;
     }).join('') || '<div class="text-sm">(trống)</div>';
   } catch (e) {
-    treeEl.innerHTML = `<div class="text-sm" style="color:var(--critical);">${e.message}</div>`;
+    treeEl.innerHTML = `<div class="text-sm" style="color:var(--critical);">${escHtml(e.message)}</div>`;
   }
 }
 
@@ -4513,7 +4513,7 @@ async function cwSuggest() {
     }
     diffBox.style.display = 'block';
   } catch (e) {
-    statusEl.innerHTML = `<span style="color:var(--critical);">Lỗi: ${e.message}</span>`;
+    statusEl.innerHTML = `<span style="color:var(--critical);">Lỗi: ${escHtml(e.message)}</span>`;
   } finally {
     btn.disabled = false;
   }
@@ -4581,7 +4581,7 @@ const FINDING_STATUS_META = {
 };
 function findingBadge(status) {
   const m = FINDING_STATUS_META[status] || { label: status, cls: 'badge-info', icon: '' };
-  return `<span class="badge ${m.cls}">${m.icon} ${m.label}</span>`;
+  return `<span class="badge ${m.cls}">${m.icon} ${escHtml(m.label)}</span>`;
 }
 
 const VERSION_STATUS_META = {
@@ -4629,7 +4629,7 @@ async function loadDocReviews() {
         </table>
       </div>`;
   } catch (e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -4737,7 +4737,7 @@ async function loadDocDetail() {
 
     await renderDocVersionDetail();
   } catch (e) {
-    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${e.message}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -4823,7 +4823,7 @@ async function renderDocVersionDetail() {
         </div>` : ''}
     `;
   } catch (e) {
-    el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+    el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
   }
 }
 
@@ -4904,7 +4904,7 @@ async function runCompareVersions() {
         ${(!r.improved.length && !r.regressed.length && !r.unchanged_not_met.length) ? '<p class="text-sm">Không có khác biệt giữa 2 version (hoặc tất cả đều đã đáp ứng).</p>' : ''}
       </div>`;
   } catch (e) {
-    el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${e.message}</p>`;
+    el.innerHTML = `<p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
   }
 }
 
@@ -6788,7 +6788,7 @@ function renderScmRepos() {
   if (!scmRepos.length) { el.innerHTML = '<div class="text-sm" style="color:var(--text2);">Chưa có repo nào. Dùng "📂 Repo" ở kết nối để thêm.</div>'; return; }
   el.innerHTML = scmRepos.map(r => {
     const sch = scmSchedules.find(s => s.repo_id === r.id);
-    const last = sch && sch.last_run_at ? `· lần chạy gần nhất: ${fmtDate(sch.last_run_at)} (${sch.last_status || '—'})` : '';
+    const last = sch && sch.last_run_at ? `· lần chạy gần nhất: ${fmtDate(sch.last_run_at)} (${escHtml(sch.last_status || '—')})` : '';
     return `<div class="card" style="margin-bottom:12px;background:var(--bg2);">
       <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
         <div><strong class="text-mono">${escHtml(r.repo_full_name)}</strong>
