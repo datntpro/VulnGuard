@@ -117,3 +117,84 @@ def test_agent_execute_fails_closed_on_scope_check_error(monkeypatch):
     ag._scope_rules = ONE_IP
     out = _run(ag._execute(tool, {"host": "172.18.0.2"}))
     assert "BỊ CHẶN" in out and ran["v"] is False
+
+
+# ───── B2: http_probe đi theo redirect ra ngoài scope ─────
+import httpx  # noqa: E402
+
+REDIR_RULES = [{"type": "ip", "value": "10.1.0.5", "mode": "allow"}]
+
+
+def _probe(location, rules=REDIR_RULES, url="http://10.1.0.5/start", extra=None):
+    """http_probe với transport giả: URL start trả 302 → location; ghi lại mọi request thật sự được gửi."""
+    sent = []
+
+    def handler(req: httpx.Request):
+        sent.append(str(req.url))
+        if req.url.path == "/start":
+            return httpx.Response(302, headers=[(b"location", location.encode("utf-8"))], text="redir")
+        return httpx.Response(200, text="<title>reached</title>")
+    ctx = {"run_id": None, "scope_rules": rules, "_transport": httpx.MockTransport(handler)}
+    if extra is not None:
+        ctx.update(extra)
+    out = _run(toolbelt._http_probe({"url": url}, ctx))
+    return out, sent
+
+
+@pytest.mark.parametrize("loc", [
+    "http://10.9.9.9/secret",             # host ngoài scope
+    "http://169.254.169.254/latest/",     # cloud metadata
+    "http://127.0.0.1/admin",             # loopback
+    "http://10.1.0.5@10.9.9.9/",          # userinfo trick
+    "ftp://10.1.0.5/x", "file:///etc/passwd", "gopher://10.1.0.5/",  # scheme lạ
+    "http://[::1]/", "http://2130706433/", "http://0x7f.1/",         # mã hoá IP
+    "//10.9.9.9/x",                        # scheme-relative
+])
+def test_b2_redirect_out_of_scope_not_followed(loc):
+    out, sent = _probe(loc)
+    assert sent == ["http://10.1.0.5/start"], sent      # request thứ hai KHÔNG được gửi
+    assert out["status_code"] == 302
+    assert "redirect_blocked" in out
+
+
+def test_b2_in_scope_redirect_followed():
+    out, sent = _probe("/landing")
+    assert sent == ["http://10.1.0.5/start", "http://10.1.0.5/landing"]
+    assert out["status_code"] == 200 and out["title"] == "reached"
+    assert out["redirect_chain"] == ["http://10.1.0.5/landing"]
+
+
+def test_b2_port_pinned_in_url_rule():
+    rules = [{"type": "url", "value": "http://10.1.0.5:8080", "mode": "allow"}]
+    out, sent = _probe("http://10.1.0.5:9999/x", rules=rules, url="http://10.1.0.5:8080/start")
+    assert len(sent) == 1 and "redirect_blocked" in out
+
+
+def test_b2_idn_redirect_to_other_host_blocked(monkeypatch):
+    rules = [{"type": "domain", "value": "example.com", "include_subdomains": True, "mode": "allow"}]
+    monkeypatch.setattr(scope, "_dangerous_ip", lambda ip: False)
+    monkeypatch.setattr(scope.socket, "getaddrinfo", lambda h, p: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    out, sent = _probe("http://exämple.com.evil.test/", rules=rules, url="http://example.com/start")
+    assert len(sent) == 1 and "redirect_blocked" in out
+
+
+def test_b2_redirect_loop_capped():
+    sent = []
+
+    def handler(req):
+        sent.append(1)
+        return httpx.Response(302, headers={"location": "/start"})
+    ctx = {"scope_rules": REDIR_RULES, "_transport": httpx.MockTransport(handler)}
+    out = _run(toolbelt._http_probe({"url": "http://10.1.0.5/start"}, ctx))
+    assert len(sent) == toolbelt._MAX_REDIRECTS + 1 and "redirect_blocked" in out
+
+
+def test_b2_no_scope_in_ctx_fails_closed():
+    sent = []
+
+    def handler(req):
+        sent.append(1)
+        return httpx.Response(302, headers={"location": "http://10.1.0.5/x"})
+    out = _run(toolbelt._http_probe({"url": "http://10.1.0.5/start"},
+                                    {"_transport": httpx.MockTransport(handler)}))
+    assert len(sent) == 1 and out["status_code"] == 302
