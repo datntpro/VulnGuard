@@ -198,3 +198,61 @@ def test_b2_no_scope_in_ctx_fails_closed():
     out = _run(toolbelt._http_probe({"url": "http://10.1.0.5/start"},
                                     {"_transport": httpx.MockTransport(handler)}))
     assert len(sent) == 1 and out["status_code"] == 302
+
+
+# ───── B3: ffuf wordlist đọc file tuỳ ý ─────
+@pytest.fixture
+def wl_env(tmp_path, monkeypatch):
+    allowed = tmp_path / "wordlists"
+    allowed.mkdir()
+    (allowed / "ok.txt").write_text("admin\n")
+    sibling = tmp_path / "wordlists-evil"
+    sibling.mkdir()
+    (sibling / "x.txt").write_text("secret\n")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("root:x:0:0\n")
+    (allowed / "link.txt").symlink_to(secret)              # symlink thoát allowlist
+    (allowed / "dirlink").symlink_to(tmp_path, target_is_directory=True)
+    monkeypatch.setenv("VULNGUARD_WORDLIST_DIRS", str(allowed))
+    monkeypatch.setattr(toolbelt.shutil, "which", lambda b: "/usr/bin/" + b)
+    seen = {}
+
+    async def fake(argv, timeout):
+        seen["argv"] = argv
+        return {"ran": True}
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    return tmp_path, allowed, seen
+
+
+def _ffuf(wordlist):
+    return _run(toolbelt._content_discovery({"url": "http://10.1.0.5/", "wordlist": wordlist}))
+
+
+def test_b3_etc_passwd_rejected(wl_env):
+    _, _, seen = wl_env
+    out = _ffuf("/etc/passwd")
+    assert out["ran"] is False and "argv" not in seen
+
+
+def test_b3_rejects_traversal_symlink_and_odd_paths(wl_env):
+    tmp, allowed, seen = wl_env
+    for bad in [str(allowed / ".." / "secret.txt"), str(allowed / "link.txt"),
+                str(allowed / "dirlink" / "secret.txt"), str(tmp / "wordlists-evil" / "x.txt"),
+                str(tmp / "secret.txt"), "relative.txt", str(allowed / "ok.txt") + ":KEYWORD",
+                str(allowed), str(allowed / "missing.txt"), "/proc/self/environ", "/etc/shadow\x00.txt"]:
+        out = _ffuf(bad)
+        assert out["ran"] is False, bad
+    assert "argv" not in seen
+
+
+def test_b3_allowlisted_wordlist_still_works(wl_env):
+    _, allowed, seen = wl_env
+    out = _ffuf(str(allowed / "ok.txt"))
+    assert out == {"ran": True}
+    w = seen["argv"][seen["argv"].index("-w") + 1]
+    assert w == str((allowed / "ok.txt").resolve())
+
+
+def test_b3_default_wordlist_is_allowlisted():
+    assert toolbelt.DEFAULT_WORDLIST.startswith("/usr/share/seclists/")
+    assert any(toolbelt.DEFAULT_WORDLIST.startswith(d) for d in ["/usr/share/seclists"])
