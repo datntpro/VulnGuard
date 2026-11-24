@@ -2039,7 +2039,7 @@ function navigate(page) {
   const navEl = document.getElementById('nav-' + navParent);
   if (navEl) navEl.classList.add('active');
 
-  const loaders = { dashboard: loadDashboard, projects: loadProjects, settings: loadSettings, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance, scm: loadScm };
+  const loaders = { dashboard: loadDashboard, projects: loadProjects, scans: loadScansLanding, settings: loadSettings, domains: loadDomains, coworker: cwInit, docreview: loadDocReviews, 'docreview-detail': loadDocDetail, pentest: loadPentest, assets: loadAssets, connectors: loadConnectors, compliance: loadCompliance, scm: loadScm };
   if (loaders[page]) loaders[page]();
 }
 
@@ -2865,6 +2865,43 @@ function openProjectScans(projectId, projectName) {
   navigate('scans');
   document.getElementById('scans-title').textContent = `Scans — ${projectName}`;
   loadScans(projectId);
+}
+
+// Landing khi bấm menu "Scans" (không kèm project): nếu đã mở project trước đó thì
+// về đúng project đó; chưa thì cho chọn project để xem/chạy scan. Trước đây menu này
+// không có loader nên trang kẹt ở skeleton mãi.
+async function loadScansLanding() {
+  if (currentProjectId) { loadScans(currentProjectId); return; }
+  const el = document.getElementById('scans-content');
+  document.getElementById('scans-title').textContent = 'Scans — chọn project';
+  try {
+    const projects = await api('/api/projects');
+    if (!projects.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">🔍</div>
+        <p>Chưa có project nào để scan</p>
+        <button class="btn btn-primary mt-16" onclick="navigate('projects');openCreateProject()">+ Tạo project</button></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="notice" style="margin-bottom:14px;">Scan thuộc về từng <strong>Project</strong>. Chọn một project để xem lịch sử scan hoặc bắt đầu scan mới.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+      ${projects.map(p => `
+        <div class="card" style="cursor:pointer" onclick="openProjectScans('${p.id}', ${JSON.stringify(p.name)})">
+          <div class="flex-between">
+            <strong style="font-size:16px;">${escHtml(p.name)}</strong>
+            <span class="text-sm">${p.scan_count ?? 0} scan(s)</span>
+          </div>
+          <div class="text-sm" style="margin-top:4px;">${escHtml(p.description || 'Không có mô tả')}</div>
+          <div class="flex" style="margin-top:12px;gap:6px;">
+            <button class="btn btn-primary btn-sm" onclick="event.stopPropagation();openScanModal('${p.id}')">🚀 Scan mới</button>
+            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openProjectScans('${p.id}', ${JSON.stringify(p.name)})">📜 Lịch sử</button>
+          </div>
+        </div>`).join('')}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi tải danh sách: ${escHtml(e.message)}</p>
+      <button class="btn btn-ghost btn-sm mt-16" onclick="loadScansLanding()">Thử lại</button></div>`;
+  }
 }
 
 async function loadScans(projectId) {
