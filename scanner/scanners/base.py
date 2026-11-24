@@ -90,3 +90,7 @@ class BaseScanner(ABC):
     @property
     def tool_name(self) -> str:
         return self.scan_type.lower()
+
+
+class ScannerRunError(RuntimeError):
+    """Tool đã chạy nhưng thất bại: KHÔNG được báo cáo như "0 findings"."""

@@ -4,10 +4,13 @@ Container Scanners:
 - Grype: Anchore vulnerability scanner
 """
 import json
+import logging
 import os
 from typing import List, Dict, Any
 
-from scanner.scanners.base import BaseScanner, run_command, normalize_severity, make_fingerprint
+from scanner.scanners.base import ScannerRunError, BaseScanner, run_command, normalize_severity, make_fingerprint
+
+logger = logging.getLogger(__name__)
 
 
 class TrivyContainerScanner(BaseScanner):
@@ -18,18 +21,25 @@ class TrivyContainerScanner(BaseScanner):
     def __init__(self, scan_path: str, image: str = None):
         super().__init__(scan_path)
         self.image = image  # Có thể scan image cụ thể
+        self._errors: List[str] = []
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
+        self._errors = []
 
         if self.image:
-            # Scan một image cụ thể
-            findings.extend(await self._scan_image(self.image))
+            images = [self.image]
         else:
             # Tìm images trong docker-compose files
             images = await self._extract_images_from_compose()
-            for image in images:
-                findings.extend(await self._scan_image(image))
+        for image in images:
+            findings.extend(await self._scan_image(image))
+
+        # Tất cả image đều lỗi → không được báo "0 findings"; chỉ một phần lỗi → giữ kết quả.
+        if images and len(self._errors) >= len(images):
+            raise ScannerRunError("; ".join(self._errors[:3]))
+        if self._errors:
+            logger.warning(f"Trivy: {len(self._errors)}/{len(images)} image lỗi: {'; '.join(self._errors[:3])}")
 
         return findings
 
@@ -72,11 +82,14 @@ class TrivyContainerScanner(BaseScanner):
         rc, stdout, stderr = await run_command(cmd, timeout=300, env=trivy_env())
 
         if not stdout.strip():
+            if rc != 0:
+                self._errors.append(f"trivy {image} (exit {rc}): {stderr[-300:]}")
             return []
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
+            self._errors.append(f"trivy {image}: output không phải JSON (exit {rc}): {stderr[-300:]}")
             return []
 
         for result in data.get("Results", []):

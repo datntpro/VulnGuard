@@ -9,7 +9,7 @@ import os
 import socket
 from typing import List, Dict, Any
 
-from scanner.scanners.base import BaseScanner, run_command, normalize_severity, make_fingerprint
+from scanner.scanners.base import ScannerRunError, BaseScanner, run_command, normalize_severity, make_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +121,14 @@ class SemgrepScanner(BaseScanner):
             config_args = []
             for ruleset in rulesets:
                 config_args += ["--config", ruleset]
-            online = await self._run_semgrep(config_args, timeout=120)
-            add_findings(online)
+            try:
+                online = await self._run_semgrep(config_args, timeout=120)
+                add_findings(online)
+            except ScannerRunError as e:
+                # Timeout của lượt online (registry chậm) không làm hỏng kết quả bundled.
+                if "timeout" not in str(e).lower():
+                    raise
+                logger.warning(f"Semgrep online pass bỏ qua: {e}")
         else:
             logger.info("Semgrep: không có internet — bỏ qua online registry rules (offline mode)")
 
@@ -150,15 +156,28 @@ class SemgrepScanner(BaseScanner):
 
         rc, stdout, stderr = await run_command(cmd, timeout=timeout)
         if rc == -1 and "timeout" in stderr.lower():
-            logger.warning(f"Semgrep timeout sau {timeout}s")
+            raise ScannerRunError(f"semgrep timeout sau {timeout}s")
 
         if not stdout.strip():
+            # Với --json, semgrep chạy đúng luôn in JSON (kể cả khi sạch / rc 1).
+            # stdout rỗng + exit khác 0 = tool hỏng (vd ImportError) → KHÔNG phải "0 findings".
+            if rc != 0:
+                raise ScannerRunError(f"semgrep thất bại (exit {rc}): {stderr[-500:]}")
             return []
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
-            return []
+            raise ScannerRunError(
+                f"semgrep output không phải JSON (exit {rc}): {stderr[-500:]}"
+            ) from None
+
+        if rc >= 2 or rc < 0:
+            errors = data.get("errors") or []
+            if not data.get("results"):
+                first = errors[0].get("message", "") if errors else stderr[-500:]
+                raise ScannerRunError(f"semgrep thất bại (exit {rc}): {first}")
+            logger.warning(f"Semgrep exit {rc} nhưng có kết quả — giữ findings ({len(errors)} lỗi)")
 
         findings = []
         for result in data.get("results", []):
@@ -213,11 +232,17 @@ class BanditScanner(BaseScanner):
 
         # Bandit trả về exit code 1 khi có findings — bình thường
         if not stdout.strip():
+            if rc not in (0, 1):
+                raise ScannerRunError(f"bandit thất bại (exit {rc}): {stderr[-500:]}")
             return []
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
+            if rc not in (0, 1):
+                raise ScannerRunError(
+                    f"bandit output không phải JSON (exit {rc}): {stderr[-500:]}"
+                ) from None
             return []
 
         for result in data.get("results", []):
