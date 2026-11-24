@@ -12,6 +12,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$PROJECT_DIR/.coworker_venv"
 
+# Nạp .env (nếu có) để DÙNG CHUNG VULNGUARD_COWORKER_TOKEN với app trong Docker.
+# Token này bắt buộc để app xác thực tới coworker_host (chống RCE không auth).
+if [ -f "$PROJECT_DIR/.env" ]; then set -a; . "$PROJECT_DIR/.env"; set +a; fi
+if [ -z "${VULNGUARD_COWORKER_TOKEN:-}" ]; then
+    echo "⚠ VULNGUARD_COWORKER_TOKEN chưa đặt. Service sẽ tự sinh token, nhưng app"
+    echo "  trong Docker sẽ KHÔNG khớp → Co-work bị 401. Hãy đặt cùng giá trị ở .env:"
+    echo "    echo \"VULNGUARD_COWORKER_TOKEN=\$(openssl rand -hex 32)\" >> $PROJECT_DIR/.env"
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
     echo "▶ Tạo venv riêng cho coworker_host tại $VENV_DIR ..."
     python3 -m venv "$VENV_DIR"

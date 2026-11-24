@@ -77,6 +77,68 @@ app = FastAPI(title="VulnGuard Coworker Host", version="1.0.0")
 
 
 # ─────────────────────────────────────────────────────────────
+# Bảo mật: token bắt buộc + kiểm tra Host (chống DNS rebinding)
+# Dịch vụ này chạy LỆNH trên máy host → bắt buộc xác thực, kể cả khi bind 127.0.0.1
+# (tiến trình local khác / trang web qua DNS rebinding vẫn có thể gọi tới).
+# ─────────────────────────────────────────────────────────────
+import hmac
+import secrets as _secrets
+
+_TOKEN_FILE = DATA_DIR / "token"
+
+
+def _effective_token() -> str:
+    tok = (os.environ.get("VULNGUARD_COWORKER_TOKEN") or "").strip()
+    if tok:
+        return tok
+    # Chưa đặt env → tự sinh + lưu, in hướng dẫn. Luôn ép auth (không bao giờ mở toang).
+    try:
+        if _TOKEN_FILE.exists():
+            tok = _TOKEN_FILE.read_text().strip()
+    except Exception:
+        tok = ""
+    if not tok:
+        tok = _secrets.token_urlsafe(32)
+        try:
+            _TOKEN_FILE.write_text(tok)
+            os.chmod(_TOKEN_FILE, 0o600)
+        except Exception:
+            pass
+        logger.warning("⚠ VULNGUARD_COWORKER_TOKEN chưa đặt — đã tự sinh token. "
+                       "Đặt biến này GIỐNG NHAU ở coworker_host và app VulnGuard:\n"
+                       "  VULNGUARD_COWORKER_TOKEN=%s", tok)
+    return tok
+
+
+COWORKER_TOKEN = _effective_token()
+
+# Host được phép (chống DNS rebinding): chỉ localhost/loopback + host.docker.internal.
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1", "host.docker.internal"}
+for _h in (os.environ.get("COWORKER_ALLOWED_HOSTS") or "").split(","):
+    if _h.strip():
+        _ALLOWED_HOSTS.add(_h.strip().lower())
+
+# Endpoint không cần token (chỉ để probe sống/chết, không lộ gì nhạy cảm).
+_PUBLIC_PATHS = {"/health"}
+
+
+@app.middleware("http")
+async def _guard(request, call_next):
+    from fastapi.responses import JSONResponse
+    # 1) Host check — tách cổng, so với allowlist (chống DNS rebinding)
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if host and host not in _ALLOWED_HOSTS:
+        return JSONResponse(status_code=421, content={"detail": f"Host không được phép: {host}"})
+    # 2) Token check (trừ _PUBLIC_PATHS)
+    if request.url.path not in _PUBLIC_PATHS:
+        auth = request.headers.get("authorization") or ""
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not token or not hmac.compare_digest(token, COWORKER_TOKEN):
+            return JSONResponse(status_code=401, content={"detail": "Thiếu/sai token (Authorization: Bearer <VULNGUARD_COWORKER_TOKEN>)"})
+    return await call_next(request)
+
+
+# ─────────────────────────────────────────────────────────────
 # Storage helpers
 # ─────────────────────────────────────────────────────────────
 def _load_json(path: Path, default):
