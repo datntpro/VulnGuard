@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     # Dùng để Web UI hiển thị hint scan path đúng (path container vs path thật trên host)
     deploy_mode: Literal["docker", "native"] = "docker"
 
-    # ── SonarQube (Community) — SAST sâu, giảm false positive (tuỳ chọn) ──
-    # Trỏ tới server Sonar sẵn có, hoặc dùng service bundled (docker compose --profile sonar).
+    # ── SonarQube — SAST sâu, giảm false positive (tuỳ chọn) ──
+    # Trỏ tới SonarQube server của bạn (bản nào cũng được), hoặc dùng service bundled
+    # (docker compose --profile sonar).
     sonarqube_url: str = ""          # vd http://sonarqube:9000 (bundled) hoặc https://sonar.corp.vn
     sonarqube_token: str = ""        # token tạo trong Sonar (My Account → Security)
     sonarqube_timeout: int = 900

@@ -57,12 +57,21 @@ async def _run_scan_background(scan_id: str, scan_path: str, scan_types: list, r
 
         # ── Validate scan path ────────────────────────────────────────────
         if not os.path.exists(scan_path):
+            from api.config import settings as _st
+            if (_st.deploy_mode or "docker").lower() == "native":
+                hint = (
+                    "Đang chạy chế độ NATIVE — path phải tồn tại trên chính máy chạy VulnGuard "
+                    "và tiến trình phải có quyền đọc. Kiểm tra lại đường dẫn tuyệt đối.\n"
+                    "Mẹo: dùng tính năng upload .zip để quét mà không cần khai báo path."
+                )
+            else:
+                hint = (
+                    "Đang chạy chế độ DOCKER — path phải được mount vào container.\n"
+                    "Ví dụ: thêm volume '-v /your/project:/scan' rồi dùng path '/scan'.\n"
+                    "Mẹo: dùng tính năng upload .zip để quét mà không cần mount."
+                )
             scan.status = ScanStatus.FAILED
-            scan.error_message = (
-                f"Scan path không tồn tại: '{scan_path}'\n"
-                f"Hãy đảm bảo path đã được mount vào Docker container.\n"
-                f"Ví dụ: thêm volume '-v /your/project:/scan' và dùng path '/scan'"
-            )
+            scan.error_message = f"Scan path không tồn tại trong môi trường chạy: '{scan_path}'\n{hint}"
             scan.completed_at = datetime.utcnow()
             db.commit()
             return

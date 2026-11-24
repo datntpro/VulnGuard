@@ -12,14 +12,22 @@ def make_fingerprint(tool: str, rule_id: str, file_path: str, line: int, title: 
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300) -> tuple[int, str, str]:
-    """Chạy command async và trả về (returncode, stdout, stderr)."""
+async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
+                      env: dict = None) -> tuple[int, str, str]:
+    """Chạy command async và trả về (returncode, stdout, stderr).
+
+    env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế)."""
+    import os as _os
+    run_env = None
+    if env:
+        run_env = {**_os.environ, **env}
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=run_env,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")

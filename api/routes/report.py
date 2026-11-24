@@ -18,6 +18,7 @@ Logic:
 """
 
 import json
+import re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
@@ -132,6 +133,70 @@ def _esc(text: str) -> str:
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;"))
+
+
+def _md_lite(text: str) -> str:
+    """Markdown rút gọn → HTML an toàn: ```code```, `inline`, **bold**, bullet/number list.
+    Dùng cho phần phân tích AI để dễ đọc thay vì 1 khối text phẳng."""
+    import re as _re
+    if not text:
+        return ""
+    segs = str(text).split("```")
+    html = ""
+    for i, seg in enumerate(segs):
+        if i % 2 == 1:   # code fence
+            body = _re.sub(r"^[A-Za-z0-9_+\-]*\n", "", seg).rstrip("\n")
+            html += (f'<pre style="background:#0f172a;color:#e2e8f0;border-radius:6px;'
+                     f'padding:10px;overflow:auto;font-size:12px;line-height:1.5;margin:8px 0;'
+                     f'white-space:pre-wrap;"><code>{_esc(body)}</code></pre>')
+            continue
+
+        def _inline(s: str) -> str:
+            s = _esc(s)
+            s = _re.sub(r"`([^`]+)`",
+                        r'<code style="background:#eef2ff;padding:1px 5px;border-radius:4px;'
+                        r'font-size:12px;">\1</code>', s)
+            s = _re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+            return s
+
+        lines, para, in_list = seg.split("\n"), [], None
+        def _flush_para():
+            nonlocal para
+            if para:
+                html_parts.append(f'<p style="margin:5px 0;">{"<br>".join(para)}</p>')
+                para = []
+        html_parts: list = []
+        for raw in lines:
+            line = raw.rstrip()
+            m_ul = _re.match(r"^\s*[-*]\s+(.*)", line)
+            m_ol = _re.match(r"^\s*\d+[.)]\s+(.*)", line)
+            if m_ul:
+                _flush_para()
+                if in_list != "ul":
+                    if in_list:
+                        html_parts.append(f"</{in_list}>")
+                    html_parts.append('<ul style="margin:5px 0 5px 18px;">'); in_list = "ul"
+                html_parts.append(f"<li>{_inline(m_ul.group(1))}</li>")
+            elif m_ol:
+                _flush_para()
+                if in_list != "ol":
+                    if in_list:
+                        html_parts.append(f"</{in_list}>")
+                    html_parts.append('<ol style="margin:5px 0 5px 18px;">'); in_list = "ol"
+                html_parts.append(f"<li>{_inline(m_ol.group(1))}</li>")
+            elif not line.strip():
+                _flush_para()
+                if in_list:
+                    html_parts.append(f"</{in_list}>"); in_list = None
+            else:
+                if in_list:
+                    html_parts.append(f"</{in_list}>"); in_list = None
+                para.append(_inline(line))
+        _flush_para()
+        if in_list:
+            html_parts.append(f"</{in_list}>")
+        html += "".join(html_parts)
+    return html
 
 
 def _dedup_and_group(vulns: List[Vulnerability]):
@@ -528,10 +593,11 @@ def _render_html(
                     f'{_esc(ai_fp_pct)} khả năng FP</span>'
                 ) if ai_fp_pct else ""
 
-                # FP reason row
+                # FP reason row — bỏ tiền tố "[nhãn]" (đã có badge verdict), render markdown
+                _reason_clean = re.sub(r"^\s*\[[^\]]+\]\s*", "", ai_fp_reason or "")
                 fp_reason_html = (
                     f'<div style="font-size:12px;color:#475569;margin-top:4px;">'
-                    f'<em>{_esc(ai_fp_reason)}</em></div>'
+                    f'{_md_lite(_reason_clean)}</div>'
                 ) if ai_fp_reason and not _is_fallback_text(ai_fp_reason) else ""
 
                 # Exploitability rows
@@ -543,7 +609,7 @@ def _render_html(
                                   letter-spacing:.5px;color:#0369a1;margin-bottom:3px;">
                         🌐 Khả năng khai thác (Public)
                       </div>
-                      <p style="font-size:13px;color:#1e3a5f;line-height:1.5;">{_esc(ai_pub)}</p>
+                      <div style="font-size:13px;color:#1e3a5f;line-height:1.5;">{_md_lite(ai_pub)}</div>
                     </div>"""
                 if ai_priv and not _is_fallback_text(ai_priv):
                     exploit_html += f"""
@@ -552,13 +618,26 @@ def _render_html(
                                   letter-spacing:.5px;color:#7c3aed;margin-bottom:3px;">
                         🔒 Khả năng khai thác (Private)
                       </div>
-                      <p style="font-size:13px;color:#1e3a5f;line-height:1.5;">{_esc(ai_priv)}</p>
+                      <div style="font-size:13px;color:#1e3a5f;line-height:1.5;">{_md_lite(ai_priv)}</div>
                     </div>"""
+
+                # Badge verdict suy từ tiền tố nhãn trong fp_reason
+                _vmap = [("lỗi thật", ("🛑 Lỗi thật", "#991b1b", "#fee2e2")),
+                         ("false positive", ("✅ Khả năng là False Positive", "#166534", "#dcfce7")),
+                         ("review", ("🔍 Cần review thủ công", "#9a3412", "#ffedd5"))]
+                verdict_badge = ""
+                _rl = (ai_fp_reason or "").lower()
+                for key, (lbl, col, bg) in _vmap:
+                    if _rl.startswith(f"[{key}") or (key != "lỗi thật" and key in _rl[:40]):
+                        verdict_badge = (f'<span style="background:{bg};color:{col};font-size:12px;'
+                                         f'font-weight:700;padding:2px 10px;border-radius:999px;">{lbl}</span>')
+                        break
 
                 ai_section_html = f"""
                 <div class="ai-block">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
                     <div class="ai-label" style="margin-bottom:0;">🤖 Phân tích AI</div>
+                    {verdict_badge}
                     {fp_badge}
                   </div>
                   {fp_reason_html}
@@ -568,7 +647,7 @@ def _render_html(
                                 letter-spacing:.5px;color:#0369a1;margin-bottom:4px;">
                       📋 Giải thích
                     </div>
-                    <p>{_esc(ai_expl)}</p>
+                    <div style="font-size:13px;line-height:1.6;">{_md_lite(ai_expl)}</div>
                   </div>
                 </div>"""
 
@@ -576,7 +655,7 @@ def _render_html(
                     ai_section_html += f"""
                 <div class="ai-block fix-block">
                   <div class="ai-label">🔧 Hướng dẫn khắc phục</div>
-                  <p>{_esc(ai_fix)}</p>
+                  <div style="font-size:13px;line-height:1.6;">{_md_lite(ai_fix)}</div>
                 </div>"""
             else:
                 # Chưa có AI data — hiển thị badge nhỏ
@@ -1099,6 +1178,9 @@ def _render_html(
       .report-header {{ background: #0f172a !important; -webkit-print-color-adjust: exact; }}
       .vuln-card, .page-section, .scan-type-section {{ box-shadow: none; border: 1px solid #e2e8f0; }}
       .snippet {{ background: #1e293b !important; -webkit-print-color-adjust: exact; }}
+      .no-print {{ display: none !important; }}
+      .ai-block {{ -webkit-print-color-adjust: exact; break-inside: avoid; }}
+      .vuln-card {{ break-inside: avoid; }}
     }}
   </style>
 </head>
@@ -1112,9 +1194,9 @@ def _render_html(
       <h1>{_esc(project.name)}</h1>
       <div class="subtitle">Scan #{scan.scan_number} · {_esc(scan.scan_path)}</div>
     </div>
-    <div style="display:flex;gap:10px;align-items:center;margin-top:8px;">
-      <button onclick="window.print()" style="background:#ffffff20;color:#fff;border:1px solid #ffffff40;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">🖨️ In / Xuất PDF</button>
-      <button onclick="downloadHtml()" style="background:#7c3aed;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">⬇ Tải xuống .html</button>
+    <div class="no-print" style="display:flex;gap:10px;align-items:center;margin-top:8px;">
+      <button onclick="window.print()" style="background:#ffffff20;color:#fff;border:1px solid #ffffff40;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">🖨️ Lưu PDF / In</button>
+      <button onclick="downloadHtml()" style="background:#7c3aed;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">⬇ Tải .html</button>
     </div>
   </div>
   <div class="header-meta">
