@@ -136,12 +136,15 @@ async def run_nuclei(
         cmd = build_command(tfile, severities, tags, fuzz, rate_limit,
                             capture_traffic=capture_traffic, exclude_tags=exclude_tags, safe_net=safe_net, proxy=proxy)
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                limit=4 * 1024 * 1024,
-            )
+            # Đi qua registry của Pentest Agent: nhóm process riêng + kill switch giết được (F1/F3)
+            from scanner.pentest.procs import REGISTRY, RunStopped, current_run_id, spawn
+            rid = current_run_id.get()
+            proc = await spawn(*cmd, run_id=rid, stdout=asyncio.subprocess.PIPE,
+                               stderr=asyncio.subprocess.PIPE, limit=4 * 1024 * 1024)
         except FileNotFoundError:
             return [], {"error": "Tool 'nuclei' không tìm thấy trong PATH."}
+        except RunStopped as e:
+            return [], {"error": str(e)}
 
         async def _read_stdout():
             assert proc.stdout
@@ -160,9 +163,14 @@ async def run_nuclei(
         try:
             await asyncio.wait_for(asyncio.gather(_read_stdout(), _read_stderr(), proc.wait()), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
+            await REGISTRY.kill_all_proc(proc)
             meta["timed_out"] = True
             meta["error"] = f"Nuclei timeout sau {timeout // 60} phút — giữ các finding đã thu được."
+        except asyncio.CancelledError:
+            await REGISTRY.kill_all_proc(proc)   # STOP/watchdog huỷ task → không để nuclei mồ côi
+            raise
+        finally:
+            REGISTRY.unregister(rid, proc)
         if proc.returncode not in (0, None) and not findings and not meta["error"]:
             meta["error"] = (meta["stderr_tail"].strip()[-500:] or f"nuclei exit code {proc.returncode}")
     return findings, meta
