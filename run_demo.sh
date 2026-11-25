@@ -42,4 +42,5 @@ echo "  VulnGuard DEMO đang chạy:  http://localhost:$PORT"
 echo "  Đăng nhập:  demo@vulnguard.local  /  VulnGuardDemo!"
 echo "  (Ctrl+C để dừng)"
 echo "─────────────────────────────────────────────"
-exec "$VENV/bin/uvicorn" api.main:app --host 0.0.0.0 --port "$PORT"
+# Demo: mặc định loopback như phần còn lại; mở LAN bằng VULNGUARD_BIND=0.0.0.0 (demo có tài khoản demo công khai!).
+exec "$VENV/bin/uvicorn" api.main:app --host "${VULNGUARD_BIND:-127.0.0.1}" --port "$PORT"

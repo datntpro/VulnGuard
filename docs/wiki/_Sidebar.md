@@ -2,6 +2,7 @@
 
 **Bắt đầu**
 - [[Installation]]
+- [[LAN Access|LAN-Access]]
 - [[Configuration]]
 - [[Features]]
 

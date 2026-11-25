@@ -7,12 +7,16 @@ base_url theo platform của bạn, vd https://qualysapi.qg2.apps.qualys.com
   - Alert ← GET /api/2.0/fo/asset/host/vm/detection/?action=list  (QID + severity 1..5)
 Severity Qualys 1..5 → info..critical.
 """
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
+import logging
+from defusedxml import DefusedXmlException
 from typing import Any, Dict, List
 
 import httpx
 
 from scanner.connectors.base import BaseConnector, ConnectorError, NormAlert, NormAsset
+
+log = logging.getLogger(__name__)
 
 _SEV = {"5": "critical", "4": "high", "3": "medium", "2": "low", "1": "info"}
 
@@ -27,6 +31,10 @@ def parse_hosts_xml(xml_text: str) -> List[NormAsset]:
     out = []
     try:
         root = ET.fromstring(xml_text)
+    except DefusedXmlException as e:
+        # DTD/entity bị từ chối: có thể là MITM hoặc server lạ → không im lặng.
+        log.warning("[%s] phản hồi XML bị từ chối (DTD/entity): %s", __name__, e)
+        return out
     except ET.ParseError:
         return out
     for h in root.iter("HOST"):
@@ -45,6 +53,10 @@ def parse_detections_xml(xml_text: str) -> List[NormAlert]:
     out = []
     try:
         root = ET.fromstring(xml_text)
+    except DefusedXmlException as e:
+        # DTD/entity bị từ chối: có thể là MITM hoặc server lạ → không im lặng.
+        log.warning("[%s] phản hồi XML bị từ chối (DTD/entity): %s", __name__, e)
+        return out
     except ET.ParseError:
         return out
     for host in root.iter("HOST"):

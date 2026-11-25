@@ -69,7 +69,7 @@ Web scan chạy Nuclei với `-duc` (không tự cập nhật). Cập nhật tem
 
 ## Không truy cập được từ máy khác
 
-`run.sh` mặc định nghe `127.0.0.1`. Mở LAN: `VULNGUARD_HOST=0.0.0.0 bash run.sh` (cần auth + firewall). Ngược lại, nếu thấy app đang nghe `0.0.0.0` ngoài ý muốn: kiểm tra có đang chạy qua `setup.sh` (không `--no-run`), `run_demo.sh`, unit systemd mẫu hoặc Docker không (xem [[Security and Known Limitations|Security-and-Known-Limitations]]).
+`run.sh` và Docker mặc định chỉ nghe `127.0.0.1`. Mở LAN: `VULNGUARD_BIND=0.0.0.0` — xem [[Truy cập từ máy khác trong LAN|LAN-Access]] (cần auth + `ALLOWED_HOSTS` + firewall). Nếu thấy app nghe `0.0.0.0` ngoài ý muốn: kiểm tra `VULNGUARD_BIND`/`VULNGUARD_HOST` trong `.env`/môi trường.
 
 ## AI đám mây lỗi
 

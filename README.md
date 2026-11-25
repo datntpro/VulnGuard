@@ -90,7 +90,7 @@ The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sq
 ## Security & privacy
 
 - **Local by default** — scanners + Ollama run on your machine. In **local-only mode** no scan data is sent out. Cloud AI / connectors are opt-in and do send data — see [`docs/DATA_FLOW.md`](docs/DATA_FLOW.md).
-- **Listens on `127.0.0.1` by default** — expose externally only via `VULNGUARD_HOST=0.0.0.0` (behind auth + firewall).
+- **Listens on `127.0.0.1` by default** — to reach it from other machines on your LAN set `VULNGUARD_BIND=0.0.0.0` (Docker **and** native; `VULNGUARD_HOST` is a deprecated alias) with auth enabled, `ALLOWED_HOSTS` set and ideally TLS — see [LAN access](docs/wiki/LAN-Access.md). The app refuses to start on a non-loopback bind with `AUTH_ENABLED=false`; the pentest MITM proxy has its own `PENTEST_PROXY_BIND` (loopback).
 - **Auth + RBAC**; `setup.sh` generates the ADMIN password into `storage/admin_credentials.txt` (chmod 600, **not printed to the terminal**) and forces a change on first login — read it, log in, change it, delete the file.
 - **Secrets encrypted at rest** (Fernet): cloud AI keys, connector credentials — only hints are shown, never raw values.
 - **Cloud AI is opt-in**; in hybrid/cloud mode only findings + redacted code context are sent (secrets and Vietnamese PII such as CCCD/phone/email/internal IPs are masked first).
@@ -172,6 +172,7 @@ GitHub Actions khép vòng: **`ci.yml`** chạy bộ test + **gate bảo mật B
 ## Bảo mật & Privacy
 
 - **Mặc định local** — scanner + Ollama chạy tại chỗ; ở **chế độ local-only, dữ liệu quét không rời máy**. Tính năng AI đám mây / connector là tùy chọn và CÓ gửi dữ liệu — xem [`docs/DATA_FLOW.md`](docs/DATA_FLOW.md).
+- **Chỉ nghe `127.0.0.1` mặc định** — mở cho máy khác trong LAN bằng `VULNGUARD_BIND=0.0.0.0` (dùng chung cho Docker và native; `VULNGUARD_HOST` là alias deprecated) cùng `ALLOWED_HOSTS=<ip/hostname LAN>`, auth bật và nên có TLS — xem [Truy cập từ máy khác trong LAN](docs/wiki/LAN-Access.md). App từ chối khởi động nếu bind LAN mà `AUTH_ENABLED=false`; proxy MITM của Pentest có `PENTEST_PROXY_BIND` riêng (mặc định loopback).
 - **Đăng nhập + RBAC**; `setup.sh` tự sinh mật khẩu ADMIN (lưu `storage/admin_credentials.txt`, chmod 600 — đổi rồi xoá file).
 - **Secret mã hoá at-rest** (Fernet): key cloud AI, credential connector — chỉ hiện hint, không lộ raw.
 - **Cloud AI là opt-in**; chế độ hybrid/cloud chỉ gửi finding + ngữ cảnh code đã redact.
@@ -192,6 +193,9 @@ BLOCK_SEVERITY_THRESHOLD=HIGH
 MAX_WEBSCANS_PER_DOMAIN=5
 NUCLEI_TIMEOUT_MINUTES=60
 PENTEST_PROXY_PORT=8788
+VULNGUARD_BIND=127.0.0.1     # 0.0.0.0 = mở LAN (cần ALLOWED_HOSTS, auth bật; xem docs/wiki/LAN-Access.md)
+ALLOWED_HOSTS=               # vd 192.168.1.63,vulnguard.lan
+PENTEST_PROXY_BIND=127.0.0.1 # Docker: bind riêng của proxy MITM
 ```
 
 > **Cloud AI** (Claude API key / WIF / Bedrock) cấu hình trong **Settings → AI Provider** (mã hoá at-rest), không qua `.env`.

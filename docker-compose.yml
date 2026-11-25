@@ -8,12 +8,13 @@ services:
       context: .
       dockerfile: api/Dockerfile
     container_name: vulnguard-api
-    # H4: chỉ phơi ra localhost theo mặc định (đổi VULNGUARD_BIND=0.0.0.0 nếu CỐ Ý
-    # muốn truy cập từ máy khác trong mạng — cần hiểu rủi ro).
+    # H4: chỉ phơi ra localhost theo mặc định. Truy cập từ máy khác trong LAN: VULNGUARD_BIND=0.0.0.0
+    # (xem wiki "Truy cập từ máy khác trong LAN"). Cổng proxy MITM có biến bind RIÊNG (mặc định loopback)
+    # nên mở UI ra LAN không làm lộ proxy.
     ports:
       - "${VULNGUARD_BIND:-127.0.0.1}:${VULNGUARD_PORT:-8080}:8080"
       # Recording MITM proxy (Pentest Agent — bắt bằng chứng từ trình duyệt/công cụ)
-      - "${VULNGUARD_BIND:-127.0.0.1}:${PENTEST_PROXY_PORT:-8788}:8788"
+      - "${PENTEST_PROXY_BIND:-127.0.0.1}:${PENTEST_PROXY_PORT:-8788}:8788"
     # H4: chặn leo thang đặc quyền trong container.
     security_opt:
       - no-new-privileges:true
@@ -45,6 +46,17 @@ services:
       - APP_ENV=${APP_ENV:-production}
       # Chỉ tin X-Forwarded-For từ các IP này (uvicorn). Đặt IP reverse proxy trong .env nếu có.
       - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # Cấu hình app đi qua compose (container KHÔNG đọc .env trực tiếp)
+      - VULNGUARD_BIND=${VULNGUARD_BIND:-127.0.0.1}
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
+      - VULNGUARD_SECRET_KEY=${VULNGUARD_SECRET_KEY:-}
+      - SESSION_TTL_HOURS=${SESSION_TTL_HOURS:-12}
+      - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-true}
+      - SCM_ALLOW_HTTP=${SCM_ALLOW_HTTP:-false}
+      - SCM_ALLOW_PRIVATE_HOSTS=${SCM_ALLOW_PRIVATE_HOSTS:-true}
       # SonarQube (tuỳ chọn) — trỏ server sẵn có, hoặc dùng service bundled bên dưới
       - SONARQUBE_URL=${SONARQUBE_URL:-}
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}
