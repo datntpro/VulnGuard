@@ -180,3 +180,29 @@ def test_p18_degraded_and_roe_lock_present():
     assert "e.degraded_mode" in INDEX
     assert "Thu hồi uỷ quyền để sửa" in INDEX
     assert "setRoeLocked(!!(eng && eng.authorized))" in INDEX
+
+
+# ── P1-8 follow-up (PR #61 verify) ──────────────────────────────────────────
+def test_p18_stop_reason_reads_error_message_not_current_engagement():
+    body = _fn("ptStopReason")
+    assert "r.error_message" in body
+    assert "ptState" not in body                 # không đoán từ engagement hiện tại
+    assert "kill switch" in body                 # chỉ là mặc định khi error_message rỗng
+
+
+def test_p18_viewer_hides_write_controls():
+    assert "function canWrite()" in INDEX
+    for needle in ("${canWrite() ? `<div class=\"flex\">", "authOk = e.authorized && !expired && canWrite()",
+                   "${active && canWrite() ?", "${!canWrite() ? ''"):
+        assert needle in INDEX, needle
+
+
+def test_p18_proxy_token_cleared_after_copy_and_navigation():
+    body = _fn("copyProxyToken")
+    assert "ptState.proxySecret = null" in body
+    assert "ptState.proxySecret = null;   // token chỉ hiện một lần" in INDEX   # openEngagement
+    assert re.search(r"function navigate\(page\) \{\n  if \(page !== 'pentest-engagement'[^\n]*proxySecret = null", INDEX)
+
+
+def test_p18_conf_badge_ignores_prototype_keys():
+    assert "hasOwnProperty.call(PT_CONF, c)" in _fn("ptConfBadge") or "hasOwnProperty.call(PT_CONF, c)" in INDEX
