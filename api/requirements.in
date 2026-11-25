@@ -8,7 +8,7 @@ uvicorn[standard]>=0.29.0
 # DB — giữ nguyên để tránh migration issues
 # >=2.0.36: bản 2.0.30 lỗi import trên Python 3.13 (native install distro mới)
 sqlalchemy>=2.0.36,<2.1
-alembic==1.13.1
+alembic==1.20.1
 # Pydantic — dùng >= để pip tự resolve khi scanner tools upgrade
 pydantic>=2.7.1
 pydantic-settings>=2.2.1
