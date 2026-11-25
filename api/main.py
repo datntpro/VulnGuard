@@ -74,6 +74,8 @@ def _run_migrations():
                 pass  # Column đã tồn tại hoặc bảng chưa tồn tại lần đầu — bình thường
 
 _run_migrations()
+from api.pentest_migrations import run as _pentest_migrate  # P1-0: api/pentest_migrations/
+_pentest_migrate(engine)
 
 
 def _cleanup_stale_scans():
