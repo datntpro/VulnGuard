@@ -465,7 +465,7 @@ def test_content_length_over_limit_413_without_reading_body(monkeypatch):
         sent.append(m)
     scope = {"type": "http", "method": "POST", "path": "/api/projects/x/scan-upload",
              "headers": [(b"content-length", str(50 << 20).encode())]}
-    asyncio.run(UploadSizeLimitMiddleware(app)(scope, receive, send))
+    _run(UploadSizeLimitMiddleware(app)(scope, receive, send))
     assert sent[0]["status"] == 413 and not reached["app"] and reached["recv"] == 0
 
 
@@ -487,7 +487,7 @@ def test_chunked_body_over_limit_aborted(monkeypatch):
     async def send(m):
         sent.append(m)
     scope = {"type": "http", "method": "POST", "path": "/api/projects/x/scan-upload", "headers": []}
-    asyncio.run(UploadSizeLimitMiddleware(app)(scope, receive, send))
+    _run(UploadSizeLimitMiddleware(app)(scope, receive, send))
     assert sent[0]["status"] == 413
 
 
@@ -498,3 +498,13 @@ def test_upload_api_content_length_413(monkeypatch):
     r = c.post(f"/api/projects/{pid}/scan-upload", headers=h,
                files={"file": ("a.zip", b"\0" * (3 << 20), "application/zip")})
     assert r.status_code == 413
+
+
+def _run(coro):
+    """Không dùng asyncio.run: nó bỏ event loop hiện tại và làm hỏng các test khác."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
