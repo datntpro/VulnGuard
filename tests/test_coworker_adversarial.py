@@ -801,3 +801,88 @@ def test_git_too_old(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_GIT_ATTR_SUPPORT", False)
     r = ex(c, fid, "git status")
     assert rec2("git-old", "git status with git<2.40 (simulated)", "403 git_too_old", summ(r), r.status_code == 403)
+
+
+# ═══════════════ Re-verify 2 rows ═══════════════
+@pytest.mark.parametrize("cmd", ["find -f{OUT}", "find -xf{OUT}", "find -Ef{OUT}", "find -sf{OUT} -name '*.txt'",
+                                 "find -f {OUT}", "find -x -f {OUT}"])
+def test_r2_find_f_attached(tmp_path, monkeypatch, cmd):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    r = ex(c, fid, cmd.replace("{OUT}", str(out)), timeout=5)
+    assert r.status_code == 400 and "deep.txt" not in r.text and "secret.txt" not in r.text
+
+
+@pytest.mark.parametrize("cmd", ["diff a b", "diff -N a b", "diff --new-file a b", "diff -s a b"])
+def test_r2_diff_dir_operands(tmp_path, monkeypatch, cmd):
+    m, c, home, proj, out, fid0 = _make(tmp_path, monkeypatch)
+    p2 = home / "p2"
+    (p2 / "a").mkdir(parents=True)
+    (p2 / "b").mkdir()
+    (p2 / "a" / "x").write_text("")
+    os.symlink(out / "secret.txt", p2 / "b" / "x")
+    fid = c.post("/folders", json={"path": str(p2)}, headers=H).json()["id"]
+    r = ex(c, fid, cmd, timeout=5)
+    assert r.status_code == 400 and not leaked(r)
+    # file operands still work
+    (p2 / "f1").write_text("1\n")
+    (p2 / "f2").write_text("2\n")
+    assert ex(c, fid, "diff f1 f2", timeout=5).json()["exit_code"] == 1
+
+
+def _submodule_repo(proj, marker):
+    """Parent repo with gitlink `sub` whose own gitdir has filter+info/attributes (hostile submodule)."""
+    e = _gitrepo(proj)
+    sub = proj / "sub"
+    sub.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=sub, check=True, env=e)
+    (sub / "f.txt").write_text("one\n")
+    subprocess.run(["git", "add", "f.txt"], cwd=sub, check=True, env=e)
+    subprocess.run(["git", "commit", "-qm", "s"], cwd=sub, check=True, env=e)
+    subprocess.run(["git", "add", "sub"], cwd=proj, check=True, env=e)
+    subprocess.run(["git", "commit", "-qm", "gitlink"], cwd=proj, check=True, env=e)
+    with open(sub / ".git" / "config", "a") as f:
+        f.write(f'[filter "x"]\n\tclean = "touch {marker}; cat"\n[diff "x"]\n\ttextconv = "touch {marker}; cat"\n')
+    (sub / ".git" / "info").mkdir(exist_ok=True)
+    (sub / ".git" / "info" / "attributes").write_text("* filter=x diff=x\n")
+    time.sleep(1.1)
+    (sub / "f.txt").write_text("two\n")
+    return e
+
+
+@pytest.mark.parametrize("cmd", ["git diff --submodule=diff", "git diff --submodule", "git diff --ignore-submodules=none",
+                                 "git status --ignore-submodules=none"])
+def test_r2_submodule_options_denied(tmp_path, monkeypatch, cmd):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    marker = proj / "PWN_SUB"
+    _submodule_repo(proj, marker)
+    r = ex(c, fid, cmd, timeout=10)
+    assert r.status_code == 400 and not marker.exists()
+
+
+def test_r2_submodule_config_diff_submodule_overridden(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    marker = proj / "PWN_SUB2"
+    _submodule_repo(proj, marker)
+    with open(proj / ".git" / "config", "a") as f:
+        f.write("[diff]\n\tsubmodule = diff\n[status]\n\tsubmoduleSummary = true\n")
+    for cmd in ("git diff", "git status", "git log -p"):
+        ex(c, fid, cmd, timeout=10)
+    assert not marker.exists()
+
+
+def test_r2_alternates_outside_root_refused(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    e = _gitrepo(proj)
+    other = tmp_path / "other"
+    other.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=other, check=True, env=e)
+    (other / "s.txt").write_text(SECRET + "\n")
+    subprocess.run(["git", "add", "s.txt"], cwd=other, check=True, env=e)
+    subprocess.run(["git", "commit", "-qm", "x"], cwd=other, check=True, env=e)
+    (proj / ".git" / "objects" / "info").mkdir(parents=True, exist_ok=True)
+    (proj / ".git" / "objects" / "info" / "alternates").write_text(str(other / ".git" / "objects") + "\n")
+    r = ex(c, fid, "git rev-parse --disambiguate=f9", timeout=10)
+    assert r.status_code == 403 and r.json()["code"] == "git_repo_outside_root"
+    # in-root alternates are fine
+    (proj / ".git" / "objects" / "info" / "alternates").write_text(str(proj / ".git" / "objects") + "\n")
+    assert ex(c, fid, "git status", timeout=10).status_code == 200

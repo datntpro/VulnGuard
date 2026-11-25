@@ -29,3 +29,9 @@
   outside the root are therefore refused) or when `.git/info/attributes` defines attributes (hostile-repo filter/textconv).
   `find` parses BSD flag clusters (`-xL`, `-Ef`, `-sx`) and `--`; `diff -r/--recursive` is denied (Apple diff follows
   symlinks while recursing) and attached `-X<file>` is confined; Host ports must be numeric.
+- Third review round: `find -f<path>` (attached value) denied; `diff` operands must not be directories (Apple diff follows
+  symlinked entries one level down); safe-mode `git diff`/`git status` run with `--ignore-submodules=all`
+  (+ `diff.submodule=short`, `status.submoduleSummary=false`) and `--submodule*`/`--ignore-submodules*` are denied, so a hostile
+  submodule gitdir cannot run its filters (side effect: dirty submodules are not shown); repos whose
+  `objects/info/alternates` point outside the granted root are refused. Linked `git worktree` checkouts with the gitdir
+  outside the root remain unsupported (fail-closed).

@@ -150,7 +150,7 @@ def _host_only(h: str) -> str:
         return m.group(1) if m else ""
     if h.count(":") == 1:
         host, port = h.split(":")
-        return host if port.isdigit() else ""
+        return host if (port.isascii() and port.isdigit()) else ""
     return h
 
 
@@ -661,12 +661,15 @@ def _deny(cmd: str, t: str):
 
 
 def _check_generic(executable: str, tokens: List[str], root: Path, cwd: Path,
-                   denied_chars=frozenset(), denied_long=frozenset(), path_value_chars=frozenset()):
+                   denied_chars=frozenset(), denied_long=frozenset(), path_value_chars=frozenset(),
+                   no_dirs=False):
     """cat/head/tail/wc/diff/ls/tree (và best-effort cho lệnh trusted): mọi positional và mọi --opt=value là path."""
     end_opts = False
     for t in tokens:
         if end_opts:
             _confine(t, root, cwd)
+            if no_dirs and (cwd / t).is_dir():
+                raise _arg_err("option_denied", f"{executable}: toán hạng '{t}' là thư mục — chỉ so sánh file")
         elif t == "--":
             end_opts = True
         elif t.startswith("--"):
@@ -687,6 +690,8 @@ def _check_generic(executable: str, tokens: List[str], root: Path, cwd: Path,
             continue
         else:
             _confine(t, root, cwd)
+            if no_dirs and (cwd / t).is_dir():
+                raise _arg_err("option_denied", f"{executable}: toán hạng '{t}' là thư mục — chỉ so sánh file")
 
 
 _FIND_FLAG_CLUSTER = re.compile(r"^-[EHLPXdfsx]+$")
@@ -703,6 +708,8 @@ def _check_find(tokens: List[str], root: Path, cwd: Path):
         if t == "--":
             i += 1
             break
+        if re.match(r"^-[EHLPXdsx]*f", t):  # -f<path> (giá trị gắn liền) hoặc cụm có f
+            raise _deny("find", t)
         if _FIND_FLAG_CLUSTER.match(t):
             if set(t[1:]) & set("HLf"):
                 raise _deny("find", t)
@@ -809,7 +816,7 @@ def _check_git(tokens: List[str], root: Path, cwd: Path):
         if t == "--":
             end_opts = True
             continue
-        if _opt_name(t) in _GIT_DENIED or t.startswith("-O") or t.startswith("--out") or t.startswith("--cont") \
+        if t.startswith(("--submodule", "--ignore-sub", "--sub")) or _opt_name(t) in _GIT_DENIED or t.startswith("-O") or t.startswith("--out") or t.startswith("--cont") \
                 or t.startswith("--no-ind") or t.startswith("--ignore-revs"):
             raise _deny("git", t)
         if t.startswith("--"):
@@ -878,7 +885,7 @@ def _check_args(executable: str, tokens: List[str], root: Path, cwd: Path):
     if executable == "diff":
         # Apple diff -r đi theo symlink gặp trong lúc đệ quy → cấm đệ quy
         return _check_generic(executable, tokens, root, cwd, denied_chars=set("r"),
-                              denied_long={"--recursive"}, path_value_chars=set("XS"))
+                              denied_long={"--recursive"}, path_value_chars=set("XS"), no_dirs=True)
     return _check_generic(executable, tokens, root, cwd)
 
 
@@ -906,10 +913,15 @@ def _build_argv(tokens: List[str]) -> List[str]:
         return tokens
     sub, rest = tokens[1], tokens[2:]
     extra = ["--no-ext-diff", "--no-textconv"] if sub in ("diff", "log", "show") else []
+    if sub in ("diff", "status"):
+        # Không cho git vào submodule (nó chạy git con dùng info/attributes/filter của submodule); dòng lệnh
+        # thắng cả submodule.<n>.ignore trong .git/config. Đổi lại: submodule bẩn không hiện ở safe mode.
+        extra.append("--ignore-submodules=all")
     return ["git", f"--attr-source={_EMPTY_TREE}",
             "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
             "-c", "core.attributesFile=/dev/null", "-c", "core.sshCommand=false", "-c", "gpg.program=false",
-            "-c", "log.showSignature=false", "-c", "diff.external=", "-c", "protocol.allow=never",
+            "-c", "log.showSignature=false", "-c", "diff.submodule=short", "-c", "status.submoduleSummary=false",
+            "-c", "submodule.recurse=false", "-c", "diff.external=", "-c", "protocol.allow=never",
             "--no-pager", sub, *extra, *rest]
 
 
@@ -953,6 +965,20 @@ def _git_preflight(root: Path, cwd: Path):
                              "Repo git nằm (một phần) ngoài folder được cấp quyền (repo ở thư mục cha, `.git` trỏ ra "
                              "ngoài hoặc core.worktree ngoài root) — từ chối chạy git")
     for d in dirs[:2]:
+        for alt in (d / "objects" / "info" / "alternates", d / "objects" / "info" / "http-alternates"):
+            try:
+                if not alt.is_file():
+                    continue
+                for ln in alt.read_text(errors="replace").splitlines():
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    target = Path(ln) if ln.startswith("/") else (d / "objects" / ln)
+                    if ln.startswith(("http:", "https:")) or not _under(_resolved(target), root):
+                        raise CodedError(403, "git_repo_outside_root",
+                                         "Repo git dùng object store (alternates) ngoài folder được cấp quyền — từ chối chạy git")
+            except OSError:
+                continue
         attrs = d / "info" / "attributes"
         try:
             if attrs.is_file() and any(ln.strip() and not ln.lstrip().startswith("#")
