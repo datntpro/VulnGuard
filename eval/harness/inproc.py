@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 
 def _setup_env():
@@ -34,6 +35,35 @@ async def _approver(policy: str, stop: asyncio.Event):
         await asyncio.sleep(0.1)
 
 
+def _procs(names=("nmap", "ffuf", "sqlmap", "nuclei")) -> int:
+    n = 0
+    for p in os.listdir("/proc"):
+        if p.isdigit():
+            try:
+                if open(f"/proc/{p}/comm").read().strip() in names:
+                    n += 1
+            except OSError:
+                pass
+    return n
+
+
+async def _stopper(rid: str, after_s: float, out: dict):
+    """Mô phỏng người bấm STOP: gọi ĐÚNG handler `POST /runs/{id}/stop` rồi đo thời gian tới khi tool con biến mất."""
+    from api.database import SessionLocal
+    from api.routes.pentest import stop_run
+    await asyncio.sleep(after_s)
+    out["procs_alive_at_stop"] = _procs()
+    t0 = time.monotonic()
+    db = SessionLocal()
+    try:
+        stop_run(rid, db)
+    finally:
+        db.close()
+    while _procs() and time.monotonic() - t0 < 30:
+        await asyncio.sleep(0.05)
+    out["stop_latency_ms"] = int((time.monotonic() - t0) * 1000)
+
+
 async def run(spec: dict) -> dict:
     from api.database import SessionLocal, Base, engine
     import api.pentest_models as pm
@@ -51,10 +81,14 @@ async def run(spec: dict) -> dict:
         db.close()
     stop = asyncio.Event()
     appr = asyncio.create_task(_approver(spec["approvals"], stop))
+    stop_out: dict = {}
+    stopper = asyncio.create_task(_stopper(rid, spec["stop_after_s"], stop_out)) if spec.get("stop_after_s") else None
     try:
         driver = ScriptedDriver(spec["turns"])
         await agent_mod.PentestAgent(rid, driver_factory=lambda cfg: driver).run()
     finally:
+        if stopper:
+            await stopper
         stop.set()
         await appr
     db = SessionLocal()
@@ -66,7 +100,7 @@ async def run(spec: dict) -> dict:
                  for s in db.query(pm.AgentStep).filter(pm.AgentStep.run_id == rid)
                  .order_by(pm.AgentStep.step_number, pm.AgentStep.created_at).all()]
         return {"run_status": r.status.value, "error": r.error_message, "steps": steps,
-                "script_exhausted": driver.exhausted, "turns_consumed": driver.i}
+                "script_exhausted": driver.exhausted, "turns_consumed": driver.i, **stop_out}
     finally:
         db.close()
 

@@ -266,17 +266,20 @@ def run_scenario(s: Scenario) -> Dict:
     data = json.loads(line[len("RESULT:"):])
     time.sleep(1.0)           # sniffer/log flush
     trip = [h for c in TRIPWIRES for h in _read(c)]
-    metrics = M.compute_metrics(data["steps"], trip, _read(INSCOPE), capture=_read(CAPTURE), dns_log=_read(DNS),
+    metrics = M.compute_metrics(data["steps"], trip, _read(INSCOPE), stop_latency_ms=data.get("stop_latency_ms"),
+                                capture=_read(CAPTURE), dns_log=_read(DNS),
                                 allowed_ips=s.allowed_ips, allowed_ports=s.allowed_ports, allowed_dns=s.allowed_dns)
+    metrics["procs_alive_at_stop"] = data.get("procs_alive_at_stop")
+    metrics["run_stopped"] = 1 if data.get("run_status") == "STOPPED" else 0
     errors = []
     post = canary()
     if post:
         errors.append("canary SAU kịch bản (hạ tầng chết giữa chừng): " + "; ".join(post))
-    if len(data["steps"]) < s.scripted_calls():
+    if not s.stop_after_s and len(data["steps"]) < s.scripted_calls():
         errors.append(f"chỉ có {len(data['steps'])} step cho {s.scripted_calls()} tool call trong kịch bản")
-    if data.get("turns_consumed", 0) < len(s.turns):
+    if not s.stop_after_s and data.get("turns_consumed", 0) < len(s.turns):
         errors.append(f"kịch bản chưa chạy hết ({data.get('turns_consumed')}/{len(s.turns)} lượt)")
-    errors += M.tool_did_not_run(data["steps"], "output_regex" in s.expect)
+    errors += M.tool_did_not_run(data["steps"], "output_regex" in s.expect or bool(s.stop_after_s))
     if data.get("run_status") == "FAILED":
         errors.append(f"run FAILED: {data.get('error')}")
     failures = M.gate_failures(metrics) + M.check_expect(s.expect, metrics, data["steps"])

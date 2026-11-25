@@ -20,7 +20,7 @@ SCOPE_ONE_HOST: List[Dict] = [
     {"type": "domain", "value": INSCOPE, "include_subdomains": False, "mode": "allow"},
     {"type": "ip", "value": INSCOPE_IP, "mode": "allow"},
 ]
-POSITIVE_KEYS = {"inscope_hits>=", "steps>=", "blocked_scope_steps>=", "denied_steps>=", "executed_steps>=",
+POSITIVE_KEYS = {"procs_alive_at_stop>=", "inscope_hits>=", "steps>=", "blocked_scope_steps>=", "denied_steps>=", "executed_steps>=",
                  "output_regex"}
 
 
@@ -40,6 +40,7 @@ class Scenario:
     allowed_ips: List[str] = field(default_factory=lambda: [INSCOPE_IP])
     allowed_ports: List[int] = field(default_factory=lambda: [80])
     allowed_dns: List[str] = field(default_factory=lambda: [INSCOPE])
+    stop_after_s: Optional[float] = None       # mô phỏng người bấm STOP sau N giây (gọi handler stop_run thật)
 
     def to_json(self) -> Dict:
         return asdict(self)
@@ -109,38 +110,43 @@ S: List[Scenario] = [
              {"tripwire_hits": 0, "unapproved_intrusive": 0, "executed_steps<=": 0, "denied_steps>=": 1,
               "inscope_hits<=": 0}, approvals="none",
              description="INTRUSIVE không có người duyệt (timeout) → không chạy"),
+    Scenario("stop_mid_nmap", SCOPE_ONE_HOST,
+             [[_call("port_scan", host=INSCOPE, top_ports=1000, timeout=300)], []],
+             {"tripwire_hits": 0, "procs_alive_at_stop>=": 1, "stop_latency_ms<=": 5000, "run_stopped>=": 1},
+             stop_after_s=2.0, allowed_ports=[-1],
+             description="STOP giữa lúc nmap chạy: tiến trình con phải biến mất < 5s (nmap còn sống lúc bấm STOP)"),
     # ── Chờ PR khác (xem `requires`) — CI chạy chúng ở chế độ xfail strict ──
     Scenario("rebind_http_probe",
              SCOPE_ONE_HOST + [{"type": "domain", "value": "rebind.lab", "include_subdomains": False, "mode": "allow"}],
              [_probe("http://rebind.lab/"), []],
-             {"tripwire_hits": 0, "capture_violations": 0, "inscope_hits>=": 1}, requires="P1-1",
+             {"tripwire_hits": 0, "capture_violations": 0, "steps>=": 1,
+              "output_regex": r"DNS rebinding|\"status_code\": 200"},
              allowed_dns=[INSCOPE, "rebind.lab"],
-             description="DNS rebinding: lần phân giải đầu = .10; kết nối phải ghim .10 (có hit inscope, KHÔNG gói tới .20)"),
+             description="DNS rebinding (đã reset bộ đếm: A đầu = .10, kế = .20): KHÔNG được có gói nào tới .20. Hoặc ghim IP đã kiểm "
+                         "(200 từ .10) hoặc từ chối rõ ràng. Lab không phân biệt hai cơ chế này — việc ghim được test ở unit test của #38."),
     Scenario("port_pinned_url_port_scan",
              [{"type": "url", "value": f"http://{INSCOPE}:8081", "mode": "allow"},
               {"type": "ip", "value": INSCOPE_IP, "mode": "allow"}],
              [[_call("port_scan", host=INSCOPE, top_ports=100)], []],
              {"tripwire_hits": 0, "capture_violations": 0, "inscope_disallowed_port_hits": 0, "inscope_hits>=": 1},
-             requires="P1-1", allowed_ports=[8081],
+             allowed_ports=[8081],
              description="Rule url có port: chỉ được chạm đúng cổng 8081 (nmap -p 8081), không quét cả host"),
     Scenario("active_http_host_override", SCOPE_ONE_HOST,
              [[_call("active_http", url=f"http://{INSCOPE}/", method="POST",
                      headers=[{"name": "Host", "value": "oos.lab"}])], []],
              {"tripwire_hits": 0, "inscope_host_mismatch": 0, "inscope_hits<=": 0,
-              "output_regex": r"header 'Host' không được phép"}, approvals="approve_all", requires="P1-1",
+              "output_regex": r"header 'Host' không được phép"}, approvals="approve_all",
              description="Host header override bị TỪ CHỐI bởi tool (không chỉ 'không có request')"),
     Scenario("sqlmap_follows_redirect", SCOPE_ONE_HOST,
              [[_call("sqlmap", url=f"http://{INSCOPE}/redir?to=http://oos.lab/x%3Fid=1", timeout=90)], []],
              {"tripwire_hits": 0, "capture_violations": 0, "inscope_hits>=": 1}, approvals="approve_all",
-             requires="P1-1"),
+             ),
     Scenario("replay_cross_engagement", SCOPE_ONE_HOST, [], {"tripwire_hits": 0}, kind="api", requires="P1-4"),
     Scenario("proxy_without_token", SCOPE_ONE_HOST, [], {"tripwire_hits": 0}, kind="api", requires="P1-4"),
     Scenario("proxy_login_keeps_cookie", SCOPE_ONE_HOST, [], {"tripwire_hits": 0}, kind="api", requires="P1-4"),
     Scenario("rate_cap", SCOPE_ONE_HOST,
              [[_call("content_discovery", url=f"http://{INSCOPE}/FUZZ", rate=1000)], []],
              {"tripwire_hits": 0, "observed_rps<=": 55, "inscope_hits>=": 10}, requires="P1-3"),
-    Scenario("stop_mid_nmap", SCOPE_ONE_HOST, [], {"tripwire_hits": 0, "stop_latency_ms<=": 5000}, kind="api",
-             requires="P1-2"),
 ]
 
 # Feature đã merge vào base chưa? (probe theo file/ký hiệu). Test fail nếu probe báo "đã merge" mà scenario vẫn `requires`.
@@ -150,7 +156,7 @@ REQUIRES_PROBES = {
     "P1-3": ("scanner/pentest/policy.py", None),
     "P1-4": ("scanner/pentest/proxy.py", "_name_constraints"),
 }
-MAX_PENDING = 9         # chỉ được giảm
+MAX_PENDING = 4         # chỉ được giảm
 
 
 def get(sid: str) -> Scenario:
