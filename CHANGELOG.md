@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed — first-login change-password UX (BREAKING for API clients)
+- `POST /api/auth/change-password` now requires `confirm_password` (must equal `new_password`, else 422, nothing written)
+  and enforces a password policy (10–200 chars, ≥3 of 4 character classes, not containing the email local part,
+  not a single repeated character). The same policy applies to `/setup`, `POST /users` and `PATCH /users/{id}`.
+- After a change the response returns a fresh session; all other sessions/tokens are revoked (`token_version`). Failed-login
+  lockout for the account is cleared.
+- Web UI: forced-change dialog has new + confirm fields, strength meter, rule text, show/hide; reloads after success so the
+  stale "must change password" errors disappear.
+- Tests: `tests/test_change_password.py` (API) and `tests/test_ui_change_password.py` (headless Chromium, runs in CI).
+
 ### Security — Coworker Host exec policy (BREAKING)
 - `COWORKER_EXEC_MODE` (`safe` default / `trusted` / `off`). In `safe`, Co-work can no longer run
   `python3`, `pytest`, `npm`, `make`, `go`, `cargo`... Set `COWORKER_EXEC_MODE=trusted` on the host to opt in

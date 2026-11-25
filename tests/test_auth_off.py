@@ -111,5 +111,5 @@ def test_cors_middleware_only_when_configured():
 
 
 def test_setup_blocked_when_auth_off(off):
-    r = off.post("/api/auth/setup", json={"email": "a@b.com", "name": "A", "password": "longpass123"}, headers=LOCAL)
+    r = off.post("/api/auth/setup", json={"email": "a@b.com", "name": "A", "password": "Longpass-123"}, headers=LOCAL)
     assert r.status_code == 403 and r.json()["code"] == "auth_required"
