@@ -14,6 +14,8 @@ Phân quyền (enforce ở middleware, theo prefix):
 """
 import hashlib
 import hmac
+import logging
+import os
 import re
 import secrets
 import threading
@@ -109,6 +111,8 @@ class SetupIn(BaseModel):
     email: str
     name: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=10, max_length=200)
+    # L-2: chỉ /setup dùng (UserCreate kế thừa nhưng bỏ qua trường này)
+    setup_token: str = Field(default="", max_length=256)
 
     @field_validator("email")
     @classmethod
@@ -325,24 +329,86 @@ async def auth_middleware(request: Request, call_next):
 # ─────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────
+def _user_count(db: Session) -> int:
+    return db.query(User).count()
+
+
+def _storage_dir() -> str:
+    return settings.storage_dir
+
+
+_SETUP_LOCK = threading.Lock()
+_setup_hint_logged = False
+
+
+def _setup_token(user_count: int) -> Optional[str]:
+    """L-2: token thiết lập lần đầu. Env VULNGUARD_SETUP_TOKEN ưu tiên; nếu không, khi chưa có user
+    thì đọc/tạo <storage>/setup_token (0600). Đã có user → None."""
+    global _setup_hint_logged
+    env = (settings.vulnguard_setup_token or "").strip()
+    if env:
+        return env
+    if user_count > 0:
+        return None
+    path = os.path.join(_storage_dir(), "setup_token")
+    with _SETUP_LOCK:
+        try:
+            with open(path, encoding="utf-8") as f:
+                tok = f.read().strip()
+            if tok:
+                return tok
+        except OSError:
+            pass
+        tok = secrets.token_urlsafe(24)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(tok + "\n")
+        os.chmod(path, 0o600)
+        if not _setup_hint_logged:
+            _setup_hint_logged = True
+            logging.getLogger("vulnguard.auth").warning(
+                "Thiết lập lần đầu: lấy setup token tại %s (docker exec vulnguard-api cat /app/storage/setup_token)", path)
+        return tok
+
+
+def _clear_setup_token():
+    try:
+        os.remove(os.path.join(_storage_dir(), "setup_token"))
+    except OSError:
+        pass
+
+
 @router.get("/status")
 def auth_status(db: Session = Depends(get_db)):
+    required = settings.auth_enabled and _user_count(db) == 0
     return {
         "auth_enabled": settings.auth_enabled,
-        "setup_required": settings.auth_enabled and db.query(User).count() == 0,
+        "setup_required": required,
+        "setup_token_required": required,
     }
 
 
 @router.post("/setup")
-def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depends(get_db)):
-    if db.query(User).count() > 0:
+def setup_first_admin(payload: SetupIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    count = _user_count(db)
+    if count > 0:
         raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+    ip = request.client.host if request.client else "?"
+    key = f"setup|{ip}"
+    _reserve_attempt(key)       # chống dò token: dùng chung cơ chế khoá của login
+    expected = _setup_token(count)
+    if not expected or not hmac.compare_digest(payload.setup_token.encode(), expected.encode()):
+        raise HTTPException(status_code=403, detail="Setup token không đúng")
     user = User(email=payload.email, name=payload.name.strip(),
                 password_hash=hash_password(payload.password), role=UserRole.ADMIN,
                 last_login_at=datetime.utcnow())
     db.add(user)
     db.commit()
     db.refresh(user)
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(key, None)
+    _clear_setup_token()
     token = _set_session(response, user)
     return {"user": UserOut.model_validate(user), "token": token}
 

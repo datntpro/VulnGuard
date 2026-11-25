@@ -49,7 +49,7 @@ case "$HOST" in
     echo "  ⚠️  Đang mở ra mạng ($HOST): đặt ALLOWED_HOSTS=<ip/hostname LAN>, tạo ADMIN/setup token trước, bật firewall;"
     echo "      khuyến nghị TLS (Caddy/nginx) + COOKIE_SECURE=true." ;;
 esac
-echo "  Lần đầu: tạo tài khoản ADMIN ngay trên trang đăng nhập."
+echo "  Lần đầu: tạo ADMIN trên trang đăng nhập — cần setup token (storage/setup_token hoặc VULNGUARD_SETUP_TOKEN)."
 echo "  (Ctrl+C để dừng)"
 echo "─────────────────────────────────────────────"
 # D-14: trạng thái nằm trong bộ nhớ tiến trình (khoá scan, lockout, nonce, proxy, scheduler) → chỉ hỗ trợ 1 worker.
