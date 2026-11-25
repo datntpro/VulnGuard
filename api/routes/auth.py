@@ -14,11 +14,12 @@ Phân quyền (enforce ở middleware, theo prefix):
 """
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 import time as _time
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -272,79 +273,119 @@ def _login_key(request, email: str) -> str:
     return f"{ip}|{(email or '').lower()}"
 
 
-def _device_sig(email: str, nonce: str) -> str:
-    return hmac.new(get_secret_key(), f"device|{email}|{nonce}".encode(), hashlib.sha256).hexdigest()[:32]
+_NONCE_RE = re.compile(r"[A-Za-z0-9_-]{22}")
+_DUMMY_HASH = hash_password("x" * 12)   # tính 1 lần: user không tồn tại tốn cùng thời gian với user tồn tại
 
 
-def _device_nonce(request: Request, email: str) -> Optional[str]:
+def _device_sig(user_id: str, nonce: str) -> str:
+    # Subkey riêng + mã hoá có độ dài → không mơ hồ; ràng buộc theo user id (không phải email).
+    key = hashlib.sha256(b"vg-device-cookie\x00" + get_secret_key()).digest()
+    msg = b"device\x00" + str(len(user_id)).encode() + b":" + user_id.encode() + b"\x00" + nonce.encode()
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _device_nonce(request: Request, user_id: Optional[str]) -> Optional[str]:
+    if not user_id:
+        return None
     raw = request.cookies.get(DEVICE_COOKIE) or ""
     nonce, _, sig = raw.partition(".")
-    if not nonce or not sig:
+    if not _NONCE_RE.fullmatch(nonce) or not sig:
         return None
-    if hmac.compare_digest(sig, _device_sig((email or "").lower(), nonce)):
+    if hmac.compare_digest(sig, _device_sig(user_id, nonce)):
         return nonce
     return None
 
 
-def _set_device_cookie(response: Response, email: str, nonce: Optional[str] = None):
+def _set_device_cookie(response: Response, user_id: str, nonce: Optional[str] = None):
     nonce = nonce or secrets.token_urlsafe(16)
-    response.set_cookie(DEVICE_COOKIE, f"{nonce}.{_device_sig(email.lower(), nonce)}",
+    response.set_cookie(DEVICE_COOKIE, f"{nonce}.{_device_sig(user_id, nonce)}",
                         max_age=180 * 86400, httponly=True, samesite="strict",
                         secure=settings.cookie_secure, path="/api/auth")
 
 
+def _locked_retry(key: str, now: float) -> Optional[int]:
+    """Giây còn lại nếu key đang bị khoá, ngược lại None (xoá bản ghi hết hạn). Gọi khi đang giữ _LOGIN_LOCK."""
+    rec = _LOGIN_FAILS.get(key)
+    if not rec:
+        return None
+    count, first = rec
+    if now - first > _LOCK_WINDOW:
+        _LOGIN_FAILS.pop(key, None)
+        return None
+    if count >= _MAX_FAILS:
+        return max(1, int(_LOCK_WINDOW - (now - first)))
+    return None
+
+
+def _raise_locked(retry: int):
+    raise HTTPException(status_code=429,
+                        detail=f"Quá nhiều lần đăng nhập sai. Thử lại sau {retry // 60 + 1} phút.",
+                        headers={"Retry-After": str(retry)})
+
+
 def _check_lockout(key: str):
     with _LOGIN_LOCK:
-        rec = _LOGIN_FAILS.get(key)
-        if not rec:
-            return
-        count, first = rec
-        if _time.time() - first > _LOCK_WINDOW:
-            _LOGIN_FAILS.pop(key, None)
-            return
-        if count >= _MAX_FAILS:
-            retry = max(1, int(_LOCK_WINDOW - (_time.time() - first)))
-            raise HTTPException(status_code=429,
-                                detail=f"Quá nhiều lần đăng nhập sai. Thử lại sau {retry // 60 + 1} phút.",
-                                headers={"Retry-After": str(retry)})
+        retry = _locked_retry(key, _time.time())
+    if retry:
+        _raise_locked(retry)
+
+
+def _record_fail_locked(key: str, now: float):
+    count, first = _LOGIN_FAILS.get(key, [0, now])
+    if now - first > _LOCK_WINDOW:
+        count, first = 0, now
+    _LOGIN_FAILS[key] = [count + 1, first]
+    _LOGIN_FAILS.move_to_end(key)
+    # dọn bản ghi hết hạn ở đầu hàng đợi
+    while _LOGIN_FAILS:
+        _, (_, f0) = next(iter(_LOGIN_FAILS.items()))
+        if now - f0 > _LOCK_WINDOW:
+            _LOGIN_FAILS.popitem(last=False)
+        else:
+            break
+    # cắt cho đủ giới hạn, ưu tiên bỏ key CHƯA bị khoá (không dùng spray để mở khoá bucket)
+    while len(_LOGIN_FAILS) > _MAX_KEYS:
+        victim = next((k for k, (c, _) in _LOGIN_FAILS.items() if c < _MAX_FAILS), None)
+        if victim is None:
+            victim = next(iter(_LOGIN_FAILS))
+        _LOGIN_FAILS.pop(victim)
 
 
 def _record_fail(key: str):
     with _LOGIN_LOCK:
+        _record_fail_locked(key, _time.time())
+
+
+def _reserve_attempt(key: str):
+    """Kiểm tra khoá VÀ tính 1 lần thử trong cùng một critical section (trước scrypt),
+    nên N request đồng thời không thể vượt _MAX_FAILS lần thử."""
+    with _LOGIN_LOCK:
         now = _time.time()
-        count, first = _LOGIN_FAILS.get(key, [0, now])
-        if now - first > _LOCK_WINDOW:
-            count, first = 0, now
-        _LOGIN_FAILS[key] = [count + 1, first]
-        _LOGIN_FAILS.move_to_end(key)
-        # dọn bản ghi hết hạn ở đầu hàng đợi, rồi cắt cho đủ giới hạn
-        while _LOGIN_FAILS:
-            k0, (_, f0) = next(iter(_LOGIN_FAILS.items()))
-            if now - f0 > _LOCK_WINDOW:
-                _LOGIN_FAILS.popitem(last=False)
-            else:
-                break
-        while len(_LOGIN_FAILS) > _MAX_KEYS:
-            _LOGIN_FAILS.popitem(last=False)
+        retry = _locked_retry(key, now)
+        if not retry:
+            _record_fail_locked(key, now)
+    if retry:
+        _raise_locked(retry)
 
 
 @router.post("/login")
 def login(payload: LoginIn, response: Response, request: Request, db: Session = Depends(get_db)):
-    nonce = _device_nonce(request, payload.email)
-    key = f"dev|{nonce}" if nonce else f"ip|{_login_key(request, payload.email)}"
-    _check_lockout(key)
     user = db.query(User).filter(User.email == payload.email).first()
+    nonce = _device_nonce(request, user.id if user else None)
+    # Bucket "thiết bị" nếu có cookie hợp lệ của CHÍNH user này; ngược lại một bucket chung cho mọi
+    # client chưa biết của email đó (không theo IP: IP có thể bị giả qua X-Forwarded-For / xoay vòng).
+    key = f"dev|{nonce}" if nonce else f"untrusted|{payload.email}"
+    _reserve_attempt(key)
     # verify_password chạy cả khi user không tồn tại → không lộ timing "email có tồn tại"
-    ok = verify_password(payload.password, user.password_hash if user else hash_password("x" * 12))
+    ok = verify_password(payload.password, user.password_hash if user else _DUMMY_HASH)
     if not user or not ok or not user.is_active:
-        _record_fail(key)
         raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không đúng")
     with _LOGIN_LOCK:
         _LOGIN_FAILS.pop(key, None)        # reset khi đăng nhập thành công
     user.last_login_at = datetime.utcnow()
     db.commit()
     token = _set_session(response, user)
-    _set_device_cookie(response, payload.email, nonce)
+    _set_device_cookie(response, user.id, nonce)
     return {"user": UserOut.model_validate(user), "token": token}
 
 
@@ -353,12 +394,14 @@ def logout(response: Response, request: Request, db: Session = Depends(get_db)):
     """N-1: thu hồi đúng token đang dùng (jti denylist). Endpoint public để xoá được cả cookie hỏng/hết hạn,
     nên tự giải mã token ở đây (middleware không gắn request.state.user cho path public)."""
     user, payload = _resolve(_token_from_request(request))
+    if user is None:     # header Authorization hỏng nhưng cookie hợp lệ → vẫn thu hồi cookie
+        user, payload = _resolve(request.cookies.get(COOKIE_NAME))
     if user is not None and payload is not None:
         jti = payload.get("jti")
         if jti:
             try:
                 db.add(RevokedToken(jti=jti, user_id=user.id,
-                                    expires_at=datetime.utcfromtimestamp(payload["exp"])))
+                                    expires_at=datetime.fromtimestamp(payload["exp"], timezone.utc).replace(tzinfo=None)))
                 db.commit()
             except IntegrityError:        # logout lặp lại
                 db.rollback()
