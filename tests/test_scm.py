@@ -83,3 +83,40 @@ def test_connection_and_repo_crud(client):
     # cleanup: xoá connection → cascade repo + schedule
     assert client.delete(f"/api/scm/connections/{conn['id']}").status_code == 204
     assert all(x["connection_id"] != conn["id"] for x in client.get("/api/scm/repos").json())
+
+
+# ── L-1: SSRF qua base_url ──
+def _fake_dns(monkeypatch, ip):
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))])
+
+
+@pytest.mark.parametrize("url,ip", [
+    ("http://127.0.0.1", "127.0.0.1"),
+    ("https://169.254.169.254", "169.254.169.254"),
+    ("https://localhost", "127.0.0.1"),
+    ("ftp://x", "1.2.3.4"),
+    ("http://gitlab.corp", "1.2.3.4"),
+    ("https://rebind.example", "169.254.169.254"),
+])
+def test_check_base_url_rejects(monkeypatch, url, ip):
+    _fake_dns(monkeypatch, ip)
+    with pytest.raises(ValueError):
+        P.check_base_url(url)
+
+
+def test_check_base_url_private_policy(monkeypatch):
+    from api.config import settings
+    _fake_dns(monkeypatch, "10.0.0.5")
+    P.check_base_url("https://10.0.0.5")       # mặc định cho phép on-prem
+    monkeypatch.setattr(settings, "scm_allow_private_hosts", False)
+    with pytest.raises(ValueError):
+        P.check_base_url("https://10.0.0.5")
+    P.check_base_url("")                        # cloud mặc định
+
+
+def test_create_connection_rejects_ssrf(client, monkeypatch):
+    _fake_dns(monkeypatch, "169.254.169.254")
+    r = client.post("/api/scm/connections", json={"name": "x", "provider": "GITLAB",
+                                                  "base_url": "https://metadata.example", "token": "t"})
+    assert r.status_code == 400

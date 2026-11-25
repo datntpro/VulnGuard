@@ -39,6 +39,10 @@ def list_connections(db: Session = Depends(get_db)):
 
 @router.post("/connections", status_code=201)
 def create_connection(body: ConnCreate, db: Session = Depends(get_db)):
+    try:
+        providers.check_base_url(body.base_url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     c = ScmConnection(name=body.name.strip(), provider=body.provider,
                       base_url=(body.base_url or "").strip().rstrip("/") or None,
                       token_enc=encrypt_secret(body.token.strip()) if body.token else None)

@@ -120,4 +120,5 @@ def decrypt_secret(token: Optional[str]) -> Optional[str]:
 def mask_secret(plain: Optional[str]) -> str:
     if not plain:
         return ""
-    return plain[:7] + "…" + plain[-4:] if len(plain) > 12 else "…" + plain[-2:]
+    # Chỉ lộ 4 ký tự cuối (không lộ tiền tố/định dạng key)
+    return "…" + plain[-4:] if len(plain) > 8 else "…"

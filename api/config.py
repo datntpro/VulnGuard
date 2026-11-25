@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 12
     # Cookie Secure flag — bật khi chạy sau HTTPS reverse proxy
     cookie_secure: bool = False
+    # Host header được chấp nhận (csv, vd "vulnguard.corp.vn"). Auth TẮT → luôn giới hạn loopback + danh sách này
+    # (chặn DNS rebinding). Auth BẬT → chỉ kiểm tra khi danh sách không rỗng.
+    allowed_hosts: str = ""
+    # CORS: mặc định same-origin (không bật CORS). Liệt kê origin được phép (csv) nếu có client trình duyệt bên thứ ba.
+    cors_allow_origins: str = ""
+    # Swagger /docs, /redoc, /openapi.json (luôn yêu cầu đăng nhập khi auth bật). False → tắt hẳn.
+    expose_api_docs: bool = True
+    # SCM: chống SSRF qua base_url. http chỉ khi bật; dải private (RFC1918/ULA) cho GitLab on-prem mặc định cho phép.
+    scm_allow_http: bool = False
+    scm_allow_private_hosts: bool = True
 
     # ── Web scan (Nuclei) ──
     max_webscans_per_domain: int = 5

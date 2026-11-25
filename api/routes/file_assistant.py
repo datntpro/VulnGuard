@@ -393,9 +393,9 @@ async def get_file_chunk(
 
 def _ws_user_is_admin(websocket: WebSocket) -> bool:
     """Kiểm tra phiên thật (chữ ký, token_version, is_active, role hiện tại, jti chưa thu hồi).
-    Auth tắt → True (nhánh này được siết ở PR-E)."""
+    Auth tắt → False (M-2: File Assistant đọc file trên host, không được mở khi không có auth)."""
     if not settings.auth_enabled:
-        return True
+        return False
     from api.routes.auth import resolve_user
     from api.auth_models import UserRole
     user = resolve_user(websocket)

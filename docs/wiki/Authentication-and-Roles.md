@@ -60,10 +60,20 @@ Quản lý user (`/api/auth/users`): luôn phải còn ít nhất 1 ADMIN đang 
 
 ## Khi `AUTH_ENABLED=false`
 
-- Mọi request được coi như ADMIN `dev@local`.
+- Mọi request được coi như user giả `dev@local` với quyền **ANALYST** (không còn là ADMIN).
+- Mọi route chỉ-ADMIN (`ADMIN_ONLY`), toàn bộ `/api/coworker` và `/api/file-assistant` bị chặn (403, `code: auth_required`). Co-work và File Assistant yêu cầu bật auth.
 - Các method khác `GET`/`HEAD`/`OPTIONS` trên `/api/pentest`, `/api/webscans`, `/api/domains` bị chặn (403). Nghĩa là không tạo domain, crawl, web scan hay pentest được.
+- Header `Host` chỉ được là `localhost`, `127.0.0.1`, `[::1]` hoặc giá trị trong `ALLOWED_HOSTS` (còn lại: 421) để chống DNS rebinding.
 - Chỉ dùng cho dev 1 người trên localhost.
+
+## CORS, CSRF và tiêu đề bảo mật
+
+- Mặc định **same-origin**: không bật CORS. Muốn cho client trình duyệt bên thứ ba, đặt `CORS_ALLOW_ORIGINS=https://a.example,https://b.example`.
+- Request ghi (`POST/PUT/PATCH/DELETE`) tới `/api/*` có `Origin` khác `Host` (và không nằm trong `CORS_ALLOW_ORIGINS`), hoặc `Sec-Fetch-Site: cross-site`, bị từ chối 403 (`bad_origin`). Request không có `Origin` (CLI/CI) vẫn được chấp nhận.
+- Mọi response có `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`; trang HTML có CSP nền (`default-src 'self'`, `frame-ancestors 'none'`, `connect-src 'self'`). CSP nghiêm ngặt không cho inline script được hoãn lại (cần refactor các `onclick` inline).
+- `/docs`, `/redoc`, `/openapi.json` yêu cầu đăng nhập (mọi role). `EXPOSE_API_DOCS=false` tắt hẳn.
+- `ALLOWED_HOSTS` (csv): khi auth bật và biến này khác rỗng, chỉ chấp nhận các Host đó (cộng loopback).
 
 ## Bắt đổi mật khẩu lần đầu
 
-Tài khoản do `scripts/bootstrap_admin.py` tạo có `must_change_password=True`. Giao diện web hiện hộp đổi mật khẩu bắt buộc. Lưu ý: cờ này chỉ được kiểm tra ở giao diện, API không chặn token của user chưa đổi mật khẩu (xem [[Security and Known Limitations|Security-and-Known-Limitations]]).
+Tài khoản do `scripts/bootstrap_admin.py` tạo, user do ADMIN tạo mới và user bị ADMIN đặt lại mật khẩu đều có `must_change_password=True`. API **chặn** mọi path (trừ `/api/auth/me`, `change-password`, `logout`, `logout-all`, `status`, `/api/features`, `/api/health`) bằng 403 `code: must_change_password` cho tới khi người dùng đổi mật khẩu; giao diện web hiện hộp đổi mật khẩu bắt buộc.

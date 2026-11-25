@@ -21,6 +21,7 @@ import time as _time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -51,6 +52,13 @@ ADMIN_ONLY = [
     ("*", "/api/auth/users"),
     ("PUT", "/api/ai/config"),
     ("PUT", "/api/settings"),
+    # L-1: các endpoint con của settings (logo, sonarqube/smtp test) + SCM (SSRF/dùng token đã lưu) + AI test
+    ("POST", "/api/settings"),
+    ("DELETE", "/api/settings"),
+    ("POST", "/api/scm/connections"),
+    ("DELETE", "/api/scm/connections"),
+    ("GET", "/api/scm/connections/"),   # /{id}/remote-repos dùng token đã lưu; danh sách (không "/") vẫn đọc được
+    ("POST", "/api/ai/test"),
     ("POST", "/api/ollama"),
     ("PUT", "/api/ollama"),
     ("DELETE", "/api/ollama"),
@@ -168,8 +176,8 @@ def current_user(request: Request) -> User:
     user = getattr(request.state, "user", None)
     if user is None:
         if not settings.auth_enabled:
-            # Chế độ dev (auth tắt) — coi như ADMIN để không chặn các route admin.
-            u = User(email="dev@local", name="Dev (auth disabled)", role=UserRole.ADMIN, is_active=True)
+            # Chế độ dev (auth tắt) — quyền ANALYST (D-6): không còn là ADMIN giả.
+            u = User(email="dev@local", name="Dev (auth disabled)", role=UserRole.ANALYST, is_active=True)
             u.id = "dev-local"
             return u
         raise HTTPException(status_code=401, detail="Chưa đăng nhập")
@@ -186,6 +194,50 @@ def _is_admin_only(method: str, path: str) -> bool:
     return any((m == "*" or m == method) and path.startswith(p) for m, p in ADMIN_ONLY)
 
 
+# I-1: tài liệu API chỉ cho người đã đăng nhập (mọi role)
+DOCS_PATHS = {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+# L-3: user bị ép đổi mật khẩu chỉ được gọi các path này
+MUST_CHANGE_ALLOWED = {
+    "/api/auth/me", "/api/auth/change-password", "/api/auth/logout", "/api/auth/logout-all",
+    "/api/auth/status", "/api/features", "/api/health",
+}
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+def _host_only(h: str) -> str:
+    """Bỏ port, giữ nguyên IPv6 dạng [::1]."""
+    h = (h or "").strip().lower()
+    if h.startswith("["):
+        return h[: h.find("]") + 1] if "]" in h else h
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def _csv(v: str) -> set:
+    return {x.strip().lower() for x in (v or "").split(",") if x.strip()}
+
+
+def _host_ok(request: Request) -> bool:
+    extra = {_host_only(h) for h in _csv(settings.allowed_hosts)}
+    if settings.auth_enabled and not extra:
+        return True
+    return _host_only(request.headers.get("host", "")) in (_LOCAL_HOSTS | extra)
+
+
+def _origin_ok(request: Request) -> bool:
+    """M-2: chặn CSRF xuyên site cho request ghi (kể cả multipart không cần preflight).
+    Không có Origin (CLI/CI) → cho qua."""
+    origin = request.headers.get("origin")
+    allowed = _csv(settings.cors_allow_origins)
+    if origin is not None:
+        o = origin.strip().lower().rstrip("/")
+        if o in allowed:
+            return True
+        if o == "null" or urlparse(o).netloc != (request.headers.get("host") or "").strip().lower():
+            return False
+    return request.headers.get("sec-fetch-site", "").lower() != "cross-site"
+
+
 async def auth_middleware(request: Request, call_next):
     """Gắn request.state.user và chặn request chưa đăng nhập / thiếu quyền."""
     path = request.url.path
@@ -199,6 +251,12 @@ async def auth_middleware(request: Request, call_next):
         if not on and path.startswith(prefix):
             return JSONResponse({"detail": "Module đã tắt trên bản triển khai này."}, status_code=404)
 
+    # M-2: Host allow-list (DNS rebinding) + CSRF/Origin guard — luôn bật, kể cả khi auth tắt
+    if not _host_ok(request):
+        return JSONResponse({"detail": "Host không được phép", "code": "bad_host"}, status_code=421)
+    if path.startswith("/api/") and request.method not in _SAFE_METHODS and not _origin_ok(request):
+        return JSONResponse({"detail": "Origin không hợp lệ", "code": "bad_origin"}, status_code=403)
+
     if not settings.auth_enabled:
         # P0.2: auth TẮT → chặn các tính năng quét CHỦ ĐỘNG (có thể tấn công mục tiêu
         # ngoài). Instance mở không auth không được phép bắn web scan/crawl/pentest.
@@ -208,11 +266,19 @@ async def auth_middleware(request: Request, call_next):
                 {"detail": "Tính năng quét chủ động (web scan/crawl/pentest) bị khoá khi "
                            "AUTH_ENABLED=false. Hãy bật auth và đăng nhập để dùng."},
                 status_code=403)
+        # M-2/D-6: auth tắt → user giả KHÔNG còn là ADMIN thật: khoá mọi tính năng quản trị,
+        # Co-work (chạy lệnh trên host) và File Assistant.
+        if _is_admin_only(request.method, path) or path.startswith(("/api/coworker", "/api/file-assistant")):
+            return JSONResponse(
+                {"detail": "Tính năng quản trị / Co-work / File Assistant bị khoá khi AUTH_ENABLED=false. "
+                           "Hãy bật auth và đăng nhập để dùng.", "code": "auth_required"},
+                status_code=403)
         return await call_next(request)
 
     is_api = path.startswith("/api/")
-    is_app_shell = path in ("/", "/index.html", "/static/index.html", "/static/agent.html")
-    if not (is_api or is_app_shell) or path in PUBLIC_API_PATHS or request.method == "OPTIONS":
+    is_docs = path in DOCS_PATHS
+    is_app_shell = path in ("/", "/index.html", "/static/index.html", "/static/agent.html") or path in ("/docs", "/redoc")
+    if not (is_api or is_app_shell or is_docs) or path in PUBLIC_API_PATHS or request.method == "OPTIONS":
         return await call_next(request)
 
     user = resolve_user(request)
@@ -221,10 +287,17 @@ async def auth_middleware(request: Request, call_next):
             return RedirectResponse("/login", status_code=303)
         return JSONResponse({"detail": "Chưa đăng nhập hoặc phiên đã hết hạn"}, status_code=401)
 
+    if is_docs:     # I-1: mọi role đã đăng nhập đều xem được
+        return await call_next(request)
+
     if request.method not in ("GET", "HEAD") and user.role == UserRole.VIEWER:
         return JSONResponse({"detail": "Tài khoản VIEWER chỉ có quyền xem"}, status_code=403)
     if _is_admin_only(request.method, path) and user.role != UserRole.ADMIN:
         return JSONResponse({"detail": "Chỉ ADMIN được thực hiện thao tác này"}, status_code=403)
+    # L-3: phải đổi mật khẩu trước khi dùng API (không chỉ ở UI)
+    if user.must_change_password and is_api and path not in MUST_CHANGE_ALLOWED:
+        return JSONResponse({"detail": "Bạn phải đổi mật khẩu trước khi tiếp tục",
+                             "code": "must_change_password"}, status_code=403)
 
     request.state.user = user
     return await call_next(request)
@@ -443,6 +516,11 @@ class ChangePasswordIn(BaseModel):
 def change_password(payload: ChangePasswordIn, response: Response,
                     user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Người dùng tự đổi mật khẩu — xoá cờ must_change_password (P0.3)."""
+    # `user` của middleware đã bị expunge khỏi session → phải nạp lại hàng DB, nếu không commit không lưu gì
+    # (bug cũ: đổi mật khẩu không có hiệu lực, token cấp lại mang tv sai → 401; lộ ra khi API ép must_change_password).
+    user = db.query(User).filter(User.id == user.id).first()
+    if user is None:
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập")
     if not verify_password(payload.current_password, user.password_hash or ""):
         raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng")
     if payload.new_password == payload.current_password:
@@ -466,7 +544,8 @@ def create_user(payload: UserCreate, _: User = Depends(require_admin), db: Sessi
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=400, detail="Email đã tồn tại")
     user = User(email=payload.email, name=payload.name.strip(),
-                password_hash=hash_password(payload.password), role=payload.role)
+                password_hash=hash_password(payload.password), role=payload.role,
+                must_change_password=True)   # D-11: user do admin tạo phải đổi mật khẩu lần đầu
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -496,6 +575,7 @@ def update_user(user_id: str, payload: UserUpdate, admin: User = Depends(require
         user.token_version += 1
     if payload.password:
         user.password_hash = hash_password(payload.password)
+        user.must_change_password = True    # D-11: admin đặt lại mật khẩu → người dùng phải đổi
         user.token_version += 1
     db.commit()
     db.refresh(user)

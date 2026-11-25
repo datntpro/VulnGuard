@@ -27,6 +27,7 @@ DEFAULT_SCAN_TYPES = ["SAST", "SCA", "SECRETS", "IAC"]
 
 def _clone(conn: ScmConnection, repo: ScmRepo, dest: str) -> None:
     """git clone shallow nhánh mặc định. Token được redact trong mọi log/lỗi."""
+    providers.check_base_url(conn.base_url)   # L-1: kiểm tra lại lúc dùng (thu hẹp DNS rebinding)
     token = decrypt_secret(conn.token_enc) or ""
     url = providers.clone_url(conn.provider.value, conn.base_url, token, repo.repo_full_name)
     branch = (repo.default_branch or "main").strip()
