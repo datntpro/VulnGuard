@@ -165,8 +165,8 @@ def test_b2_in_scope_redirect_followed():
 
 
 def test_b2_port_pinned_in_url_rule():
-    rules = [{"type": "url", "value": "http://10.1.0.5:8080", "mode": "allow"}]
-    out, sent = _probe("http://10.1.0.5:9999/x", rules=rules, url="http://10.1.0.5:8080/start")
+    rules = [{"type": "url", "value": "http://93.184.216.34:8080", "mode": "allow"}]
+    out, sent = _probe("http://93.184.216.34:9999/x", rules=rules, url="http://93.184.216.34:8080/start")
     assert len(sent) == 1 and "redirect_blocked" in out
 
 
@@ -224,8 +224,18 @@ def wl_env(tmp_path, monkeypatch):
     return tmp_path, allowed, seen
 
 
+# ctx cho runner subprocess (nuclei/ffuf/sqlmap): scope + resolver giả (runner fail closed nếu thiếu scope_rules)
+RUN_CTX_RULES = [{"type": "ip", "value": "10.1.0.5", "mode": "allow"},
+                 {"type": "domain", "value": "example.com", "include_subdomains": True, "mode": "allow"},
+                 {"type": "domain", "value": "inscope.lab", "include_subdomains": True, "mode": "allow"}]
+
+
+def _rctx(**kw):
+    return {"scope_rules": RUN_CTX_RULES, "_resolver": lambda h: ["93.184.216.34"], **kw}
+
+
 def _ffuf(wordlist):
-    return _run(toolbelt._content_discovery({"url": "http://10.1.0.5/", "wordlist": wordlist}))
+    return _run(toolbelt._content_discovery({"url": "http://10.1.0.5/", "wordlist": wordlist}, _rctx()))
 
 
 def test_b3_etc_passwd_rejected(wl_env):
@@ -311,14 +321,14 @@ def test_b4_runner_refuses_dangerous_tags_without_approval(nuclei_calls):
 
 
 def test_b4_runner_always_excludes_dangerous_tags_by_default(nuclei_calls):
-    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["cve"]}, {"run_id": None}))
+    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["cve"]}, _rctx(run_id=None)))
     kw = nuclei_calls[-1]
     assert {"dos", "intrusive", "fuzz", "bruteforce"} <= set(kw["exclude_tags"])
     assert kw["tags"] == ["cve"] and kw["fuzz"] is False
 
 
 def test_b4_approved_run_only_unblocks_requested_tags(nuclei_calls):
-    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["dos"]}, {"approved": True}))
+    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"], "tags": ["dos"]}, _rctx(approved=True)))
     kw = nuclei_calls[-1]
     assert "dos" not in kw["exclude_tags"] and "intrusive" in kw["exclude_tags"]
 
@@ -347,9 +357,9 @@ def test_v1_ffuf_fuzz_in_authority_rejected(wl_env, url):
 def test_v1_ffuf_fuzz_in_path_and_default_still_ok(wl_env, monkeypatch):
     _, allowed, seen = wl_env
     monkeypatch.setattr(toolbelt, "resolve_wordlist", lambda p: str(allowed / "ok.txt"))
-    _run(toolbelt._content_discovery({"url": "http://Inscope.LAB/api/FUZZ"}))
+    _run(toolbelt._content_discovery({"url": "http://Inscope.LAB/api/FUZZ"}, _rctx()))
     assert seen["argv"][seen["argv"].index("-u") + 1] == "http://inscope.lab/api/FUZZ"
-    _run(toolbelt._content_discovery({"url": "http://inscope.lab:8080/"}))
+    _run(toolbelt._content_discovery({"url": "http://inscope.lab:8080/"}, _rctx()))
     assert seen["argv"][seen["argv"].index("-u") + 1] == "http://inscope.lab:8080/FUZZ"
 
 
@@ -389,13 +399,13 @@ def test_v2_canonical_url_is_ascii_and_stable():
 
 
 def test_v2_tools_receive_canonical_targets(nuclei_calls):
-    _run(toolbelt._web_vuln_scan({"targets": ["HTTP://Example.COM./a"]}, {}))
+    _run(toolbelt._web_vuln_scan({"targets": ["HTTP://Example.COM./a"]}, _rctx()))
     assert nuclei_calls[-1]["targets"] == ["http://example.com/a"]
 
 
 def test_v3_nuclei_agent_runs_disable_redirects_and_interactsh(nuclei_calls):
     from scanner.crawler.nuclei_runner import build_command
-    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"]}, {}))
+    _run(toolbelt._web_vuln_scan({"targets": ["http://10.1.0.5/"]}, _rctx()))
     assert nuclei_calls[-1]["safe_net"] is True
     argv = build_command("t.txt", ["high"], [], False, 50, safe_net=True)
     assert "-dr" in argv and "-ni" in argv
