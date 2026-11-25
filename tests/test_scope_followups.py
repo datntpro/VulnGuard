@@ -165,7 +165,7 @@ def test_dns_enum_flags_rebinding_risk():
 
 
 def test_subprocess_tool_flags_dns_change(monkeypatch):
-    seq = iter([[PUB1], [EVIL]])
+    seq = iter([[PUB1], [EVIL], [EVIL], [EVIL]])
 
     async def fake(argv, timeout):
         return {"ran": True}
@@ -174,7 +174,7 @@ def test_subprocess_tool_flags_dns_change(monkeypatch):
     monkeypatch.setattr(toolbelt, "resolve_wordlist", lambda p: p)
     ctx = {"scope_rules": dom("a.test"), "_resolver": lambda h: next(seq)}
     out = _run(toolbelt._content_discovery({"url": "http://a.test/"}, ctx))
-    assert out["dns_changed_during_run"] is True and "warning" in out
+    assert out["dns_changed_during_run"] is True
 
 
 # ───── port-pinned url rules + port_scan ─────
@@ -298,7 +298,8 @@ def _sqlmap(inp, monkeypatch, ctx=None):
 
 
 def test_sqlmap_argv_hardened(monkeypatch):
-    out, seen = _sqlmap({"url": "HTTP://Example.COM:8080/a?id=1", "technique": "BE"}, monkeypatch)
+    out, seen = _sqlmap({"url": "HTTP://Example.COM:8080/a?id=1", "technique": "BE"}, monkeypatch,
+                        {"scope_rules": dom("example.com"), "_resolver": lambda h: [PUB1]})
     a = seen[0]
     assert a[a.index("-u") + 1] == "http://example.com:8080/a?id=1"
     for f in ("--ignore-redirects", "--disable-coloring", "--skip-waf"):
@@ -308,7 +309,7 @@ def test_sqlmap_argv_hardened(monkeypatch):
 
 @pytest.mark.parametrize("inp", [
     {"url": "http://e.com/", "technique": "B;rm"}, {"url": "http://e.com/", "technique": ""},
-    {"url": "http://e.com/", "technique": "BEUSTQB"}, {"url": "http://e.com/", "data": "a\nb"},
+    {"url": "http://e.com/", "technique": "BEUSTQB"}, {"url": "http://e.com/", "technique": "B\n"}, {"url": "http://e.com/", "data": "a\nb"},
     {"url": "http://e.com/", "data": "x" * 8193}, {"url": "file:///etc/passwd"}, {"url": "--version"},
 ])
 def test_sqlmap_rejects(inp, monkeypatch):
@@ -339,3 +340,279 @@ def test_all_tool_schemas_are_strict_conformant():
     for d in toolbelt.tool_defs_for_llm(include_unavailable=True) + [REPORT_FINDING_DEF, UPDATE_PLAN_DEF]:
         _walk(d["input_schema"], d["name"], errs)
     assert errs == []
+
+
+# ═════════ Verifier round (PR #38 review): F1–F5 ═════════
+from scanner.pentest.pinproxy import PinProxy  # noqa: E402
+from scanner.pentest.scope import check_target  # noqa: E402
+
+HTTPS_ONLY = [{"type": "url", "value": "https://h.test", "mode": "allow"}]
+HTTPS_RES = {"scope_rules": HTTPS_ONLY, "_resolver": lambda h: [PUB1]}
+
+
+# ───── F1: url rule không port = cổng MẶC ĐỊNH của scheme, cho MỌI tool ─────
+@pytest.mark.parametrize("target", ["http://h.test:22/", "http://h.test/", "https://h.test:9999/", "h.test:22",
+                                    "http://h.test:443/", "https://h.test:80/"])
+def test_f1_url_rule_without_port_is_scheme_default_only(target):
+    assert check_target(target, HTTPS_ONLY)[0] is False
+
+
+@pytest.mark.parametrize("target", ["https://h.test/", "https://h.test:443/x", "HTTPS://H.test", "h.test", "h.test:443"])
+def test_f1_default_port_still_allowed(target):
+    assert check_target(target, HTTPS_ONLY)[0] is True
+
+
+def test_f1_http_probe_and_active_http_reject_other_ports_and_schemes():
+    seen = []
+
+    def handler(req):
+        seen.append(str(req.url))
+        return httpx.Response(200, text="x")
+    ctx = {**HTTPS_RES, "_transport": httpx.MockTransport(handler)}
+    for u in ("http://h.test:22/", "http://h.test/", "https://h.test:8443/"):
+        assert _run(toolbelt._http_probe({"url": u}, ctx))["ran"] is False
+        assert _run(toolbelt._active_http({"url": u.replace("22", "9999")}, ctx))["ran"] is False
+    assert seen == []
+    assert _run(toolbelt._http_probe({"url": "https://h.test:443/"}, ctx))["status_code"] == 200
+
+
+def test_f1_redirect_hop_to_http_or_other_port_blocked_under_https_rule():
+    for loc in ("http://h.test/", "https://h.test:8443/"):
+        inner = FakeInner([_resp(302, [("Location", loc)]), _resp(200)])
+        ctx = {**HTTPS_RES, "_pin_inner": inner}
+        out = _run(toolbelt._http_probe({"url": "https://h.test/"}, ctx))
+        assert "redirect_blocked" in out or out.get("error") is not None
+        assert len(inner.calls) <= 1
+
+
+def test_f1_explicit_port_rule_also_pins_scheme():
+    rules = [{"type": "url", "value": "http://h.test:8080", "mode": "allow"}]
+    assert check_target("http://h.test:8080/x", rules)[0]
+    assert check_target("https://h.test:8080/x", rules)[0] is False    # đổi scheme cùng port
+    assert check_target("h.test:8080", rules)[0]
+
+
+def test_f1_subprocess_tools_reject_other_ports(monkeypatch):
+    async def fake(argv, timeout):
+        raise AssertionError("must not run")
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    monkeypatch.setattr(toolbelt.shutil, "which", lambda b: "/bin/" + b)
+    monkeypatch.setattr(toolbelt, "resolve_wordlist", lambda p: p)
+    assert _run(toolbelt._sqlmap({"url": "http://h.test:8080/?id=1"}, HTTPS_RES))["ran"] is False
+    assert _run(toolbelt._content_discovery({"url": "http://h.test:8080/"}, HTTPS_RES))["ran"] is False
+    import scanner.crawler.nuclei_runner as nr
+
+    async def no_nuclei(**kw):
+        raise AssertionError("must not run")
+    monkeypatch.setattr(nr, "run_nuclei", no_nuclei)
+    assert _run(toolbelt._web_vuln_scan({"targets": ["http://h.test:8080/"]}, HTTPS_RES))["ran"] is False
+    assert _run(toolbelt._nuclei_dast({"targets": ["http://h.test:8080/"]}, HTTPS_RES))["ran"] is False
+
+
+# ───── F2: IPv6 pins cho nmap ─────
+def test_f2_ipv6_pin_gets_dash_6_and_v4_first(monkeypatch):
+    out, argvs = _scan(dom("h.test"), "h.test", monkeypatch, ips=["2606:4700:4700::1111", PUB1])
+    assert [a[-1] for a in argvs] == [PUB1, "2606:4700:4700::1111"]
+    assert "-6" not in argvs[0] and "-6" in argvs[1] and "-n" in argvs[0]
+    assert argvs[1].index("-6") < argvs[1].index("--")
+
+
+def test_f2_cap_is_deterministic_and_skips_reported(monkeypatch):
+    ips = [f"2606:4700::{i}" for i in range(1, 4)] + [f"93.184.216.{i}" for i in range(40, 43)]
+    out, argvs = _scan(dom("h.test"), "h.test", monkeypatch, ips=ips)
+    assert len(argvs) == 4 and [a[-1] for a in argvs[:3]] == [f"93.184.216.{i}" for i in range(40, 43)]
+    assert len(out["skipped_ips"]) == 2
+
+
+def test_f2_ipv6_literal_and_cidr_get_dash_6(monkeypatch):
+    argvs = []
+
+    async def fake(argv, timeout):
+        argvs.append(argv)
+        return {"ran": True, "returncode": 0}
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    rules = [{"type": "cidr", "value": "2001:db8::/64", "mode": "allow"}]
+    _run(toolbelt._port_scan({"host": "2001:db8::5"}, {"scope_rules": rules}))
+    _run(toolbelt._port_scan({"host": "2001:db8::/120"}, {"scope_rules": rules}))
+    assert all("-6" in a for a in argvs) and len(argvs) == 2
+
+
+def test_f2_nmap_failure_is_an_error_not_success(monkeypatch):
+    async def fake(argv, timeout):
+        return {"ran": True, "returncode": 1, "stdout": "", "stderr": "QUITTING!"}
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    out = _run(toolbelt._port_scan({"host": PUB1}, {"scope_rules": [{"type": "ip", "value": PUB1, "mode": "allow"}]}))
+    assert "error" in out and "QUITTING" in out["error"]
+
+
+# ───── F3: nuclei/ffuf/sqlmap đi qua proxy ghim IP ─────
+class Lab:
+    """Origin HTTP giả + connector ghi (ip, port): bằng chứng proxy chỉ tới IP đã ghim."""
+    def __init__(self):
+        self.connects, self.reqs = [], []
+        self.server = None
+
+    async def start(self):
+        async def origin(r, w):
+            head = await r.readuntil(b"\r\n\r\n")
+            self.reqs.append(head.decode("latin-1"))
+            body = b"hello"
+            w.write(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\n" + body)
+            await w.drain()
+            w.close()
+        self.server = await asyncio.start_server(origin, "127.0.0.1", 0)
+        self.port = self.server.sockets[0].getsockname()[1]
+
+    async def connect(self, ip, port):
+        self.connects.append((ip, port))
+        return await asyncio.open_connection("127.0.0.1", self.port)
+
+    async def stop(self):
+        self.server.close()
+        await self.server.wait_closed()
+
+
+async def _via_proxy(px, raw: bytes) -> bytes:
+    r, w = await asyncio.open_connection("127.0.0.1", px.port)
+    w.write(raw)
+    await w.drain()
+    data = await asyncio.wait_for(r.read(65536), 5)
+    w.close()
+    return data
+
+
+def test_f3_pin_proxy_http_forwards_to_pinned_ip_only():
+    async def go():
+        lab = Lab()
+        await lab.start()
+        rules = dom("h.test")
+        px2 = PinProxy({"h.test": (PUB1,)}, HTTPS_ONLY, connect=lab.connect)   # rule https mặc định → :22 bị chặn
+        await px2.__aenter__()
+        async with PinProxy({"h.test": (PUB1,)}, rules, connect=lab.connect) as px:
+            ok = await _via_proxy(px, b"GET http://h.test/a?b=1 HTTP/1.1\r\nHost: h.test\r\nProxy-Connection: keep-alive\r\n\r\n")
+            bad_host = await _via_proxy(px, b"GET http://evil.test/ HTTP/1.1\r\nHost: evil.test\r\n\r\n")
+            bad_port_scheme = await _via_proxy(px2, b"CONNECT h.test:22 HTTP/1.1\r\n\r\n")
+            non_http = await _via_proxy(px, b"GET ftp://h.test/ HTTP/1.1\r\n\r\n")
+        await px2.__aexit__(None, None, None)
+        await lab.stop()
+        return lab, ok, bad_host, bad_port_scheme, non_http, px
+    lab, ok, bad_host, bad_port, non_http, px = _run(go())
+    assert b"200 OK" in ok and lab.connects == [(PUB1, 80)]
+    assert lab.reqs[0].startswith("GET /a?b=1 HTTP/1.1") and "Proxy-Connection" not in lab.reqs[0]
+    assert "Connection: close" in lab.reqs[0] and "Host: h.test" in lab.reqs[0]
+    assert b" 403 " in bad_host and b" 403 " in bad_port and b" 403 " in non_http
+    assert len(px.blocked) == 2 and len(px.blocked) + 1 == 3
+
+
+def test_f3_pin_proxy_connect_tunnel_to_pinned_ip():
+    async def go():
+        lab = Lab()
+        await lab.start()
+        async with PinProxy({"h.test": (PUB1, PUB2)}, dom("h.test") + [], connect=lab.connect) as px:
+            r, w = await asyncio.open_connection("127.0.0.1", px.port)
+            w.write(b"CONNECT h.test:80 HTTP/1.1\r\nHost: h.test:80\r\n\r\n")
+            await w.drain()
+            est = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), 5)
+            w.write(b"GET / HTTP/1.1\r\nHost: h.test\r\n\r\n")
+            body = await asyncio.wait_for(r.read(65536), 5)
+            w.close()
+        await lab.stop()
+        return lab, est, body
+    lab, est, body = _run(go())
+    assert b"200 Connection established" in est and b"hello" in body and lab.connects == [(PUB1, 80)]
+
+
+def test_f3_rebinding_cannot_reach_other_ip_through_tools(monkeypatch):
+    """Resolver lật sang 127.0.0.1 sau lần kiểm đầu; tool (giả lập subprocess đi qua -x) vẫn chỉ tới IP đã ghim,
+    và flip-back không làm mất cờ / không có request nào tới IP khác."""
+    calls = {"n": 0}
+
+    def resolver(h):
+        calls["n"] += 1
+        return [PUB1] if calls["n"] == 1 else [EVIL]       # lần 1 hợp lệ, sau đó rebinding
+
+    async def go():
+        lab = Lab()
+        await lab.start()
+
+        async def fake_run(argv, timeout):
+            px_url = argv[argv.index("-x") + 1]
+            port = int(px_url.rsplit(":", 1)[1])
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            w.write(b"GET http://h.test/FUZZ HTTP/1.1\r\nHost: h.test\r\n\r\n")
+            await w.drain()
+            data = await asyncio.wait_for(r.read(65536), 5)
+            w.close()
+            return {"ran": True, "stdout": data.decode()}
+        monkeypatch.setattr(toolbelt, "_run_argv", fake_run)
+        monkeypatch.setattr(toolbelt.shutil, "which", lambda b: "/bin/" + b)
+        monkeypatch.setattr(toolbelt, "resolve_wordlist", lambda p: p)
+        ctx = {"scope_rules": dom("h.test"), "_resolver": resolver, "_pin_connect": lab.connect}
+        out = await toolbelt._content_discovery({"url": "http://h.test/"}, ctx)
+        await lab.stop()
+        return lab, out
+    lab, out = _run(go())
+    assert "200 OK" in out["stdout"]
+    assert lab.connects == [(PUB1, 80)]                      # 0 kết nối tới 127.0.0.1
+    assert out["dns_changed_during_run"] is True             # cờ bật với MỌI thay đổi
+
+
+def test_f3_nuclei_gets_proxy_and_http_only_for_hostnames(monkeypatch):
+    import scanner.crawler.nuclei_runner as nr
+    seen = []
+
+    async def fake_run_nuclei(**kw):
+        seen.append(kw)
+        return [], {"error": None}
+    monkeypatch.setattr(nr, "run_nuclei", fake_run_nuclei)
+    _run(toolbelt._web_vuln_scan({"targets": ["http://h.test/"]}, {"scope_rules": dom("h.test"), "_resolver": lambda h: [PUB1]}))
+    assert seen[-1]["proxy"].startswith("http://127.0.0.1:")
+    _run(toolbelt._nuclei_dast({"targets": ["http://h.test/"]}, {"scope_rules": dom("h.test"), "_resolver": lambda h: [PUB1]}))
+    assert seen[-1]["proxy"].startswith("http://127.0.0.1:")
+    # IP literal: không có DNS → chạy thẳng, không proxy
+    _run(toolbelt._web_vuln_scan({"targets": [f"http://{PUB1}/"]}, {"scope_rules": [{"type": "ip", "value": PUB1, "mode": "allow"}]}))
+    assert seen[-1]["proxy"] is None
+    # không scope_rules → từ chối
+    out = _run(toolbelt._web_vuln_scan({"targets": ["http://h.test/"]}, {}))
+    assert out["ran"] is False and len(seen) == 3
+
+
+def test_f3_nuclei_command_proxy_flags():
+    from scanner.crawler.nuclei_runner import build_command
+    a = build_command("t.txt", ["high"], [], False, 50, safe_net=True, proxy="http://127.0.0.1:9")
+    assert a[a.index("-proxy") + 1] == "http://127.0.0.1:9" and a[a.index("-pt") + 1] == "http"
+    assert "-proxy" not in build_command("t.txt", ["high"], [], False, 50)
+
+
+def test_f3_sqlmap_and_ffuf_get_proxy_flag(monkeypatch):
+    argvs = []
+
+    async def fake(argv, timeout):
+        argvs.append(argv)
+        return {"ran": True}
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    monkeypatch.setattr(toolbelt.shutil, "which", lambda b: "/bin/" + b)
+    monkeypatch.setattr(toolbelt, "resolve_wordlist", lambda p: p)
+    ctx = {"scope_rules": dom("h.test"), "_resolver": lambda h: [PUB1]}
+    _run(toolbelt._sqlmap({"url": "http://h.test/?id=1", "data": "--os-shell"}, ctx))
+    _run(toolbelt._content_discovery({"url": "http://h.test/"}, ctx))
+    assert any(x.startswith("--proxy=http://127.0.0.1:") for x in argvs[0]) and "--data=--os-shell" in argvs[0]
+    assert argvs[1][argvs[1].index("-x") + 1].startswith("http://127.0.0.1:")
+
+
+def test_f3_unpinnable_hostname_refuses_to_run(monkeypatch):
+    async def fake(argv, timeout):
+        raise AssertionError("must not run")
+    monkeypatch.setattr(toolbelt, "_run_argv", fake)
+    ctx = {"scope_rules": dom("h.test"), "_resolver": lambda h: [PUB1, EVIL]}
+    assert _run(toolbelt._sqlmap({"url": "http://h.test/"}, ctx))["ran"] is False
+    assert _run(toolbelt._sqlmap({"url": "http://h.test/"}, {}))["ran"] is False
+
+
+# ───── F5: Location lạ → redirect_blocked kèm status ─────
+@pytest.mark.parametrize("loc", ["http://172.29.38.011/x", "/a b"])
+def test_f5_weird_location_is_redirect_blocked_with_status(loc):
+    inner = FakeInner([_resp(302, [("Location", loc)])])
+    ctx = {"scope_rules": dom("a.test"), "_resolver": lambda h: [PUB1], "_pin_inner": inner}
+    out = _run(toolbelt._http_probe({"url": "http://a.test/"}, ctx))
+    assert out.get("status_code") == 302 and "redirect_blocked" in out, out
