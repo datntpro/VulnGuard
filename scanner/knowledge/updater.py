@@ -14,7 +14,18 @@ import json
 import os
 import shutil
 import tempfile
-from typing import Any, Dict, Optional
+import base64
+import logging
+from typing import Any, Dict, List, Optional
+
+log = logging.getLogger(__name__)
+
+# Khóa công khai Ed25519 (raw 32 byte, base64) của owner — dùng verify chữ ký manifest KB.
+# Là danh sách để xoay khóa: thêm khóa mới trước, bỏ khóa cũ sau.
+# Khóa riêng nằm ở GitHub secret KB_SIGNING_KEY (chỉ workflow kb-build dùng).
+KB_PUBLIC_KEYS: List[str] = [
+    "LcSouBEA4B0fZio4pRRPreABp83GXY2JWKmJgPVclHs=",
+]
 
 
 def sha256_file(path: str) -> str:
@@ -49,6 +60,23 @@ def validate_manifest(m: Dict[str, Any]) -> None:
             raise ValueError(f"manifest thiếu trường '{k}'")
     if len(str(m["sha256"])) != 64:
         raise ValueError("sha256 không hợp lệ (cần 64 hex)")
+
+
+def verify_manifest_signature(data: bytes, sig_b64: bytes) -> bool:
+    """True nếu sig (base64 Ed25519) là chữ ký hợp lệ của `data` bởi BẤT KỲ khóa trong KB_PUBLIC_KEYS."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    try:
+        sig = base64.b64decode(sig_b64.strip(), validate=True)
+    except Exception:
+        return False
+    for k in KB_PUBLIC_KEYS:
+        try:
+            Ed25519PublicKey.from_public_bytes(base64.b64decode(k)).verify(sig, data)
+            return True
+        except (InvalidSignature, ValueError):
+            continue
+    return False
 
 
 def _atomic_swap(new_file: str, dest: str) -> None:
@@ -109,8 +137,24 @@ def check_and_update(manifest_url: Optional[str] = None, dest_path: Optional[str
     local_ver = local.get("version") if local.get("available") else None
     try:
         with httpx.Client(timeout=60, follow_redirects=True) as c:
-            m = c.get(manifest_url).raise_for_status().json()
+            raw = c.get(manifest_url).raise_for_status().content
+            # Xác thực chữ ký TRƯỚC khi parse bất cứ thứ gì từ manifest.
+            sig_resp = c.get(manifest_url + ".sig")
+            if sig_resp.status_code == 200:
+                if not verify_manifest_signature(raw, sig_resp.content):
+                    return {"updated": False, "from": local_ver,
+                            "reason": "chữ ký manifest không hợp lệ"}
+            elif settings.kb_require_signature:
+                return {"updated": False, "from": local_ver,
+                        "reason": "manifest thiếu chữ ký (.sig) — bị từ chối"}
+            else:
+                log.warning("KB manifest không có chữ ký (kb_require_signature=false) — chấp nhận không xác thực")
+            m = json.loads(raw)
             validate_manifest(m)
+            # Chống rollback: không bao giờ hạ cấp KB, kể cả force / manifest cũ được replay.
+            if local_ver and _ver_tuple(m["version"]) < _ver_tuple(local_ver):
+                return {"updated": False, "from": local_ver, "to": m["version"],
+                        "reason": "từ chối hạ cấp KB (rollback)"}
             if not force and not needs_update(local_ver, m["version"]):
                 return {"updated": False, "from": local_ver, "to": m["version"],
                         "reason": "đã mới nhất"}
@@ -118,7 +162,7 @@ def check_and_update(manifest_url: Optional[str] = None, dest_path: Optional[str
             r = c.get(m["url"]).raise_for_status()
             d = os.path.dirname(dest_path) or "."
             os.makedirs(d, exist_ok=True)
-            dl = tempfile.NamedTemporaryFile(delete=False, dir=d, suffix=".dl")
+            dl = tempfile.NamedTemporaryFile(delete=False, dir=d, suffix=".gz")
             dl.write(r.content)
             dl.close()
     except Exception as e:
