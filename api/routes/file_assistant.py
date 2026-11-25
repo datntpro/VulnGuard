@@ -391,30 +391,35 @@ async def get_file_chunk(
 # WebSocket for Streaming (Optional)
 # ─────────────────────────────────────────────
 
-def _ws_is_admin(websocket: WebSocket) -> bool:
-    """H2: chỉ ADMIN được dùng File Assistant (middleware HTTP không chạy cho WS)."""
+def _ws_user_is_admin(websocket: WebSocket) -> bool:
+    """Kiểm tra phiên thật (chữ ký, token_version, is_active, role hiện tại, jti chưa thu hồi).
+    Auth tắt → True (nhánh này được siết ở PR-E)."""
     if not settings.auth_enabled:
         return True
-    try:
-        from api.security import COOKIE_NAME, decode_token
-        token = websocket.cookies.get(COOKIE_NAME) or ""
-        if not token:
-            auth = websocket.headers.get("authorization") or ""
-            token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        payload = decode_token(token) if token else None
-        return bool(payload) and str(payload.get("role", "")).upper() == "ADMIN"
-    except Exception:
-        return False
+    from api.routes.auth import resolve_user
+    from api.auth_models import UserRole
+    user = resolve_user(websocket)
+    return user is not None and user.role == UserRole.ADMIN
+
+
+def _ws_origin_ok(websocket: WebSocket) -> bool:
+    """Chống cross-site WebSocket hijacking: Origin (nếu có) phải cùng host với request."""
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    from urllib.parse import urlparse
+    return urlparse(origin).netloc.lower() == (websocket.headers.get("host") or "").lower()
 
 
 @router.websocket("/sessions/{session_id}/chat/stream")
 async def websocket_chat(websocket: WebSocket, session_id: str, db: Session = Depends(get_db)):
     """WebSocket endpoint for streaming chat responses"""
-    await websocket.accept()
-    if not _ws_is_admin(websocket):
-        await websocket.send_json({"error": "Chỉ ADMIN được dùng File Assistant"})
+    # Mọi kiểm tra TRƯỚC accept() → handshake bị từ chối (HTTP 403), không rò dữ liệu.
+    if (not settings.feature_file_assistant or not _ws_origin_ok(websocket)
+            or not _ws_user_is_admin(websocket)):
         await websocket.close(code=1008)
         return
+    await websocket.accept()
 
     try:
         session = db.query(FileAssistantSession).filter(
@@ -428,6 +433,11 @@ async def websocket_chat(websocket: WebSocket, session_id: str, db: Session = De
 
         while True:
             data = await websocket.receive_text()
+            # thu hồi/vô hiệu hoá có hiệu lực với socket sống lâu: kiểm tra lại mỗi message
+            if not _ws_user_is_admin(websocket):
+                await websocket.send_json({"type": "error", "error": "Phiên đã hết hiệu lực"})
+                await websocket.close(code=1008)
+                return
             message_data = json.loads(data)
             content = message_data.get("content", "").strip()
 

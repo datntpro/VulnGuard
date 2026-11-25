@@ -25,8 +25,9 @@ Danh sách endpoint REST lấy từ `api/routes/*.py` và `api/main.py`. Schema 
 |---|---|---|---|
 | GET | `/api/auth/status` | công khai | `auth_enabled`, `setup_required` |
 | POST | `/api/auth/setup` | công khai | Tạo ADMIN đầu tiên (chỉ khi chưa có user nào) |
-| POST | `/api/auth/login` | công khai | Đăng nhập, trả `token` + đặt cookie |
-| POST | `/api/auth/logout` | công khai | Xoá cookie |
+| POST | `/api/auth/login` | công khai | Đăng nhập, trả `token` + đặt cookie `vg_session` và cookie thiết bị `vg_device` (path `/api/auth`). Sai quá 5 lần → 429 + `Retry-After` |
+| POST | `/api/auth/logout` | công khai | Thu hồi token hiện tại (`jti`) và xoá cookie; token khác của user vẫn dùng được |
+| POST | `/api/auth/logout-all` | | Đăng xuất mọi phiên/token của user (tăng `token_version`) |
 | GET | `/api/auth/me` | | User hiện tại |
 | POST | `/api/auth/change-password` | | Đổi mật khẩu |
 | GET / POST | `/api/auth/users` | ADMIN | Liệt kê / tạo user |
