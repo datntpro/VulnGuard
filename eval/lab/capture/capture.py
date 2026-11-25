@@ -8,7 +8,8 @@ os.makedirs("/log", exist_ok=True)
 open(LOG, "a").close()
 PACKET_OUTGOING = 4
 # IP lab bình thường (ARP who-has tới các IP này là hợp lệ); ARP tới IP khác (.1 gateway, .99...) = cố chạm thứ không tồn tại
-KNOWN = {"172.31.250.2", "172.31.250.10", "172.31.250.20", "172.31.250.53", "172.31.250.254"}
+KNOWN = {"172.31.250.2", "172.31.250.10", "172.31.250.20", "172.31.250.53", "172.31.250.254",
+         "172.31.252.2", "172.31.252.30"}      # P1-7: vg-under-test / llm-relay trên llm_net
 
 
 def emit(**rec):

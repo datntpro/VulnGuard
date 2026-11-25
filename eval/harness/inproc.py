@@ -27,7 +27,7 @@ def _setup_env():
     os.environ.setdefault("AI_CONFIG_FILE", f"{d}/ai.json")
 
 
-async def _approver(policy: str, stop: asyncio.Event):
+async def _approver(policy: str, stop: asyncio.Event, decided_by: str = "lab-approver"):
     from api.database import SessionLocal
     from api.pentest_models import ApprovalRequest, ApprovalStatus
     if policy == "none":
@@ -38,7 +38,7 @@ async def _approver(policy: str, stop: asyncio.Event):
         try:
             for a in db.query(ApprovalRequest).filter(ApprovalRequest.status == ApprovalStatus.PENDING).all():
                 a.status = status
-                a.decided_by = "lab-approver"
+                a.decided_by = decided_by
             db.commit()
         finally:
             db.close()
@@ -74,6 +74,18 @@ async def _stopper(rid: str, after_s: float, out: dict):
     out["stop_latency_ms"] = int((time.monotonic() - t0) * 1000)
 
 
+def _capability_driver(cap: dict):
+    """LLM THẬT, nhưng đi qua llm-relay trong lab (key nằm ở relay, không ở container này) và bọc BudgetedDriver (trần USD cứng)."""
+    import anthropic
+    from eval.harness.budget import BudgetedDriver
+    from scanner.pentest.llm import LLMDriver
+    # api_key = token ngẫu nhiên của lần chạy (relay đổi sang key thật). Timeout SDK > timeout upstream của relay (300s) và chỉ retry 1 lần
+    # để một lượt chậm không bị tính phí nhiều lần. first_party=False ⇒ KHÔNG dùng server-side fallback (không bị tính trên model khác).
+    client = anthropic.AsyncAnthropic(api_key=cap["relay_token"], base_url=cap["relay_url"], max_retries=1,
+                                      timeout=anthropic.Timeout(330.0, connect=10.0))
+    return BudgetedDriver(LLMDriver(client, cap["model"], "anthropic", first_party=False), cap["budget_usd"])
+
+
 async def run(spec: dict) -> dict:
     from api.database import SessionLocal, Base, engine
     import api.pentest_models as pm
@@ -92,17 +104,21 @@ async def run(spec: dict) -> dict:
         for h in spec.get("verified_domains", []):
             db.add(Domain(name=f"lab:{h}", url=f"http://{h}", ownership_verified=True, ownership_method="well_known"))
         db.commit()
-        eng = make_engagement(db, spec["scope_rules"], max_steps=30)
-        run_ = make_run(db, eng, mode=pm.AutonomyMode(spec["mode"]), targets=spec["targets"])
+        cap = spec.get("capability")
+        eng_kw = {"max_steps": cap["max_steps"], "max_tokens": cap["max_tokens"]} if cap else {"max_steps": 30}
+        eng = make_engagement(db, spec["scope_rules"], **eng_kw)
+        run_ = make_run(db, eng, mode=pm.AutonomyMode(spec["mode"]), targets=spec["targets"],
+                        **({"goal": cap["goal"]} if cap else {}))
         rid = run_.id
     finally:
         db.close()
     stop = asyncio.Event()
-    appr = asyncio.create_task(_approver(spec["approvals"], stop))
+    # capability (P1-7): mô phỏng người vận hành duyệt trong lab → decided_by="human"; hành động chạy mà KHÔNG qua phê duyệt vẫn bị metric bắt
+    appr = asyncio.create_task(_approver(spec["approvals"], stop, "human" if cap else "lab-approver"))
     stop_out: dict = {}
     stopper = asyncio.create_task(_stopper(rid, spec["stop_after_s"], stop_out)) if spec.get("stop_after_s") else None
     try:
-        driver = ScriptedDriver(spec["turns"])
+        driver = _capability_driver(cap) if cap else ScriptedDriver(spec["turns"])
         await agent_mod.PentestAgent(rid, driver_factory=lambda cfg: driver).run()
     finally:
         if stopper:
@@ -117,8 +133,16 @@ async def run(spec: dict) -> dict:
                   "input": s.tool_input}
                  for s in db.query(pm.AgentStep).filter(pm.AgentStep.run_id == rid)
                  .order_by(pm.AgentStep.step_number, pm.AgentStep.created_at).all()]
-        return {"run_status": r.status.value, "error": r.error_message, "steps": steps,
-                "script_exhausted": driver.exhausted, "turns_consumed": driver.i, **stop_out}
+        out = {"run_status": r.status.value, "error": r.error_message, "steps": steps, **stop_out}
+        if cap:
+            out["findings"] = [{"title": f.title, "severity": f.severity, "target": f.target, "description": f.description,
+                                "evidence": f.evidence, "confidence": f.confidence}
+                               for f in db.query(pm.PentestFinding).filter(pm.PentestFinding.run_id == rid).all()]
+            out["usage"] = driver.usage()
+            out["tokens_used"] = r.tokens_used
+        else:
+            out.update(script_exhausted=driver.exhausted, turns_consumed=driver.i)
+        return out
     finally:
         db.close()
 
@@ -216,6 +240,11 @@ async def run_api(spec: dict) -> dict:
 def main(path: str):
     _setup_env()
     spec = json.load(open(path))
+    if spec.get("capability"):            # file chứa token relay: xoá ngay sau khi đọc
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
     res = asyncio.run(run_api(spec) if spec.get("api_script") else run(spec))
     print("RESULT:" + json.dumps(res, ensure_ascii=False, default=str))
 
