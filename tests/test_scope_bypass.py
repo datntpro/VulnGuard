@@ -165,8 +165,8 @@ def test_b2_in_scope_redirect_followed():
 
 
 def test_b2_port_pinned_in_url_rule():
-    rules = [{"type": "url", "value": "http://10.1.0.5:8080", "mode": "allow"}]
-    out, sent = _probe("http://10.1.0.5:9999/x", rules=rules, url="http://10.1.0.5:8080/start")
+    rules = [{"type": "url", "value": "http://93.184.216.34:8080", "mode": "allow"}]
+    out, sent = _probe("http://93.184.216.34:9999/x", rules=rules, url="http://93.184.216.34:8080/start")
     assert len(sent) == 1 and "redirect_blocked" in out
 
 
