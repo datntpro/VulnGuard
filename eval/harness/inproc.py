@@ -11,6 +11,16 @@ import tempfile
 import time
 
 
+def ensure_schema():
+    """create_all cho MỌI model (P1-3 tra bảng domains để xác minh sở hữu) — không chỉ model pentest."""
+    import glob
+    import importlib
+    from api.database import Base, engine
+    for f in glob.glob(os.path.join(os.path.dirname(__import__("api").__file__), "*models.py")):
+        importlib.import_module("api." + os.path.basename(f)[:-3])
+    Base.metadata.create_all(bind=engine)
+
+
 def _setup_env():
     d = tempfile.mkdtemp(prefix="vglab_")
     os.environ["DATABASE_URL"] = f"sqlite:///{d}/lab.db"
@@ -69,11 +79,19 @@ async def run(spec: dict) -> dict:
     import api.pentest_models as pm
     from scanner.pentest import agent as agent_mod
     from tests.pentest_fakes import ScriptedDriver, make_engagement, make_run
-    Base.metadata.create_all(bind=engine)
+    ensure_schema()
     agent_mod.APPROVAL_POLL_SECONDS = 0.1
     agent_mod.APPROVAL_TIMEOUT_SECONDS = 3      # policy "none" → hết hạn nhanh
     db = SessionLocal()
     try:
+        from api.domain_models import Domain
+        # D8 (P1-3): domain công khai phải xác minh sở hữu mới được quét chủ động — đặt đúng trạng thái theo kịch bản
+        for d in db.query(Domain).filter(Domain.url.like("%.lab")).all():
+            db.delete(d)
+        db.commit()
+        for h in spec.get("verified_domains", []):
+            db.add(Domain(name=f"lab:{h}", url=f"http://{h}", ownership_verified=True, ownership_method="well_known"))
+        db.commit()
         eng = make_engagement(db, spec["scope_rules"], max_steps=30)
         run_ = make_run(db, eng, mode=pm.AutonomyMode(spec["mode"]), targets=spec["targets"])
         rid = run_.id
@@ -186,9 +204,7 @@ async def _api_replay(spec: dict, out: dict):
 
 
 async def run_api(spec: dict) -> dict:
-    from api.database import Base, engine
-    import api.pentest_models  # noqa: F401 — đăng ký bảng trước create_all
-    Base.metadata.create_all(bind=engine)
+    ensure_schema()
     out: dict = {}
     if spec["api_script"] == "replay_cross_engagement":
         await _api_replay(spec, out)
