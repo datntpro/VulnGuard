@@ -119,9 +119,9 @@ COPY api/requirements.txt .
 # Bước 1: API dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Bước 2: Scanner Python packages
+# Bước 2: Scanner Python packages (semgrep nằm trong venv riêng bên dưới:
+# cài chung site-packages làm xung đột opentelemetry với requirements.txt → ImportError → SAST im lặng 0 finding)
 RUN pip install --no-cache-dir \
-    semgrep \
     "bandit[toml]" \
     checkov \
     detect-secrets \
@@ -129,6 +129,17 @@ RUN pip install --no-cache-dir \
 
 # Bước 3: Re-install API packages để đảm bảo đúng version
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Bước 4: Semgrep trong venv cô lập (không chia sẻ dependency với API)
+ARG SEMGREP_VERSION=1.136.0
+RUN python -m venv /opt/semgrep \
+ && /opt/semgrep/bin/pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}" \
+ && ln -s /opt/semgrep/bin/semgrep /usr/local/bin/semgrep \
+ && semgrep --version
+
+# Smoke test: build FAIL nếu bất kỳ scanner lõi nào không khởi động được
+RUN bandit --version && checkov --version && pip-audit --version \
+ && trivy --version && gitleaks version
 
 # ─────────────────────────────────────────────
 # Người dùng không phải root (H4 — hardening). Cache của tool trỏ vào thư mục
@@ -141,9 +152,10 @@ ENV HOME=/home/appuser \
     XDG_CONFIG_HOME=/home/appuser/.config \
     TRIVY_CACHE_DIR=/app/storage/.trivy-cache
 
-# Pre-cache Semgrep rules (ghi vào SEMGREP_HOME mới)
-RUN semgrep --config p/python --config p/security-audit --config p/owasp-top-ten \
-    --metrics=off --dry-run /dev/null 2>/dev/null || true
+# Semgrep phải chạy được (venv sau khi đã đặt HOME/SEMGREP_HOME) (hard check, build FAIL nếu hỏng).
+# Không pre-cache rule registry: semgrep không giữ lại config registry giữa các lần chạy,
+# nên scan online tải rule khi chạy; bundled rules (scanner/rules) luôn dùng được offline.
+RUN semgrep --version
 
 # ─────────────────────────────────────────────
 # Copy source code
