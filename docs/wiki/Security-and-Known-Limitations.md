@@ -88,4 +88,6 @@ Rủi ro còn lại: đọc token cùng uid trong container; ở chế độ `tr
 (interpreter thoát được giới hạn đối số theo thiết kế); file code được ghi sẽ chạy khi nhà phát triển chạy nó.
 
 Rủi ro còn lại (Coworker, bổ sung): hardlink có sẵn trong folder trỏ tới file ngoài root (không tạo được bằng lệnh safe);
-`.git/config` độc hại có thể đặt `core.worktree` trỏ nơi khác — chỉ nhận repo đáng tin; chế độ `trusted` = người giữ token chạy được mã.
+chế độ `trusted` = người giữ token chạy được mã.
+Safe-mode git từ chối repo có toplevel/git-dir ngoài root hoặc `.git/info/attributes` không rỗng. Repo có `.git` do kẻ tấn công cung cấp
+vẫn là lớp rủi ro cần thận trọng: chỉ cấp quyền cho dự án đáng tin.

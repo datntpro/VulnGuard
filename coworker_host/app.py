@@ -148,7 +148,10 @@ def _host_only(h: str) -> str:
     if h.startswith("["):
         m = _BRACKET_HOST_RE.match(h)
         return m.group(1) if m else ""
-    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+    if h.count(":") == 1:
+        host, port = h.split(":")
+        return host if port.isdigit() else ""
+    return h
 
 
 @app.middleware("http")
@@ -594,7 +597,6 @@ def _consume_confirm(cid: str, h: str) -> bool:
 # ── Giới hạn đối số trong folder root ─────────────────────────
 _FIND_DENIED = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
                 "-fls", "-L", "-H", "-f", "-D", "-follow", "-files0-from"}
-_FIND_GLOBAL_OK = {"-P", "-E", "-X", "-d", "-s", "-x"}          # cờ toàn cục vô hại (đứng trước path)
 _FIND_PATH_OPERANDS = {"-newer", "-anewer", "-cnewer", "-samefile", "-mnewer"}
 _GREP_DENIED_CHARS = set("RSO")
 _GREP_VALUE_CHARS = set("efmABCdD")
@@ -654,7 +656,7 @@ def _deny(cmd: str, t: str):
 
 
 def _check_generic(executable: str, tokens: List[str], root: Path, cwd: Path,
-                   denied_chars=frozenset(), denied_long=frozenset()):
+                   denied_chars=frozenset(), denied_long=frozenset(), path_value_chars=frozenset()):
     """cat/head/tail/wc/diff/ls/tree (và best-effort cho lệnh trusted): mọi positional và mọi --opt=value là path."""
     end_opts = False
     for t in tokens:
@@ -671,10 +673,18 @@ def _check_generic(executable: str, tokens: List[str], root: Path, cwd: Path,
             bad = denied_chars & set(t[1:])
             if bad:
                 raise _deny(executable, t)
+            for k, ch in enumerate(t[1:], start=2):
+                if ch in path_value_chars:  # giá trị gắn liền, vd diff -X/path
+                    if t[k:]:
+                        _confine(t[k:], root, cwd)
+                    break
         elif t.startswith("-") and t != "-":
             continue
         else:
             _confine(t, root, cwd)
+
+
+_FIND_FLAG_CLUSTER = re.compile(r"^-[EHLPXdfsx]+$")
 
 
 def _check_find(tokens: List[str], root: Path, cwd: Path):
@@ -682,8 +692,20 @@ def _check_find(tokens: List[str], root: Path, cwd: Path):
         if t in _FIND_DENIED:
             raise _deny("find", t)
     i = 0
-    while i < len(tokens) and (tokens[i] in _FIND_GLOBAL_OK or re.fullmatch(r"-O\d", tokens[i])):
-        i += 1
+    # Cờ BSD đứng trước path: có thể là CỤM (-xL, -Ef, -sx) hoặc '--' kết thúc cờ.
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--":
+            i += 1
+            break
+        if _FIND_FLAG_CLUSTER.match(t):
+            if set(t[1:]) & set("HLf"):
+                raise _deny("find", t)
+            i += 1
+        elif re.fullmatch(r"-O\d", t):
+            i += 1
+        else:
+            break
     while i < len(tokens) and not (tokens[i].startswith("-") or tokens[i] in ("(", "!")):
         _confine(tokens[i], root, cwd)
         i += 1
@@ -848,6 +870,10 @@ def _check_args(executable: str, tokens: List[str], root: Path, cwd: Path):
                               denied_long=_TAIL_DENIED_LONG)
     if executable == "ls":
         return _check_generic(executable, tokens, root, cwd, denied_chars=_LS_DENIED_CHARS)
+    if executable == "diff":
+        # Apple diff -r đi theo symlink gặp trong lúc đệ quy → cấm đệ quy
+        return _check_generic(executable, tokens, root, cwd, denied_chars=set("r"),
+                              denied_long={"--recursive"}, path_value_chars=set("XS"))
     return _check_generic(executable, tokens, root, cwd)
 
 
@@ -882,14 +908,54 @@ def _build_argv(tokens: List[str]) -> List[str]:
             "--no-pager", sub, *extra, *rest]
 
 
-def _child_env() -> Dict[str, str]:
-    """Môi trường tối thiểu cho tiến trình con — KHÔNG kế thừa VULNGUARD_COWORKER_TOKEN."""
+def _child_env(ceiling: Optional[Path] = None) -> Dict[str, str]:
+    """Môi trường tối thiểu cho tiến trình con — KHÔNG kế thừa VULNGUARD_COWORKER_TOKEN.
+    ceiling: thư mục cha của root → git không được tìm repo vượt lên trên root."""
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", str(Path.home())),
-           "TERM": "dumb", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "PAGER": "cat"}
+           "TERM": "dumb", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_ATTR_NOSYSTEM": "1",
+           "PAGER": "cat"}
     for k in ("LANG", "LC_ALL"):
         if os.environ.get(k):
             env[k] = os.environ[k]
+    if ceiling is not None:
+        env["GIT_CEILING_DIRECTORIES"] = str(ceiling)
+        env["GIT_DISCOVERY_ACROSS_FILESYSTEM"] = "0"
     return env
+
+
+def _git_preflight(root: Path, cwd: Path):
+    """Trước khi chạy git: repo (toplevel, git-dir, common-dir) phải nằm TRONG root (chặn repo dotfiles ở
+    $HOME, `.git` file/`gitdir:` trỏ ra ngoài, core.worktree ra ngoài) và .git/info/attributes không được
+    định nghĩa attribute (nó vẫn bật filter/textconv dù đã đặt --attr-source)."""
+    env = _child_env(root.parent)
+    base = ["git", f"--attr-source={_EMPTY_TREE}", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+            "-c", "core.attributesFile=/dev/null", "--no-pager"]
+
+    def _run(*a):
+        return subprocess.run([*base, *a], cwd=str(cwd), capture_output=True, text=True,  # nosec B603 B607
+                              stdin=subprocess.DEVNULL, env=env, timeout=15)
+
+    r = _run("rev-parse", "--path-format=absolute", "--absolute-git-dir", "--git-common-dir")
+    if r.returncode != 0:
+        return  # không phải repo (hoặc không đọc được) — git sẽ tự báo lỗi, không có gì để rò rỉ
+    dirs = [Path(x.strip()) for x in r.stdout.splitlines() if x.strip()]
+    tl = _run("rev-parse", "--show-toplevel")
+    if tl.returncode == 0 and tl.stdout.strip():
+        dirs.append(Path(tl.stdout.strip()))
+    for d in dirs:
+        if not _under(_resolved(d), root):
+            raise CodedError(403, "git_repo_outside_root",
+                             "Repo git nằm (một phần) ngoài folder được cấp quyền (repo ở thư mục cha, `.git` trỏ ra "
+                             "ngoài hoặc core.worktree ngoài root) — từ chối chạy git")
+    for d in dirs[:2]:
+        attrs = d / "info" / "attributes"
+        try:
+            if attrs.is_file() and any(ln.strip() and not ln.lstrip().startswith("#")
+                                       for ln in attrs.read_text(errors="replace").splitlines()):
+                raise CodedError(403, "git_hostile_repo",
+                                 ".git/info/attributes có định nghĩa attribute (có thể bật filter/textconv chạy lệnh) — từ chối chạy git")
+        except OSError:
+            continue
 
 
 @app.post("/fs/exec")
@@ -928,8 +994,10 @@ def fs_exec(req: ExecRequest):
 
     root = Path(folder["path"]).resolve()
     _check_args(executable, tokens[1:], root, cwd_path)
-    if executable == "git" and not _git_attr_source_supported():
-        raise CodedError(403, "git_too_old", "git quá cũ (cần >= 2.40 để vô hiệu hóa attribute driver) — không chạy git ở safe mode")
+    if executable == "git":
+        if not _git_attr_source_supported():
+            raise CodedError(403, "git_too_old", "git quá cũ (cần >= 2.40 để vô hiệu hóa attribute driver) — không chạy git ở safe mode")
+        _git_preflight(root, cwd_path)
 
     if not whitelisted:  # chỉ tới được ở chế độ trusted
         h = _confirm_hash(req.folder_id, req.cwd, command)
@@ -956,7 +1024,7 @@ def fs_exec(req: ExecRequest):
             text=True,
             timeout=timeout,
             shell=False,
-            env=_child_env(),
+            env=_child_env(root.parent if executable == "git" else None),
         )
         stdout = (proc.stdout or "")[:MAX_OUTPUT_CHARS]
         stderr = (proc.stderr or "")[:MAX_OUTPUT_CHARS]

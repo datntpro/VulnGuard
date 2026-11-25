@@ -504,6 +504,300 @@ def test_child_env(tmp_path, monkeypatch):
     monkeypatch.setenv("LD_PRELOAD", "/x.so")
     monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/x.dylib")
     e = m._child_env()
-    bad = [k for k in e if k not in ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "GIT_TERMINAL_PROMPT", "GIT_CONFIG_NOSYSTEM", "PAGER")]
+    bad = [k for k in e if k not in ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "GIT_TERMINAL_PROMPT", "GIT_CONFIG_NOSYSTEM", "GIT_ATTR_NOSYSTEM", "PAGER")]
     assert rec("child-env", "-", "_child_env() with TOKEN/GIT_DIR/GIT_CONFIG_PARAMETERS/LD_PRELOAD/DYLD_* set in parent",
                "only allowlisted keys", f"keys={sorted(e)}", not bad and TOK not in json.dumps(e))
+
+
+# ═══════════════ Re-verify rows (second adversarial round) ═══════════════
+import unicodedata  # noqa: E402
+
+
+def rec2(cat, inp, expected, actual, ok, note=""):
+    if not ok:
+        print(f"FAIL [{cat}] {inp!r}: expected {expected}, got {actual} {note}")
+    return bool(ok)
+
+
+def blocked_no_leak(r, marker=None):
+    j = {}
+    try:
+        j = r.json()
+    except Exception:
+        pass
+    executed_ok = r.status_code == 200 and j.get("exit_code") == 0
+    return not executed_ok and not leaked(r) and not (marker and Path(marker).exists())
+
+
+NEW_SAFE = [
+    # find: clustered BSD leading flags / '--'
+    ("find-cluster", "find -xL {OUT}"), ("find-cluster", "find -xH {OUT}"), ("find-cluster", "find -sL link_dir"),
+    ("find-cluster", "find -Ef {OUT}"), ("find-cluster", "find -sx {OUT}"), ("find-cluster", "find -dP {OUT}"),
+    ("find--", "find -- {OUT}"), ("find--", "find -x -- {OUT}"), ("find--", "find -P -- {OUT}"),
+    ("find-operand", "find . -newer {OUT}/secret.txt"), ("find-operand", "find . -newermm {OUT}/secret.txt"),
+    ("find-operand", "find . -samefile {OUT}/secret.txt"),
+    # grep long-option abbreviations & ordering
+    ("grep-abbrev", "grep -r --deref SECRET ."), ("grep-abbrev", "grep -r --dereference SECRET ."),
+    ("grep-abbrev", "grep --fil {OUT}/secret.txt guess.txt"), ("grep-abbrev", "grep --fil={OUT}/secret.txt guess.txt"),
+    ("grep-abbrev", "grep --exclude-f={OUT}/secret.txt x ."),
+    ("grep-order", "grep SECRET guess.txt -f {OUT}/secret.txt"), ("grep-order", "grep SECRET guess.txt {OUT}/secret.txt"),
+    ("grep-order", "grep -- -f {OUT}/secret.txt"), ("grep-order", "grep -e x -- {OUT}/secret.txt"),
+    ("grep-cluster", "grep -hif {OUT}/secret.txt guess.txt"), ("grep-cluster", "grep -cRn SECRET ."),
+    ("grep-cluster", "grep -rnS SECRET ."), ("grep-cluster", "grep -m1 -rO SECRET link_dir"),
+    ("grep-pattern-slot", "grep SECRET link_file"), ("grep-pattern-slot", "grep {OUT}/secret.txt guess.txt"),
+    # other generic
+    ("ls", "ls -lL link_dir"), ("ls", "ls -RL ."), ("ls", "ls -- {OUT}"), ("ls", "ls . {OUT}"),
+    ("tail", "tail -5f ok.txt"), ("tail", "tail -nF 1 ok.txt"), ("tail", "tail --foll ok.txt"),
+    ("tail", "tail --retry ok.txt"),
+    ("diff", "diff -X{OUT}/secret.txt ok.txt guess.txt"), ("diff", "diff --exclude-from {OUT}/secret.txt ok.txt guess.txt"),
+    ("diff", "diff ok.txt -- {OUT}/secret.txt"), ("cat", "cat ok.txt -- {OUT}/secret.txt"),
+    ("cat", "cat - {OUT}/secret.txt"),
+    # git: abbreviations, options after paths, '--', -c neutralisers
+    ("git-abbrev", "git blame --con={OUT}/secret.txt ok.txt"), ("git-abbrev", "git blame --c={OUT}/secret.txt ok.txt"),
+    ("git-abbrev", "git blame --conte {OUT}/secret.txt ok.txt"), ("git-abbrev", "git diff --no-i link_file ok.txt"),
+    ("git-abbrev", "git diff --no-in link_dir/secret.txt ok.txt"), ("git-abbrev", "git blame --ignore-revs-f={OUT}/secret.txt ok.txt"),
+    ("git-abbrev", "git blame -S{OUT}/secret.txt ok.txt"), ("git-abbrev", "git blame -S {OUT}/secret.txt ok.txt"),
+    ("git-abbrev", "git log --show-sig"), ("git-abbrev", "git log --ext-diff"),  ("git-order", "git diff HEAD -- {OUT}/secret.txt"), ("git-order", "git log ok.txt --output={OUT}/w"),
+    ("git-order", "git diff ok.txt --no-index {OUT}/secret.txt"), ("git-order", "git blame ok.txt --contents {OUT}/secret.txt"),
+     ("git-pathspec", "git show HEAD:../outside/secret.txt"),  ("git-pathspec", "git ls-files --exclude-from={OUT}/secret.txt -o"), ("git-pathspec", "git ls-files -X {OUT}/secret.txt -o"),
+    ("git-pathspec", "git rev-parse --resolve-git-dir {OUT}"),
+    ("git-branch", "git branch evil"), ("git-branch", "git branch -D main"), ("git-branch", "git branch -m x"),
+    ("git-branch", "git branch -c main x"), ("git-branch", "git branch --list evil -D"),
+     ("git-branch", "git branch --set-upstream-to=main"),
+    ("git-branch", "git branch -f main HEAD"), ("git-branch", "git branch --edit-description"),
+    ("git-branch", "git branch --contains HEAD newbr"), ("git-branch", "git branch --sort -D main"),
+    ("git-branch", "git branch --format=%(refname) newbr"),
+]
+
+
+@pytest.mark.parametrize("cat,cmd", NEW_SAFE)
+def test_new_safe(tmp_path, monkeypatch, cat, cmd):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    _gitrepo(proj)
+    (proj / "ok.txt").write_text("changed\n")
+    heads0 = sorted(p.name for p in (proj / ".git" / "refs" / "heads").iterdir())
+    cmd = cmd.replace("{OUT}", str(out))
+    r = ex(c, fid, cmd, timeout=5)
+    heads = sorted(p.name for p in (proj / ".git" / "refs" / "heads").iterdir())
+    ok = blocked_no_leak(r, marker=out / "w") and heads == heads0
+    if cat.startswith("find") or cat == "ls":
+        # listing outside tree: outside dir name leaks via 'deep.txt' / 'secret.txt'
+        ok = ok and "deep.txt" not in r.text and ("secret.txt" not in r.text or "arg_outside" in r.text)
+    if cat == "git-branch" and r.status_code == 200 and cmd.startswith("git branch -l evil"):
+        ok = heads == heads0
+    assert rec2(cat, cmd.replace(str(out), "$OUT"), "4xx or no effect, no leak", summ(r).replace(str(out), "$OUT")
+               + ("" if heads == heads0 else f" heads={heads}"), ok)
+
+
+# ── Unicode / case normalisation on folder grants and writes ──
+def test_unicode_grants(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    (home / ".kube").mkdir()
+    (home / ".config").mkdir()
+    oks = []
+    cases = [home / ".Kube", home / ".SSH", home / ".ſſh", home / "LİBRARY",
+             home / ".config‍", Path(str(home).upper()) if False else home / ".Config"]
+    for p in cases:
+        exists = p.exists()
+        r = c.post("/folders", json={"path": str(p)}, headers=H)
+        exp_block = exists  # if APFS maps it to a sensitive dir it must be refused; if it doesn't exist → 400 anyway
+        oks.append(rec2("unicode-grant", f"POST /folders $HOME/{p.name!r} (exists on APFS={exists})", "400",
+                       str(r.status_code), r.status_code == 400))
+    assert all(oks)
+
+
+def test_nfd_home(tmp_path, monkeypatch):
+    """Home whose name has a non-ASCII char: grant the other normalisation form of ~/.ssh and of ~ itself."""
+    nfc = tmp_path / unicodedata.normalize("NFC", "đạt")
+    home_name = unicodedata.normalize("NFC", "José")
+    # build env manually: HOME = NFC path
+    root = tmp_path / "u"
+    m, c, home0, proj0, out, fid = _make(root, monkeypatch)
+    home = root / home_name
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text(SSHKEY)
+    (home / "proj").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    nfd_home = Path(unicodedata.normalize("NFD", str(home)))
+    oks = []
+    oks.append(rec2("unicode-nfd", "APFS: NFD form of $HOME exists?", "info", str(nfd_home.exists()), True))
+    for label, p in (("NFD $HOME/.ssh", nfd_home / ".ssh"), ("NFD $HOME", nfd_home), ("NFC $HOME/.ssh", home / ".ssh")):
+        reason = m._folder_allowed(str(p))
+        r = c.post("/folders", json={"path": str(p)}, headers=H)
+        leak = ""
+        if r.status_code == 200:
+            rr = c.get("/fs/file", params={"folder_id": r.json()["id"], "path": "id_rsa" if label.endswith(".ssh") else ".ssh/id_rsa"}, headers=H)
+            leak = f" then read id_rsa → {rr.status_code} leaked={leaked(rr)}"
+        oks.append(rec2("unicode-nfd", f"POST /folders {label} (HOME stored NFC)", "400", f"{r.status_code}{leak}",
+                       r.status_code == 400))
+    assert all(oks)
+
+
+@pytest.mark.parametrize("p", [".GIT/config", ".gIt/hooks/x", ".g‍it/config", ".GITATTRIBUTES", ".GitModules",
+                               "sub/.GITATTRIBUTES", ".Kube", "Ｇｉｔ", ".git /config", ".git./config",
+                               ".git\u0000/config", ".gitattributes ", ".git\\config", "./.git/config", ".//.git/config"])
+def test_write_variants(tmp_path, monkeypatch, p):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    _gitrepo(proj)
+    before = (proj / ".git" / "config").read_text()
+    try:
+        w = c.post("/fs/file", json={"folder_id": fid, "path": p, "content": "[filter \"x\"]\n", "create": True}, headers=H)
+        st = w.status_code
+    except Exception as e:  # NUL byte
+        st = f"exc {type(e).__name__}"
+    after = (proj / ".git" / "config").read_text()
+    ga = any(x.name.casefold() == ".gitattributes" for x in proj.iterdir())
+    ok = after == before and not ga
+    assert rec2("write-variant", f"POST /fs/file path={p!r}", ".git/config & .gitattributes untouched",
+               f"{st} config_changed={after != before} gitattributes={ga}", ok)
+
+
+# ── git config vectors from a pre-existing hostile .git (documented residual) ──
+GIT_CFG = [
+    ("core.fsmonitor", '[core]\n\tfsmonitor = "touch PWN"\n', "status"),
+    ("core.hooksPath+post-index-change", '[core]\n\thooksPath = h\n', "status"),
+    ("filter via .git/info/attributes", '[filter "x"]\n\tclean = "touch PWN; cat"\n\tprocess = "touch PWN"\n', "status"),
+    ("diff.textconv via info/attributes", '[diff "x"]\n\ttextconv = "touch PWN; cat"\n\tcommand = "touch PWN"\n', "diff"),
+    ("include.path → filter", '[include]\n\tpath = ../inc.cfg\n', "status"),
+    ("core.sshCommand", '[core]\n\tsshCommand = "touch PWN"\n', "log"),
+    ("gpg.program + showSignature", '[gpg]\n\tprogram = "./pwn.sh"\n[log]\n\tshowSignature = true\n', "log"),
+    ("core.pager / pager.log", '[core]\n\tpager = "touch PWN"\n[pager]\n\tlog = "touch PWN"\n\tstatus = "touch PWN"\n', "log"),
+    ("core.askPass/credential", '[credential]\n\thelper = "!touch PWN"\n[core]\n\taskPass = "./pwn.sh"\n', "status"),
+    ("alias (not reachable)", '[alias]\n\tstatus = "!touch PWN"\n', "status"),
+    ("core.editor/sequence", '[core]\n\teditor = "touch PWN"\n', "status"),
+    ("blame.ignoreRevsFile", '[blame]\n\tignoreRevsFile = ../../outside/secret.txt\n', "blame ok.txt"),
+    ("diff.external", '[diff]\n\texternal = "./pwn.sh"\n', "diff"),
+    ("core.untrackedCache/split", '[core]\n\tuntrackedCache = true\n\tsplitIndex = true\n', "status"),
+    ("status.showUntrackedFiles + submodule", '[submodule "s"]\n\tupdate = "!touch PWN"\n', "status"),
+]
+
+
+@pytest.mark.parametrize("name,cfg,sub", GIT_CFG)
+def test_hostile_git_config(tmp_path, monkeypatch, name, cfg, sub):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    env = _gitrepo(proj)
+    (proj / "pwn.sh").write_text("#!/bin/sh\ntouch PWN\ncat\n")
+    os.chmod(proj / "pwn.sh", 0o755)
+    if "hooksPath" in name:
+        (proj / "h").mkdir()
+        for hk in ("post-index-change", "reference-transaction", "post-checkout"):
+            (proj / "h" / hk).write_text("#!/bin/sh\ntouch PWN\n")
+            os.chmod(proj / "h" / hk, 0o755)
+    if "include" in name:
+        (proj.parent / "inc.cfg").write_text('[filter "x"]\n\tclean = "touch PWN; cat"\n[core]\n\tfsmonitor = "touch PWN"\n')
+        (proj / ".git" / "info").mkdir(exist_ok=True)
+        (proj / ".git" / "info" / "attributes").write_text("* filter=x\n")
+    if "attributes" in name:
+        (proj / ".git" / "info").mkdir(exist_ok=True)
+        (proj / ".git" / "info" / "attributes").write_text("* filter=x diff=x\n")
+    with open(proj / ".git" / "config", "a") as f:
+        f.write(cfg)
+    time.sleep(1.05)
+    (proj / "ok.txt").write_text("changed\n")
+    outs = []
+    for s in (sub, "status", "diff", "log -p", "show", "blame ok.txt", "ls-files", "branch"):
+        r = ex(c, fid, "git " + s, timeout=5)
+        outs.append(f"{s}:{r.status_code}")
+    pwn = (proj / "PWN").exists()
+    leak = leaked(r)
+    assert rec2("hostile-.git/config", f"pre-existing {name}; ran git {sub}/status/diff/log -p/show/blame/ls-files/branch",
+               "no command executed", f"PWN={pwn} " + " ".join(outs[:3]), not pwn)
+
+
+def test_hostile_core_worktree(tmp_path, monkeypatch):
+    """Pre-existing .git with core.worktree pointing outside root + crafted index → content of outside files."""
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    env = _gitrepo(proj)
+    # craft index listing secret.txt with an empty blob, worktree → $OUT
+    e = dict(env, GIT_DIR=str(proj / ".git"), GIT_WORK_TREE=str(out))
+    subprocess.run(["git", "add", "secret.txt"], cwd=out, env=e, check=True)
+    blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], input="", text=True, capture_output=True, env=e).stdout.strip()
+    subprocess.run(["git", "update-index", "--cacheinfo", f"100644,{blob},secret.txt"], env=e, cwd=out, check=True)
+    subprocess.run(["git", "config", "core.worktree", str(out)], cwd=proj, env=env, check=True)
+    oks = []
+    for cmd in ("git status", "git diff", "git ls-files", "git blame secret.txt"):
+        r = ex(c, fid, cmd, timeout=5)
+        oks.append(rec2("hostile-core.worktree", f"pre-existing core.worktree=$OUT, {cmd}", "no outside content",
+                       summ(r).replace(str(out), "$OUT"), not leaked(r), "documented residual"))
+    assert all(oks)
+
+
+def test_git_discovery_above_root(tmp_path, monkeypatch):
+    """Dotfiles repo at $HOME (common!), grant $HOME/proj (allowed). Safe-mode git sees the HOME repo."""
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    env = dict(_gitrepo.__globals__["os"].environ)
+    e = {"GIT_CONFIG_NOSYSTEM": "1", "HOME": str(home), "PATH": os.environ["PATH"], "GIT_AUTHOR_NAME": "t",
+         "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    (home / ".aws").mkdir()
+    (home / ".aws" / "credentials").write_text(SECRET + "\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=home, check=True, env=e)
+    subprocess.run(["git", "add", ".aws/credentials", ".ssh/id_rsa"], cwd=home, check=True, env=e)
+    subprocess.run(["git", "commit", "-qm", "dotfiles"], cwd=home, check=True, env=e)
+    (home / ".ssh" / "id_rsa").write_text(SSHKEY + " modified\n")
+    oks = []
+    for cmd in ("git show HEAD:.aws/credentials", "git log -p", "git diff", "git ls-files --full-name :/",
+                "git show HEAD:.ssh/id_rsa", "git rev-parse --show-toplevel"):
+        r = ex(c, fid, cmd, timeout=5)
+        oks.append(rec2("git-discovery", f"$HOME is a git repo, granted $HOME/proj: {cmd}", "no content outside root",
+                       summ(r).replace(str(home), "$HOME"), not leaked(r)))
+    assert all(oks)
+
+
+def test_git_dotgit_file_pointer(tmp_path, monkeypatch):
+    """Pre-existing `.git` FILE with gitdir: pointing at another repo outside root."""
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    e = {"GIT_CONFIG_NOSYSTEM": "1", "HOME": str(home), "PATH": os.environ["PATH"], "GIT_AUTHOR_NAME": "t",
+         "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    (other / "s.txt").write_text(SECRET + "\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=other, check=True, env=e)
+    subprocess.run(["git", "add", "s.txt"], cwd=other, check=True, env=e)
+    subprocess.run(["git", "commit", "-qm", "x"], cwd=other, check=True, env=e)
+    (proj / ".git").write_text(f"gitdir: {other}/.git\n")
+    r = ex(c, fid, "git show HEAD:s.txt", timeout=5)
+    assert rec2("git-dotgit-file", "pre-existing .git file → gitdir outside root; git show HEAD:s.txt", "no outside content",
+               summ(r), not leaked(r), "same class as hostile .git (pre-existing)")
+
+
+def test_symlink_traversal_diff(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    p2 = home / "p2"
+    (p2 / "a").mkdir(parents=True)
+    (p2 / "b").mkdir()
+    os.symlink(out, p2 / "b" / "ld")
+    fid2 = c.post("/folders", json={"path": str(p2)}, headers=H).json()["id"]
+    oks = []
+    for cmd in ("diff -rN a b", "diff -r a b", "grep -r SECRET b", "find b -type f", "ls -R b", "git status",
+                "wc b/ld/secret.txt", "head b/ld/secret.txt"):
+        r = ex(c, fid2, cmd, timeout=5)
+        oks.append(rec2("symlink-walk", f"folder has b/ld → $OUT: {cmd}", "no outside content",
+                       summ(r).replace(str(out), "$OUT"), not leaked(r) and "deep.txt" not in r.text))
+    assert all(oks)
+
+
+def test_hosts_more(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    oks = []
+    for h, exp in (("[::1]:8765", 200), ("[::1]", 200), ("[::1]evil", 421), ("[::1]:80:80", 421), ("[::1]:", 421),
+                   ("[0:0:0:0:0:0:0:1]", 421), ("[::1%lo0]", 421), ("[::1]:8765 ", 200), ("[::1]\t", 200),
+                   ("localhost.", 421), ("127.0.0.1:abc", 421), ("[::1],evil", 421), ("localhost,evil.example", 421)):
+        r = c.get("/folders", headers={"host": h, "authorization": f"Bearer {TOK}"})
+        oks.append(rec2("host", f"Host: {h!r}", str(exp), str(r.status_code), r.status_code == exp))
+    assert all(oks)
+
+
+def test_stdin_devnull(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    t = time.time()
+    r = ex(c, fid, "cat", timeout=20)
+    dt = time.time() - t
+    assert rec2("stdin", "cat (no args)", "returns immediately (stdin=/dev/null)", f"{summ(r)} in {dt:.1f}s", dt < 5)
+
+
+def test_git_too_old(tmp_path, monkeypatch):
+    m, c, home, proj, out, fid = _make(tmp_path, monkeypatch)
+    _gitrepo(proj)
+    monkeypatch.setattr(m, "_GIT_ATTR_SUPPORT", False)
+    r = ex(c, fid, "git status")
+    assert rec2("git-old", "git status with git<2.40 (simulated)", "403 git_too_old", summ(r), r.status_code == 403)

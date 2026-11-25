@@ -23,3 +23,9 @@
   before confinement; `grep`/`tail`/`tree`/`ls` short-option clusters (`-rf`, `-fPATH`, `-rS`, `-lH`) are parsed
   getopt-style; writes to `.gitattributes`/`.gitmodules` are refused; child stdin is `/dev/null`; bracketed Host
   headers must be well-formed (`[::1]evil` -> 421).
+- Second review round: git runs with `GIT_CEILING_DIRECTORIES=<parent of root>` and a pre-flight that refuses (403)
+  when the repo's toplevel / git-dir / common-dir resolve outside the granted root (dotfiles repo at `$HOME`,
+  `.git` file with `gitdir:` outside, `core.worktree` outside; legitimate `git worktree` checkouts whose gitdir is
+  outside the root are therefore refused) or when `.git/info/attributes` defines attributes (hostile-repo filter/textconv).
+  `find` parses BSD flag clusters (`-xL`, `-Ef`, `-sx`) and `--`; `diff -r/--recursive` is denied (Apple diff follows
+  symlinks while recursing) and attached `-X<file>` is confined; Host ports must be numeric.

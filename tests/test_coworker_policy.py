@@ -325,8 +325,9 @@ def test_git_info_attributes_filter_not_run(env):
     (proj / ".git" / "info" / "attributes").write_text("*.txt filter=x\n")
     time.sleep(1.1)
     (proj / "ok.txt").write_text("changed\n")
-    assert _exec(c, fid, "git status").status_code == 200
-    assert _exec(c, fid, "git diff").status_code == 200
+    r = _exec(c, fid, "git status")
+    assert r.status_code == 403 and r.json()["code"] == "git_hostile_repo"
+    assert _exec(c, fid, "git diff").status_code == 403
     assert not (proj / "PWNED_INFO").exists()
 
 
