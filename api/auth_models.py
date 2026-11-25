@@ -36,3 +36,11 @@ class RevokedToken(Base):
     jti = Column(String(64), primary_key=True)
     user_id = Column(String, index=True, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
+
+
+class SetupState(Base):
+    """R-2: guard cấp DB — đúng 1 dòng (id=1) cho phép tạo ADMIN đầu tiên qua /setup, an toàn đa tiến trình."""
+    __tablename__ = "setup_state"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, server_default=func.now())

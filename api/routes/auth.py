@@ -27,12 +27,12 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from starlette.requests import HTTPConnection
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from api.auth_models import RevokedToken, User, UserRole
+from api.auth_models import RevokedToken, SetupState, User, UserRole
 from api.config import settings
 from api.database import get_db, SessionLocal
 from api.security import (
@@ -353,6 +353,18 @@ def _env_setup_token() -> str:
     return env
 
 
+def _read_setup_token() -> Optional[str]:
+    """Chỉ ĐỌC token (env hoặc file) — không bao giờ tạo (R-1)."""
+    env = _env_setup_token()
+    if env:
+        return env
+    try:
+        with open(os.path.join(_storage_dir(), "setup_token"), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
 def _setup_token(user_count: int) -> Optional[str]:
     """L-2: token thiết lập lần đầu. Env VULNGUARD_SETUP_TOKEN (>=16 ký tự) ưu tiên; nếu không, khi chưa có
     user thì đọc/tạo <storage>/setup_token (0600). Đã có user → None."""
@@ -406,6 +418,15 @@ def init_setup_token():
     if count > 0:
         _clear_setup_token()
         return
+    # chưa có user → guard cũ (nếu có, vd user bị xoá hết) không được chặn setup
+    gdb = SessionLocal()
+    try:
+        gdb.query(SetupState).delete()
+        gdb.commit()
+    except Exception:
+        gdb.rollback()
+    finally:
+        gdb.close()
     try:
         if _env_setup_token():
             _log.warning("Thiết lập lần đầu: dùng setup token từ VULNGUARD_SETUP_TOKEN")
@@ -430,7 +451,13 @@ def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depend
     count = _user_count(db)
     if count > 0:
         raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
-    expected = _setup_token(count)
+    expected = _read_setup_token()
+    if expected is None:
+        # R-1: file thiếu — có thể kẻ thắng vừa xoá nó. Đếm lại trong lock; chỉ tạo khi thật sự chưa có user.
+        with _SETUP_COMMIT_LOCK:
+            if _user_count(db) > 0:
+                raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+            expected = _setup_token(0)
     # S-1: so sánh TRƯỚC; token đúng không bao giờ bị khoá (kẻ tấn công NAT/LAN không DoS được chủ máy).
     # Chỉ lần sai mới bị đếm, vào 1 bucket toàn cục → xoay IP/X-Forwarded-For không né được.
     if not expected or not hmac.compare_digest(payload.setup_token.encode(), expected.encode()):
@@ -449,8 +476,16 @@ def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depend
             raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
         user = User(email=payload.email, name=payload.name.strip(), password_hash=pw_hash,
                     role=UserRole.ADMIN, last_login_at=datetime.utcnow())
+        # R-2: guard cấp DB (PK id=1) → chỉ 1 tiến trình tạo được ADMIN đầu tiên; còn lại IntegrityError → 409
+        db.add(SetupState(id=1))
         db.add(user)
-        db.commit()
+        try:
+            db.commit()
+        except (IntegrityError, OperationalError):
+            db.rollback()
+            if _user_count(db) > 0 or db.query(SetupState).count() > 0:
+                raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+            raise HTTPException(status_code=503, detail="Cơ sở dữ liệu đang bận — thử lại")
         db.refresh(user)
     with _LOGIN_LOCK:
         _LOGIN_FAILS.pop(SETUP_RL_KEY, None)
