@@ -38,6 +38,9 @@ def status():
         "auto_update": settings.kb_auto_update,
         "manifest_url": settings.kb_manifest_url,
         "update_interval_hours": settings.kb_update_interval_hours,
+        "require_signature": settings.kb_require_signature,
+        "signed_version": updater._read_sigstate(store.kb_path()).get("signed_version"),
+        "signed_built_at": updater._read_sigstate(store.kb_path()).get("signed_built_at"),
     }
 
 
