@@ -5,7 +5,7 @@
 ### Security — session revocation (fix/session-revocation)
 - **N-1** `POST /api/auth/logout` now actually revokes the JWT (per-token `jti` denylist, table `revoked_tokens`, created automatically). Previously the endpoint was public, the revoke branch never ran and the token stayed valid for `SESSION_TTL_HOURS`.
 - **N-2/M-4** File Assistant WebSocket validates the real session (revocation, `token_version`, `is_active`, current role) before `accept()` and on every message; rejects cross-origin handshakes and honours `FEATURE_FILE_ASSISTANT`.
-- **N-3** Login lockout no longer locks out the legitimate user: buckets by a signed per-device cookie (`vg_device`) when present, otherwise `(IP, email)`; bounded store; `Retry-After` header.
+- **N-3** Login lockout no longer locks out the legitimate user: buckets by a signed per-device cookie (`vg_device`) when present, otherwise one shared untrusted bucket per email; bounded store; `Retry-After` header.
 
 ### Hardening after independent verification
 - Device cookie MAC is now unambiguous (length-prefixed, derived subkey, bound to the user id, strict nonce format); an email containing `|` can no longer mint trusted buckets for another account.

@@ -200,3 +200,15 @@ def test_logout_bad_header_still_revokes_cookie_token():
     c2 = new_client()
     c2.cookies.set("vg_session", t)
     assert c2.get("/api/auth/me").status_code == 401
+
+
+def test_r1_saturated_store_still_locks_new_bucket(monkeypatch):
+    auth._LOGIN_FAILS.clear()
+    monkeypatch.setattr(auth, "_MAX_KEYS", 20)
+    for i in range(20):                       # kho đầy các key đã khoá
+        for _ in range(auth._MAX_FAILS):
+            auth._record_fail(f"untrusted|junk{i}@x")
+    assert len(auth._LOGIN_FAILS) == 20
+    email, _ = make_user()
+    codes = _bad(new_client(), email, auth._MAX_FAILS + 1)
+    assert codes == [401] * auth._MAX_FAILS + [429]

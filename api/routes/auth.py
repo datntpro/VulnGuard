@@ -345,9 +345,10 @@ def _record_fail_locked(key: str, now: float):
             break
     # cắt cho đủ giới hạn, ưu tiên bỏ key CHƯA bị khoá (không dùng spray để mở khoá bucket)
     while len(_LOGIN_FAILS) > _MAX_KEYS:
-        victim = next((k for k, (c, _) in _LOGIN_FAILS.items() if c < _MAX_FAILS), None)
+        # không bao giờ đẩy chính key vừa ghi (nếu không, khi kho đầy key đã khoá, bucket mới không thể khoá)
+        victim = next((k for k, (c, _) in _LOGIN_FAILS.items() if c < _MAX_FAILS and k != key), None)
         if victim is None:
-            victim = next(iter(_LOGIN_FAILS))
+            victim = next(k for k in _LOGIN_FAILS if k != key)   # key khoá cũ nhất
         _LOGIN_FAILS.pop(victim)
 
 
