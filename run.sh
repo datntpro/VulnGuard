@@ -41,9 +41,8 @@ echo "  VulnGuard PRODUCTION:  http://$HOST:$PORT"
 echo "  Lần đầu: tạo tài khoản ADMIN ngay trên trang đăng nhập."
 echo "  (Ctrl+C để dừng)"
 echo "─────────────────────────────────────────────"
-# Trạng thái nằm trong bộ nhớ tiến trình (khoá scan, proxy pentest, scheduler, lockout đăng nhập,
-# nonce Co-work) → CHỈ hỗ trợ 1 worker / 1 instance (B-5, D-14).
+# D-14: trạng thái nằm trong bộ nhớ tiến trình (khoá scan, lockout, nonce, proxy, scheduler) → chỉ hỗ trợ 1 worker.
 if [ "${VULNGUARD_WORKERS:-1}" != "1" ]; then
-  echo "⚠️  VULNGUARD_WORKERS=${VULNGUARD_WORKERS} bị bỏ qua: VulnGuard chỉ hỗ trợ 1 worker (state trong bộ nhớ)." >&2
+  echo "⚠️  VULNGUARD_WORKERS=${VULNGUARD_WORKERS} bị bỏ qua: VulnGuard chỉ hỗ trợ 1 worker/1 instance (trạng thái trong bộ nhớ)." >&2
 fi
 exec "$VENV/bin/uvicorn" api.main:app --host "$HOST" --port "$PORT" --workers 1
