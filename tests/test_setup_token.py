@@ -15,6 +15,13 @@ from api.routes import auth as auth_mod
 TOKEN = "test-setup-token"
 
 
+@pytest.fixture(autouse=True)
+def _clean_limiter():
+    auth_mod._LOGIN_FAILS.clear()
+    yield
+    auth_mod._LOGIN_FAILS.clear()
+
+
 def _body(**kw):
     d = {"email": f"{uuid4().hex}@t.local", "name": "A", "password": "Longpass-123"}
     d.update(kw)
