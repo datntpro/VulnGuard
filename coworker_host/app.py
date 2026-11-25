@@ -643,6 +643,11 @@ def _confine_if_pathlike(value: str, root: Path, cwd: Path):
         _confine(value, root, cwd)
 
 
+def _long_in(name: str, fulls) -> bool:
+    """Tên option dài (có thể viết tắt theo kiểu getopt_long: --deref) khớp một option trong `fulls`."""
+    return any(f == name or (len(name) >= 5 and f.startswith(name)) for f in fulls)
+
+
 def _opt_name(t: str) -> str:
     return t.split("=", 1)[0] if t.startswith("--") else t
 
@@ -665,7 +670,7 @@ def _check_generic(executable: str, tokens: List[str], root: Path, cwd: Path,
         elif t == "--":
             end_opts = True
         elif t.startswith("--"):
-            if _opt_name(t) in denied_long:
+            if _long_in(_opt_name(t), denied_long):
                 raise _deny(executable, t)
             if "=" in t:
                 _confine(t.split("=", 1)[1], root, cwd)
@@ -750,15 +755,15 @@ def _check_grep(tokens: List[str], root: Path, cwd: Path):
             end_opts = True
         elif t.startswith("--"):
             name = _opt_name(t)
-            if name in _GREP_LONG_DENIED:
+            if _long_in(name, _GREP_LONG_DENIED):
                 raise _deny("grep", t)
             val = t.split("=", 1)[1] if "=" in t else None
-            if name in _GREP_LONG_PATHS:
+            if _long_in(name, _GREP_LONG_PATHS):
                 if val is None:
                     i += 1
                     val = tokens[i] if i < n else ""
                 _confine(val, root, cwd)
-            elif name == "--regexp":
+            elif _long_in(name, ("--regexp",)):
                 if val is None:
                     i += 1
                     val = tokens[i] if i < n else ""
