@@ -5,7 +5,7 @@ Mã nguồn: `api/routes/auth.py`, `api/security.py`, `api/auth_models.py`.
 ## Luồng đăng nhập
 
 1. `GET /api/auth/status` trả `auth_enabled` và `setup_required` (true khi DB chưa có user).
-2. Nếu chưa có user: `POST /api/auth/setup` tạo ADMIN đầu tiên (`email`, `name`, `password` tối thiểu 10 ký tự, và `setup_token`). Setup token lấy từ `VULNGUARD_SETUP_TOKEN` hoặc file `storage/setup_token` (0600, tự sinh khi chưa có user, xoá sau khi setup; Docker: `docker exec vulnguard-api cat /app/storage/setup_token`). Sai token → 403, thử sai nhiều lần → 429; `/status` có `setup_token_required`. Endpoint trả 409 khi đã có user.
+2. Nếu chưa có user: `POST /api/auth/setup` tạo ADMIN đầu tiên (`email`, `name`, `password` tối thiểu 10 ký tự, và `setup_token`). Setup token lấy từ `VULNGUARD_SETUP_TOKEN` hoặc file `storage/setup_token` (0600, tự sinh khi chưa có user, xoá sau khi setup; Docker: `docker exec vulnguard-api cat /app/storage/setup_token`). File token được tạo ngay khi khởi động. Env token phải ≥ 16 ký tự. Sai token → 403, sai nhiều lần → 429 (bucket toàn cục; token đúng không bao giờ bị khoá); `/status` có `setup_token_required`. Endpoint trả 409 khi đã có user.
 3. `POST /api/auth/login` với `email`, `password`. Server đặt cookie `vg_session` (HttpOnly, `SameSite=Strict`, `Secure` theo `COOKIE_SECURE`, hạn `SESSION_TTL_HOURS`) và trả về `token` để dùng cho CLI/CI.
 4. Mọi request `/api/*` (trừ `status`, `login`, `setup`, `logout`, `/api/health`) cần cookie hoặc header `Authorization: Bearer <token>`. Trang `/` chưa đăng nhập bị chuyển tới `/login`.
 

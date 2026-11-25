@@ -337,15 +337,27 @@ def _storage_dir() -> str:
     return settings.storage_dir
 
 
-_SETUP_LOCK = threading.Lock()
+_SETUP_LOCK = threading.Lock()          # bảo vệ việc tạo file token
+_SETUP_COMMIT_LOCK = threading.Lock()   # M-2: tuần tự hoá "đếm user → INSERT → commit" (D-14: 1 tiến trình)
 _setup_hint_logged = False
+_MIN_ENV_TOKEN = 16
+SETUP_RL_KEY = "setup|global"            # S-1/S-2: một bucket toàn cục, không phụ thuộc IP (NAT/XFF)
+_log = logging.getLogger("vulnguard.auth")
+
+
+def _env_setup_token() -> str:
+    env = (settings.vulnguard_setup_token or "").strip()
+    if env and len(env) < _MIN_ENV_TOKEN:
+        _log.error("VULNGUARD_SETUP_TOKEN quá ngắn (<%d ký tự) → bỏ qua, dùng file storage/setup_token", _MIN_ENV_TOKEN)
+        return ""
+    return env
 
 
 def _setup_token(user_count: int) -> Optional[str]:
-    """L-2: token thiết lập lần đầu. Env VULNGUARD_SETUP_TOKEN ưu tiên; nếu không, khi chưa có user
-    thì đọc/tạo <storage>/setup_token (0600). Đã có user → None."""
+    """L-2: token thiết lập lần đầu. Env VULNGUARD_SETUP_TOKEN (>=16 ký tự) ưu tiên; nếu không, khi chưa có
+    user thì đọc/tạo <storage>/setup_token (0600). Đã có user → None."""
     global _setup_hint_logged
-    env = (settings.vulnguard_setup_token or "").strip()
+    env = _env_setup_token()
     if env:
         return env
     if user_count > 0:
@@ -360,15 +372,18 @@ def _setup_token(user_count: int) -> Optional[str]:
         except OSError:
             pass
         tok = secrets.token_urlsafe(24)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(tok + "\n")
-        os.chmod(path, 0o600)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(tok + "\n")
+            os.chmod(path, 0o600)
+        except OSError as e:
+            _log.error("Không ghi được %s (%s). Docker: chown 10001 storage", path, e)
+            raise HTTPException(status_code=500, detail="Không tạo được setup token — thư mục storage không ghi được")
         if not _setup_hint_logged:
             _setup_hint_logged = True
-            logging.getLogger("vulnguard.auth").warning(
-                "Thiết lập lần đầu: lấy setup token tại %s (docker exec vulnguard-api cat /app/storage/setup_token)", path)
+            _log.warning("Thiết lập lần đầu: lấy setup token tại %s (docker exec vulnguard-api cat /app/storage/setup_token)", path)
         return tok
 
 
@@ -376,6 +391,27 @@ def _clear_setup_token():
     try:
         os.remove(os.path.join(_storage_dir(), "setup_token"))
     except OSError:
+        pass
+
+
+def init_setup_token():
+    """M-1: gọi lúc khởi động — tạo file token (đã có user thì xoá file cũ) để hướng dẫn đọc token chạy ngay lần đầu."""
+    if not settings.auth_enabled:
+        return
+    db = SessionLocal()
+    try:
+        count = _user_count(db)
+    finally:
+        db.close()
+    if count > 0:
+        _clear_setup_token()
+        return
+    try:
+        if _env_setup_token():
+            _log.warning("Thiết lập lần đầu: dùng setup token từ VULNGUARD_SETUP_TOKEN")
+        else:
+            _setup_token(0)
+    except HTTPException:
         pass
 
 
@@ -390,24 +426,34 @@ def auth_status(db: Session = Depends(get_db)):
 
 
 @router.post("/setup")
-def setup_first_admin(payload: SetupIn, request: Request, response: Response, db: Session = Depends(get_db)):
+def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depends(get_db)):
     count = _user_count(db)
     if count > 0:
         raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
-    ip = request.client.host if request.client else "?"
-    key = f"setup|{ip}"
-    _reserve_attempt(key)       # chống dò token: dùng chung cơ chế khoá của login
     expected = _setup_token(count)
+    # S-1: so sánh TRƯỚC; token đúng không bao giờ bị khoá (kẻ tấn công NAT/LAN không DoS được chủ máy).
+    # Chỉ lần sai mới bị đếm, vào 1 bucket toàn cục → xoay IP/X-Forwarded-For không né được.
     if not expected or not hmac.compare_digest(payload.setup_token.encode(), expected.encode()):
+        with _LOGIN_LOCK:
+            now = _time.time()
+            retry = _locked_retry(SETUP_RL_KEY, now)
+            if not retry:
+                _record_fail_locked(SETUP_RL_KEY, now)
+        if retry:
+            raise HTTPException(status_code=429, detail=f"Quá nhiều lần nhập sai setup token. Thử lại sau {retry // 60 + 1} phút.",
+                                headers={"Retry-After": str(retry)})
         raise HTTPException(status_code=403, detail="Setup token không đúng")
-    user = User(email=payload.email, name=payload.name.strip(),
-                password_hash=hash_password(payload.password), role=UserRole.ADMIN,
-                last_login_at=datetime.utcnow())
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    pw_hash = hash_password(payload.password)   # tính ngoài lock (scrypt chậm)
+    with _SETUP_COMMIT_LOCK:                    # M-2: một người thắng, còn lại 409
+        if _user_count(db) > 0:
+            raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+        user = User(email=payload.email, name=payload.name.strip(), password_hash=pw_hash,
+                    role=UserRole.ADMIN, last_login_at=datetime.utcnow())
+        db.add(user)
+        db.commit()
+        db.refresh(user)
     with _LOGIN_LOCK:
-        _LOGIN_FAILS.pop(key, None)
+        _LOGIN_FAILS.pop(SETUP_RL_KEY, None)
     _clear_setup_token()
     token = _set_session(response, user)
     return {"user": UserOut.model_validate(user), "token": token}

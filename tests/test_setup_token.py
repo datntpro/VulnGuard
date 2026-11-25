@@ -81,7 +81,100 @@ def test_file_token_created_0600_and_deleted(tmp_path, monkeypatch):
 
 
 def test_env_token_takes_precedence(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "vulnguard_setup_token", "from-env-123")
+    monkeypatch.setattr(settings, "vulnguard_setup_token", "from-env-token-1234567")
     monkeypatch.setattr(auth_mod, "_storage_dir", lambda: str(tmp_path))
-    assert auth_mod._setup_token(0) == "from-env-123"
+    assert auth_mod._setup_token(0) == "from-env-token-1234567"
     assert not (tmp_path / "setup_token").exists()
+
+
+def test_short_env_token_ignored(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "vulnguard_setup_token", "a")
+    monkeypatch.setattr(auth_mod, "_storage_dir", lambda: str(tmp_path))
+    tok = auth_mod._setup_token(0)
+    assert tok != "a" and (tmp_path / "setup_token").exists()
+
+
+# ── DB trống thật (engine riêng) ──
+@pytest.fixture
+def real_empty(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    eng = create_engine(f"sqlite:///{tmp_path}/e.db", connect_args={"check_same_thread": False})
+    database.Base.metadata.create_all(eng)
+    SL = sessionmaker(autocommit=False, autoflush=False, bind=eng)
+
+    def _get_db():
+        db = SL()
+        try:
+            yield db
+        finally:
+            db.close()
+    app.dependency_overrides[database.get_db] = _get_db
+    monkeypatch.setattr(auth_mod, "SessionLocal", SL)
+    monkeypatch.setattr(auth_mod, "_storage_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(settings, "vulnguard_setup_token", "")
+    auth_mod._LOGIN_FAILS.clear()
+    yield SL, tmp_path
+    app.dependency_overrides.pop(database.get_db, None)
+
+
+def test_startup_creates_token_file_0600(real_empty):
+    """M-1: file token có ngay sau khởi động, không cần POST /setup."""
+    _, tmp = real_empty
+    auth_mod.init_setup_token()
+    p = tmp / "setup_token"
+    assert p.exists()
+    if os.name == "posix":
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
+
+
+def test_startup_removes_stale_token_when_users_exist(real_empty):
+    SL, tmp = real_empty
+    db = SL()
+    db.add(User(email="x@t.local", name="x", password_hash="h", role=auth_mod.UserRole.ADMIN))
+    db.commit(); db.close()
+    (tmp / "setup_token").write_text("stale")
+    auth_mod.init_setup_token()
+    assert not (tmp / "setup_token").exists()
+
+
+def test_lifecycle_and_concurrent_setup_single_admin(real_empty):
+    """M-2: N request đồng thời với token đúng → đúng 1 ADMIN (200), còn lại 409."""
+    import threading
+    SL, tmp = real_empty
+    auth_mod.init_setup_token()
+    tok = (tmp / "setup_token").read_text().strip()
+    codes, barrier = [], threading.Barrier(16)
+
+    def go(i):
+        with TestClient(app) as c:
+            barrier.wait()
+            r = c.post("/api/auth/setup", json=_body(email=f"r{i}@t.local", setup_token=tok))
+            codes.append(r.status_code)
+    ts = [threading.Thread(target=go, args=(i,)) for i in range(16)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    db = SL()
+    assert db.query(User).count() == 1
+    db.close()
+    assert codes.count(200) == 1 and all(c in (200, 409) for c in codes), codes
+    assert not (tmp / "setup_token").exists()      # xoá sau khi setup
+
+
+def test_correct_token_not_locked_out_by_attacker(real_empty):
+    """S-1: 5+ lần sai (cùng NAT IP) không chặn chủ máy có token đúng."""
+    _, tmp = real_empty
+    auth_mod.init_setup_token()
+    tok = (tmp / "setup_token").read_text().strip()
+    with TestClient(app) as c:
+        codes = [c.post("/api/auth/setup", json=_body(setup_token=f"bad{i}")).status_code for i in range(16)]
+        assert 429 in codes
+        r = c.post("/api/auth/setup", json=_body(setup_token=tok))
+        assert r.status_code == 200
+
+
+def test_xff_rotation_does_not_bypass_limiter(real_empty):
+    """S-2: xoay X-Forwarded-For không né được giới hạn."""
+    with TestClient(app) as c:
+        codes = [c.post("/api/auth/setup", json=_body(setup_token=f"b{i}"),
+                        headers={"X-Forwarded-For": f"10.0.0.{i}"}).status_code for i in range(16)]
+    assert 429 in codes

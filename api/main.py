@@ -273,6 +273,16 @@ async def _check_bind():
 
 
 @app.on_event("startup")
+async def _init_setup_token():
+    try:
+        from api.routes.auth import init_setup_token
+        init_setup_token()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[setup-token] không khởi tạo được: {e}")
+
+
+@app.on_event("startup")
 async def _start_scheduler():
     try:
         from api.services import scheduler

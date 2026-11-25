@@ -37,6 +37,7 @@
 - `POST /api/auth/setup` now requires `setup_token`: `VULNGUARD_SETUP_TOKEN`, or an auto-generated `storage/setup_token`
   (0600, created only while no user exists, deleted after a successful setup; never logged — only its path). Wrong/missing
   token → 403, repeated guesses → 429 (shared lockout limiter). `/api/auth/status` adds `setup_token_required`.
+- Hardening after review: the token file is created at startup (stale file removed when users exist); setup is atomic (single winner, others 409); a correct token is never rate-limited and wrong guesses share one global bucket (no per-IP/X-Forwarded-For dependence, so NAT/LAN attackers cannot lock the owner out); env tokens shorter than 16 chars are ignored; `docker-compose.yml` forwards `VULNGUARD_SETUP_TOKEN`.
 - Login page setup form has a "Setup token" field. `scripts/bootstrap_admin.py` (installer) is unchanged.
 - `run.sh` ignores `VULNGUARD_WORKERS>1` with a warning (in-memory state requires a single worker).
 - Tests: `tests/test_setup_token.py`.
