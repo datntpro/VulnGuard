@@ -460,15 +460,17 @@ class ZipLimitExceeded(ValueError):
 
 
 def _precheck_central_directory(src, max_files: int) -> None:
-    """Đọc End-of-Central-Directory (và Zip64) để biết số entry / kích thước central directory
-    TRƯỚC khi zipfile.ZipFile() dựng ZipInfo cho từng entry (chống cạn RAM)."""
+    """Đếm record trong central directory MÀ KHÔNG dựng ZipInfo, bằng đúng cách CPython xác
+    định vị trí CD (luôn dò Zip64 locator ngay trước EOCD). Không tin số entry khai báo.
+    Vượt max_files → ZipLimitExceeded, TRƯỚC khi zipfile.ZipFile() ăn RAM."""
     import struct
+    import zipfile
     opened = None
     f = src
     if isinstance(src, (str, os.PathLike)):
         opened = f = open(src, "rb")
     try:
-        pos = f.tell() if hasattr(f, "tell") else 0
+        pos0 = f.tell()
         f.seek(0, os.SEEK_END)
         end = f.tell()
         tail_len = min(end, 22 + 0xFFFF)
@@ -477,17 +479,32 @@ def _precheck_central_directory(src, max_files: int) -> None:
         i = tail.rfind(b"PK\x05\x06")
         if i < 0 or len(tail) - i < 22:
             return  # để zipfile báo BadZipFile
-        total, cd_size = struct.unpack("<HI", tail[i + 10:i + 16])
-        if (total == 0xFFFF or cd_size == 0xFFFFFFFF) and i >= 20 \
-                and tail[i - 20:i - 16] == b"PK\x06\x07":
-            z64_off = struct.unpack("<Q", tail[i - 12:i - 4])[0]
-            f.seek(z64_off)
-            rec = f.read(56)
-            if rec[:4] == b"PK\x06\x06" and len(rec) >= 48:
-                total, cd_size = struct.unpack("<QQ", rec[32:48])
-        if total > max_files or cd_size > max_files * 1024:
-            raise ZipLimitExceeded(f"Zip có quá nhiều file (tối đa {max_files})")
-        f.seek(pos)
+        eocd_pos = end - tail_len + i
+        cd_size = struct.unpack("<I", tail[i + 12:i + 16])[0]
+        cd_end = eocd_pos
+        if eocd_pos >= 76:  # luôn dò Zip64 như CPython (không phụ thuộc giá trị 0xFFFF)
+            f.seek(eocd_pos - 20)
+            if f.read(4) == b"PK\x06\x07":
+                f.seek(eocd_pos - 76)
+                rec = f.read(56)
+                if len(rec) == 56 and rec[:4] == b"PK\x06\x06":
+                    cd_size = struct.unpack("<Q", rec[40:48])[0]
+                    cd_end = eocd_pos - 76
+        start = cd_end - cd_size
+        if start < 0:
+            raise zipfile.BadZipFile("Bad offset for central directory")
+        pos, count = start, 0
+        while pos < cd_end:
+            f.seek(pos)
+            h = f.read(46)
+            if len(h) < 46 or h[:4] != b"PK\x01\x02":
+                raise zipfile.BadZipFile("Bad magic number for central directory")
+            n, m, k = struct.unpack("<HHH", h[28:34])
+            pos += 46 + n + m + k
+            count += 1
+            if count > max_files:
+                raise ZipLimitExceeded(f"Zip có quá nhiều file (tối đa {max_files})")
+        f.seek(pos0)
     finally:
         if opened:
             opened.close()

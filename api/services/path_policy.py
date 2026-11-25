@@ -49,11 +49,20 @@ def _under_ci(p, base) -> bool:
     return len(pp) >= len(bp) and pp[:len(bp)] == bp
 
 
+_FIRMLINK = "/System/Volumes/Data"
+
+
 def _forms(p) -> list[str]:
-    """Dạng tuyệt đối chưa resolve + dạng đã resolve."""
+    """Dạng tuyệt đối chưa resolve + dạng đã resolve (+ bỏ/thêm firmlink macOS)."""
     raw = os.path.abspath(str(p))
     res = os.path.realpath(str(p))
-    return [raw] if raw == res else [raw, res]
+    out = [raw] if raw == res else [raw, res]
+    for x in list(out):
+        if x.startswith(_FIRMLINK + "/"):
+            out.append(x[len(_FIRMLINK):])
+        else:
+            out.append(_FIRMLINK + x)
+    return list(dict.fromkeys(out))
 
 
 def _clean_roots(items: list[str]) -> list[str]:
@@ -106,6 +115,16 @@ def _deny_reason(candidates: list[str], kind: str) -> str | None:
     homes = _forms(Path.home())
     sens_dirs = [f for h in homes for d in _HOME_SENSITIVE for f in _forms(os.path.join(h, d))]
     for p in candidates:
+        # Chặn MỌI mục dotfile/dotdir cấp cao nhất trong $HOME (.claude.json, .codex/, .cargo/,
+        # .m2/, .terraform.d/, …) — danh sách liệt kê luôn thiếu — và Library.
+        pp = _cf_parts(p)
+        for h in homes:
+            hp = _cf_parts(h)
+            if len(pp) > len(hp) and pp[:len(hp)] == hp and \
+                    (pp[len(hp)].startswith(".") or pp[len(hp)] == "library"):
+                return "nằm trong dotfile/thư mục cấu hình của home (chứa credential)"
+            if kind == "dir" and len(hp) >= len(pp) and hp[:len(pp)] == pp:
+                return "là home (hoặc thư mục cha của home) — hãy chọn thư mục dự án cụ thể"
         for s in storage:
             if _under_ci(p, s):
                 return "nằm trong thư mục dữ liệu của ứng dụng"

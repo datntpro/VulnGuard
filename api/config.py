@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     upload_max_uncompressed_bytes: int = 2 * 1024 * 1024 * 1024
     upload_max_files: int = 50_000
     upload_max_ratio: int = 200
+    # Giới hạn body cho mọi route POST/PUT/PATCH khác (docreview, knowledge import, logo…)
+    body_max_bytes: int = 300 * 1024 * 1024
 
     @property
     def storage_dir(self) -> str:

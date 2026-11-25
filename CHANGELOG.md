@@ -27,6 +27,11 @@
 - Zip: End-of-Central-Directory entry count / size is checked before `zipfile` parses the directory; `Content-Length` (or streamed bytes) over `UPLOAD_MAX_BYTES` + 1 MiB is rejected with 413 by a middleware before Starlette spools the body.
 - File Assistant re-checks the file extension on the resolved path.
 
+### PR #32 re-verification fixes
+- Credential deny-list is now a blanket rule: every top-level dot entry under `$HOME` (`~/.*`, casefold + NFC) plus `~/Library` is refused for both scan and File Assistant, and `~` itself (or an ancestor) cannot be scanned. A project placed under a dot directory of home (or `SCAN_ALLOWED_ROOTS` pointing into one) is therefore refused too. macOS firmlink aliases (`/System/Volumes/Data/...`) are normalised.
+- Zip pre-check no longer trusts EOCD counts: it locates the central directory the way CPython does (always probing the Zip64 locator) and counts records without building `ZipInfo`, aborting past `UPLOAD_MAX_FILES`.
+- A chunked upload over the limit now returns a real 413. Every POST/PUT/PATCH body is bounded (`BODY_MAX_BYTES`, default 300 MiB; `/scan-upload` uses `UPLOAD_MAX_BYTES`).
+
 ### Breaking changes (path-policy)
 - Scanning `~` itself, or any directory containing a credential folder, is refused in native mode.
 - **D-7** Scans of paths outside the allowed roots are now refused (400), for all roles. Set `SCAN_ALLOWED_ROOTS` to widen. Existing scans are unaffected.

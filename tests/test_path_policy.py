@@ -508,3 +508,134 @@ def _run(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+# ══════ Re-verify fixes (RV-1…RV-5) ══════
+CRED_CANDIDATES = [
+    ".terraform.d/credentials.tfrc.json", ".cargo/credentials.toml", ".m2/settings.xml",
+    ".composer/auth.json", ".claude.json", ".codex/auth.json", ".wrangler/config/default.toml",
+    ".bash_history.txt", ".oci/config.ini", ".boto.cfg", ".s3cfg.ini", ".pgpass.conf",
+    ".vault-token.txt", ".minikube/config/config.json", ".gcloud/credentials.json",
+    ".password-store/x.txt", ".gem/credentials.yml", ".ansible/vault.yml",
+    ".heroku/credentials.json", ".rclone.conf", ".SSH/notes.txt", ".Codex/auth.json",
+    "Library/Keychains/x.txt", "LIBRARY/x.txt",
+]
+
+
+@pytest.mark.parametrize("rel", CRED_CANDIDATES)
+def test_RV2_home_dotentries_blanket_denied(rel, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    f = home / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("secret")
+    (home / "proj").mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(settings, "scan_allowed_roots", "")
+    monkeypatch.setattr(settings, "file_assistant_allowed_roots", "")
+    monkeypatch.setattr(settings, "deploy_mode", "native")
+    roots = path_policy.file_assistant_roots()
+    with pytest.raises(PathNotAllowed):
+        resolve_under_roots(str(f), roots, "file")
+    top = str(home / rel.split("/")[0])
+    if os.path.isdir(top):
+        with pytest.raises(PathNotAllowed):
+            resolve_under_roots(top, roots, "dir")
+    # thư mục dự án thường trong home vẫn dùng được
+    assert resolve_under_roots(str(home / "proj"), roots, "dir")
+
+
+def test_RV5_firmlink_alias_denied(monkeypatch, tmp_path):
+    home = os.path.realpath(str(tmp_path / "home"))
+    os.makedirs(home + "/.docker")
+    monkeypatch.setenv("HOME", home)
+    alias = "/System/Volumes/Data" + home + "/.docker"
+    assert path_policy._deny_reason([alias], "dir")
+    assert path_policy._deny_reason([alias + "/config.json"], "file")
+
+
+def _many_entry_zip(path, n):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for i in range(n):
+            z.writestr(f"{i:x}", b"")
+
+
+def _no_zipfile(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("ZipFile must not be constructed")
+    monkeypatch.setattr(zipfile, "ZipFile", boom)
+
+
+def test_RV1_lying_zip64_eocd_rejected_before_parse(tmp_path, monkeypatch):
+    import struct
+    from api.routes import scans
+    monkeypatch.setattr(settings, "upload_max_files", 10)
+    p = tmp_path / "z64.zip"
+    _many_entry_zip(p, 70_000)  # > 65535 → Zip64 EOCD + locator
+    data = bytearray(p.read_bytes())
+    i = data.rfind(b"PK\x05\x06")
+    assert data[i - 20:i - 16] == b"PK\x06\x07"
+    struct.pack_into("<HHI", data, i + 8, 1, 1, 46)  # EOCD cổ điển nói dối
+    p.write_bytes(bytes(data))
+    _no_zipfile(monkeypatch)
+    with pytest.raises(scans.ZipLimitExceeded):
+        scans._safe_extract_zip(str(p), str(tmp_path / "d"))
+
+
+def test_RV1_lying_classic_eocd_total_rejected(tmp_path, monkeypatch):
+    import struct
+    from api.routes import scans
+    monkeypatch.setattr(settings, "upload_max_files", 100)
+    p = tmp_path / "c.zip"
+    _many_entry_zip(p, 5000)
+    data = bytearray(p.read_bytes())
+    struct.pack_into("<HH", data, data.rfind(b"PK\x05\x06") + 8, 1, 1)
+    p.write_bytes(bytes(data))
+    _no_zipfile(monkeypatch)
+    with pytest.raises(scans.ZipLimitExceeded):
+        scans._safe_extract_zip(str(p), str(tmp_path / "d"))
+
+
+def test_RV1_honest_small_zip_still_extracts(tmp_path):
+    from api.routes import scans
+    p = tmp_path / "ok.zip"
+    _many_entry_zip(p, 20)
+    assert scans._safe_extract_zip(str(p), str(tmp_path / "d")) == 20
+
+
+def _multipart_gen(boundary, chunks, tail=True):
+    def gen():
+        yield (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.zip\"\r\n"
+               "Content-Type: application/zip\r\n\r\n").encode()
+        for ch in chunks:
+            yield ch
+        if tail:
+            yield f"\r\n--{boundary}--\r\n".encode()
+    return gen()
+
+
+def test_RV3_chunked_over_limit_is_413(monkeypatch):
+    monkeypatch.setattr(settings, "upload_max_bytes", 1 << 20)
+    c, h = _client()
+    pid = _project(c, h)
+    hh = dict(h); hh["Content-Type"] = "multipart/form-data; boundary=XyZ"
+    r = c.post(f"/api/projects/{pid}/scan-upload", content=_multipart_gen("XyZ", [b"\0" * (1 << 20)] * 10), headers=hh)
+    assert r.status_code == 413, r.text
+
+
+def test_RV3_chunked_under_limit_ok(monkeypatch):
+    c, h = _client()
+    pid = _project(c, h)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("a.py", "x=1")
+    hh = dict(h); hh["Content-Type"] = "multipart/form-data; boundary=XyZ"
+    r = c.post(f"/api/projects/{pid}/scan-upload", content=_multipart_gen("XyZ", [buf.getvalue()]), headers=hh)
+    assert r.status_code == 202, r.text
+
+
+def test_RV4_other_upload_routes_bounded(monkeypatch):
+    monkeypatch.setattr(settings, "body_max_bytes", 1 << 20)
+    c, h = _client(UserRole.ADMIN)
+    r = c.post("/api/settings/report-logo", headers=h,
+               files={"file": ("l.png", b"\0" * (3 << 20), "image/png")})
+    assert r.status_code == 413, r.text
