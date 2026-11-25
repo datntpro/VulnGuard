@@ -17,3 +17,10 @@ from scanner.intel import feeds
 @pytest.fixture(scope="session", autouse=True)
 def _seed_intel():
     feeds.seed_for_test({"CVE-2021-44228": 0.97, "CVE-2020-0001": 0.02}, ["CVE-2021-44228"])
+
+
+@pytest.fixture(autouse=True)
+def _pentest_sandbox_default(monkeypatch):
+    """D7: test không chạy trong docker thật → tắt trần autonomy native (test D7 tự bật lại)."""
+    from scanner.pentest.settings import pentest_settings
+    monkeypatch.setattr(pentest_settings, "require_sandbox", "false")
