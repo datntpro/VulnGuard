@@ -311,7 +311,7 @@ async function maybeRoute() {
 
 // ── Render ───────────────────────────────────────────────
 function el(cls, html) { const d = document.createElement("div"); d.className = cls; if (html != null) d.innerHTML = html; return d; }
-function esc(s) { return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function scrollDown() { logEl.scrollTop = logEl.scrollHeight; }
 
 function renderDiff(diff) {
