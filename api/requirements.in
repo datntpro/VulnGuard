@@ -3,7 +3,7 @@
 #   uv pip compile --universal --python-version 3.11 --generate-hashes api/requirements.in -o api/requirements.txt
 # Scanner CLI (bandit, checkov, pip-audit, semgrep) KHÔNG nằm ở đây: mỗi cái ở venv riêng (docker/scanners/).
 # Core API
-fastapi>=0.111.0
+fastapi>=0.165.0
 uvicorn[standard]>=0.29.0
 # DB — giữ nguyên để tránh migration issues
 # >=2.0.36: bản 2.0.30 lỗi import trên Python 3.13 (native install distro mới)
