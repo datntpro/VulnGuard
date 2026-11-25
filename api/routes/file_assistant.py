@@ -399,7 +399,8 @@ def _ws_user_is_admin(websocket: WebSocket) -> bool:
     from api.routes.auth import resolve_user
     from api.auth_models import UserRole
     user = resolve_user(websocket)
-    return user is not None and user.role == UserRole.ADMIN
+    # B2: middleware HTTP không chạy cho WS → phải tự áp must_change_password
+    return user is not None and user.role == UserRole.ADMIN and not user.must_change_password
 
 
 def _ws_origin_ok(websocket: WebSocket) -> bool:

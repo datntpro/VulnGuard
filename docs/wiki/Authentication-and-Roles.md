@@ -70,6 +70,7 @@ Quản lý user (`/api/auth/users`): luôn phải còn ít nhất 1 ADMIN đang 
 
 - Mặc định **same-origin**: không bật CORS. Muốn cho client trình duyệt bên thứ ba, đặt `CORS_ALLOW_ORIGINS=https://a.example,https://b.example`.
 - Request ghi (`POST/PUT/PATCH/DELETE`) tới `/api/*` có `Origin` khác `Host` (và không nằm trong `CORS_ALLOW_ORIGINS`), hoặc `Sec-Fetch-Site: cross-site`, bị từ chối 403 (`bad_origin`). Request không có `Origin` (CLI/CI) vẫn được chấp nhận.
+- Sau reverse proxy: proxy phải **giữ nguyên header `Host`** (cả cho WebSocket lẫn guard Origin của HTTP), nếu không mọi thao tác ghi từ trình duyệt (kể cả đăng nhập) bị 403 `bad_origin`. Cách khác: đặt `CORS_ALLOW_ORIGINS=<origin công khai>`.
 - Mọi response có `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`; trang HTML có CSP nền (`default-src 'self'`, `frame-ancestors 'none'`, `connect-src 'self'`). CSP nghiêm ngặt không cho inline script được hoãn lại (cần refactor các `onclick` inline).
 - `/docs`, `/redoc`, `/openapi.json` yêu cầu đăng nhập (mọi role). `EXPOSE_API_DOCS=false` tắt hẳn.
 - `ALLOWED_HOSTS` (csv): khi auth bật và biến này khác rỗng, chỉ chấp nhận các Host đó (cộng loopback).

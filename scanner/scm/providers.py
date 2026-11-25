@@ -81,13 +81,38 @@ def check_base_url(url: Optional[str]) -> None:
     except socket.gaierror as e:
         raise ValueError(f"Không phân giải được host: {host}") from e
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if getattr(ip, "ipv4_mapped", None):
-            ip = ip.ipv4_mapped
-        if (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast
-                or ip.is_reserved or ip == ipaddress.ip_address("fd00:ec2::254")):
-            raise ValueError(f"base_url trỏ tới địa chỉ không được phép ({ip})")
-        if (ip.is_private) and not settings.scm_allow_private_hosts:
+        _check_ip(ipaddress.ip_address(info[4][0].split("%")[0]))
+
+
+_ALWAYS_BLOCKED = [ipaddress.ip_address(a) for a in ("fd00:ec2::254", "100.100.100.200", "192.0.0.192")]
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _embedded_v4(ip):
+    """IPv4 nhúng trong IPv6 (mapped, NAT64 64:ff9b::/96, 6to4 2002::/16, Teredo)."""
+    if ip.version != 6:
+        return None
+    if ip.ipv4_mapped:
+        return ip.ipv4_mapped
+    if ip.sixtofour:
+        return ip.sixtofour
+    if ip.teredo:
+        return ip.teredo[1]
+    if ip in ipaddress.ip_network("64:ff9b::/96"):
+        return ipaddress.ip_address(int(ip) & 0xFFFFFFFF)
+    return None
+
+
+def _check_ip(ip) -> None:
+    inner = _embedded_v4(ip)
+    if inner is not None:
+        _check_ip(inner)
+    if (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast
+            or ip.is_reserved or ip in _ALWAYS_BLOCKED):
+        raise ValueError(f"base_url trỏ tới địa chỉ không được phép ({ip})")
+    if not settings.scm_allow_private_hosts:
+        # is_global loại cả CGNAT 100.64/10 (metadata Alibaba), 192.0.0.0/24 và các dải đặc biệt khác
+        if ip.is_private or not ip.is_global or (ip.version == 4 and ip in _CGNAT):
             raise ValueError(f"base_url trỏ tới dải private ({ip}) — bật SCM_ALLOW_PRIVATE_HOSTS nếu là on-prem")
 
 

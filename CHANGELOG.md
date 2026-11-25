@@ -43,6 +43,13 @@
 - **I-1** `/docs`, `/redoc`, `/openapi.json` require login; `EXPOSE_API_DOCS=false` disables them. `mask_secret` shows only `…` + last 4 chars.
 - **E.5** Security headers on every response (`nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`) and a baseline CSP on HTML pages (Google Fonts allowed for `brand.css`).
 
+#### Review follow-ups (PR-E)
+- VIEWER accounts forced to change their password can now call `change-password`, `logout` and `logout-all` (previously permanently locked out).
+- `must_change_password` is also enforced on the File Assistant WebSocket.
+- `POST /api/auth/setup` returns 403 when `AUTH_ENABLED=false` (cannot plant the first ADMIN).
+- SCM `git clone` no longer follows HTTP redirects and only allows https (http with `SCM_ALLOW_HTTP`).
+- `check_base_url`: blocks `100.100.100.200`, `192.0.0.192`, IPv6-embedded IPv4 (6to4/NAT64/Teredo); with `SCM_ALLOW_PRIVATE_HOSTS=false` requires a globally routable address.
+
 #### Breaking changes (PR-E)
 - Third-party browser clients of the API break unless listed in `CORS_ALLOW_ORIGINS`. The bundled UI is unaffected.
 - With `AUTH_ENABLED=false`, Co-work, File Assistant and all admin routes are unavailable; requests with a non-loopback `Host` get 421.

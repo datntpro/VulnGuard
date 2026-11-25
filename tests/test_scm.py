@@ -120,3 +120,36 @@ def test_create_connection_rejects_ssrf(client, monkeypatch):
     r = client.post("/api/scm/connections", json={"name": "x", "provider": "GITLAB",
                                                   "base_url": "https://metadata.example", "token": "t"})
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("ip", ["100.100.100.200", "192.0.0.192", "2002:7f00:1::", "64:ff9b::7f00:1", "::ffff:169.254.169.254"])
+def test_check_base_url_extra_blocked(monkeypatch, ip):
+    import socket
+    from api.config import settings
+    monkeypatch.setattr(settings, "scm_allow_private_hosts", False)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))])
+    with pytest.raises(ValueError):
+        P.check_base_url("https://x.example")
+
+
+def test_metadata_blocked_even_when_private_allowed(monkeypatch):
+    _fake_dns(monkeypatch, "100.100.100.200")
+    with pytest.raises(ValueError):
+        P.check_base_url("https://x.example")
+
+
+def test_clone_disables_redirects(monkeypatch):
+    from api.services import scm_service
+    from api.scm_models import ScmConnection, ScmRepo, ScmProvider
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+    monkeypatch.setattr(scm_service.subprocess, "run", fake_run)
+    _fake_dns(monkeypatch, "93.184.216.34")
+    conn = ScmConnection(name="c", provider=ScmProvider.GITLAB, base_url="https://gl.example", token_enc=None)
+    repo = ScmRepo(repo_full_name="a/b", default_branch="main")
+    scm_service._clone(conn, repo, "/tmp/never")
+    cmd = seen[0]
+    assert "http.followRedirects=false" in cmd and "protocol.allow=never" in cmd and "protocol.https.allow=always" in cmd
+    assert cmd.index("clone") > cmd.index("http.followRedirects=false")

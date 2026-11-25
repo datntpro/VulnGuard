@@ -108,3 +108,8 @@ def test_cors_middleware_only_when_configured():
     src = open(m.__file__).read()
     assert "if _cors_origins:" in src
     assert 'allow_origins=["*"]' not in src
+
+
+def test_setup_blocked_when_auth_off(off):
+    r = off.post("/api/auth/setup", json={"email": "a@b.com", "name": "A", "password": "longpass123"}, headers=LOCAL)
+    assert r.status_code == 403 and r.json()["code"] == "auth_required"
