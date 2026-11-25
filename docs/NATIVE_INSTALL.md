@@ -17,7 +17,7 @@ Python virtualenv + systemd, không qua container.
 | Cách ly | Container riêng | Chạy trực tiếp trên host |
 | Service | Docker daemon quản lý | systemd quản lý |
 | Scan path | Path trong container (`/workspace/...`) | Path thật trên máy (`/home/user/...`) |
-| Scan CONTAINER (image) | Hoạt động đầy đủ (mount docker.sock) | **Hạn chế** — cần Docker daemon, khuyên tắt nếu máy không có Docker |
+| Scan CONTAINER (image) | Image công khai: đầy đủ; image chỉ có ở local: dùng `docker-compose.local-images.yml` (socket-proxy chỉ-đọc, không mount docker.sock vào app) | **Hạn chế** — cần Docker daemon, khuyên tắt nếu máy không có Docker |
 | Update | `docker compose build --no-cache` | `git pull` + chạy lại `install.sh` |
 
 ---

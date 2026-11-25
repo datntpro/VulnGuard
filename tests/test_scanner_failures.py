@@ -180,4 +180,6 @@ def test_dockerfile_precache_is_valid_and_loud():
     for line in text.splitlines():
         if "semgrep" in line and not line.lstrip().startswith("#"):
             assert "|| true" not in line and "2>/dev/null" not in line
-    assert "|| echo" not in text.split("semgrep==")[1]
+    # semgrep nay nằm trong venv riêng cài từ lockfile (PR-H) — từ bước đó trở đi không nuốt lỗi
+    assert "/tmp/scanners/$t.txt" in text
+    assert "|| echo" not in text.split("/tmp/scanners/$t.txt")[1]

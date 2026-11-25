@@ -18,11 +18,14 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      # Lưu ý: container chạy non-root (uid 10001). Nếu ./storage không ghi được,
-      # chạy: mkdir -p storage && chmod -R 777 storage  (hoặc chown 10001).
+      # Container chạy non-root (uid 10001). Nếu ./storage không ghi được (vd nâng cấp từ bản cũ
+      # chạy root), chạy:  sudo chown -R 10001:10001 storage   (KHÔNG dùng chmod 777).
       - ./storage:/app/storage
-      # docker.sock chỉ-đọc: đủ cho quét image (trivy/grype đọc), chặn tạo container.
-      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:ro
+      # KHÔNG mount docker.sock mặc định (N-5): ":ro" trên unix socket KHÔNG chặn gọi API
+      # (POST /containers/create với Privileged vẫn được chấp nhận → root trên host).
+      # Muốn quét image CHỈ có ở máy local: dùng override có socket-proxy chỉ-đọc:
+      #   docker compose -f docker-compose.yml -f docker-compose.local-images.yml up -d
+      # (image công khai vẫn quét được vì Trivy tự pull từ registry).
       - ${SCAN_WORKSPACE:-/tmp}:/workspace
     environment:
       - DEPLOY_MODE=docker
@@ -40,6 +43,8 @@ services:
       - VULNGUARD_COWORKER_TOKEN=${VULNGUARD_COWORKER_TOKEN:-}
       - MAX_SCANS_PER_PROJECT=${MAX_SCANS_PER_PROJECT:-5}
       - APP_ENV=${APP_ENV:-production}
+      # Chỉ tin X-Forwarded-For từ các IP này (uvicorn). Đặt IP reverse proxy trong .env nếu có.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
       # SonarQube (tuỳ chọn) — trỏ server sẵn có, hoặc dùng service bundled bên dưới
       - SONARQUBE_URL=${SONARQUBE_URL:-}
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}

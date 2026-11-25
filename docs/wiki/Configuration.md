@@ -60,7 +60,8 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 | `VULNGUARD_MCP_TOKEN` | `mcp_server/server.py` | Bắt buộc khi chạy MCP ở chế độ HTTP |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `scripts/bootstrap_admin.py` | Email / mật khẩu ADMIN đầu tiên |
 | `SCAN_WORKSPACE` | compose | Thư mục host mount vào `/workspace` |
-| `DOCKER_SOCK` | compose | Đường dẫn Docker socket mount vào container |
+| `DOCKER_SOCK` | `docker-compose.local-images.yml` | Đường dẫn Docker socket mà **container socket-proxy** (không phải app) mount; chỉ cần khi quét image local |
+| `FORWARDED_ALLOW_IPS` | Dockerfile (uvicorn) | IP được phép đặt `X-Forwarded-For` (mặc định `127.0.0.1`) |
 | `PENTEST_PROXY_PORT` | compose | Cổng host publish cho MITM proxy (mặc định `8788`) |
 | `SEMGREP_HOME` | Dockerfile, `install/run.sh` | Cache rule Semgrep |
 | `COWORKER_HOST_PORT`, `COWORKER_DATA_DIR` | `coworker_host/run.sh` | Cổng (mặc định `8765`) và thư mục dữ liệu của Coworker Host |
