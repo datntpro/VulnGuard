@@ -71,3 +71,23 @@ Trang này liệt kê các điểm cần biết khi triển khai, đã đối ch
 ## Báo lỗi bảo mật
 
 Báo riêng cho maintainer (`datntpro`), không mở issue công khai với chi tiết khai thác.
+
+## Coworker Host (Co-work) — mô hình đe dọa
+
+Token `VULNGUARD_COWORKER_TOKEN` nằm trong env của container API; mã chạy với quyền `appuser` trong
+container đọc được nó (`/proc/1/environ`). Vì vậy **chính sách phía host** mới là lớp kiểm soát thật:
+
+- `COWORKER_EXEC_MODE=safe` (mặc định): chỉ lệnh đọc; không có đường xác nhận. `trusted`: lệnh ngoài
+  whitelist cần `confirm_id` do server cấp (dùng một lần, 120 giây, gắn với đúng lệnh). `off`: tắt exec.
+- Đối số luôn bị giới hạn trong folder root (symlink được resolve); `find -exec`, `grep -R`, `git -c ...` bị chặn.
+- Tiến trình con chạy với môi trường tối thiểu (không có token). Scanner phía API cũng gỡ các secret khỏi env.
+- Folder nhạy cảm (`~/.ssh`, `~/Library`, `/etc`, tổ tiên của home, thư mục dữ liệu coworker) không cấp quyền được;
+  nên đặt thêm `COWORKER_ALLOWED_ROOTS`. Ghi vào `.git`, `.husky`, `.vscode`, `.idea`, `.direnv`, `.envrc` bị chặn.
+
+Rủi ro còn lại: đọc token cùng uid trong container; ở chế độ `trusted` người giữ token chạy được mã
+(interpreter thoát được giới hạn đối số theo thiết kế); file code được ghi sẽ chạy khi nhà phát triển chạy nó.
+
+Rủi ro còn lại (Coworker, bổ sung): hardlink có sẵn trong folder trỏ tới file ngoài root (không tạo được bằng lệnh safe);
+chế độ `trusted` = người giữ token chạy được mã.
+Safe-mode git từ chối repo có toplevel/git-dir ngoài root hoặc `.git/info/attributes` không rỗng. Repo có `.git` do kẻ tấn công cung cấp
+vẫn là lớp rủi ro cần thận trọng: chỉ cấp quyền cho dự án đáng tin.

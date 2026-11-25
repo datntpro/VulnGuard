@@ -887,10 +887,10 @@
         <div class="card">
           <h2>⚡ Chạy lệnh (sandbox trong folder đã chọn)</h2>
           <div class="notice" style="margin-bottom:12px;">
-            Lệnh nằm trong whitelist (git, npm, python, pytest, make...) chạy trực tiếp. Lệnh khác sẽ hỏi xác nhận trước khi chạy.
+            Mặc định host ở chế độ <b>safe</b>: chỉ chạy lệnh đọc (ls, cat, grep, find, git status/diff/log...). Lệnh khác (python, npm, make...) chỉ chạy khi chủ máy host bật <code>COWORKER_EXEC_MODE=trusted</code> và bạn xác nhận.
           </div>
           <div class="flex">
-            <input id="cw-exec-cmd" placeholder="Ví dụ: pytest -q  hoặc  git status" style="flex:1;" onkeydown="if(event.key==='Enter')cwExec()">
+            <input id="cw-exec-cmd" placeholder="Ví dụ: git status  hoặc  grep -rn TODO ." style="flex:1;" onkeydown="if(event.key==='Enter')cwExec()">
             <button class="btn btn-primary" onclick="cwExec()">Run</button>
           </div>
           <div id="cw-exec-confirm" style="display:none;margin-top:10px;" class="approve-blocked">
@@ -4361,7 +4361,7 @@ async function deleteModel(name) {
 }
 
 // ─── CO-WORK ───────────────────────────────────────────────────
-const cwState = { folders: [], folderId: null, currentPath: '', currentFile: null, suggestion: null };
+const cwState = { folders: [], folderId: null, currentPath: '', currentFile: null, suggestion: null, pendingConfirmId: null };
 
 async function cwInit() {
   await cwRefreshHealth();
@@ -4547,20 +4547,25 @@ async function cwExec(confirmRun) {
   confirmEl.style.display = 'none';
   outEl.style.display = 'block';
   outEl.textContent = 'Đang chạy...';
+  const body = { folder_id: cwState.folderId, command: cmd, cwd: cwState.currentPath };
+  if (confirmRun && cwState.pendingConfirmId) body.confirm_id = cwState.pendingConfirmId;
+  cwState.pendingConfirmId = null;
   try {
-    const data = await api('/api/coworker/fs/exec', {
-      method: 'POST',
-      body: { folder_id: cwState.folderId, command: cmd, cwd: cwState.currentPath, confirm: !!confirmRun },
-    });
+    const data = await api('/api/coworker/fs/exec', { method: 'POST', body });
     if (data.needs_confirm) {
+      cwState.pendingConfirmId = data.confirm_id || null;
       outEl.style.display = 'none';
       confirmEl.style.display = 'block';
-      document.getElementById('cw-exec-confirm-msg').textContent = data.message;
+      const msgEl = document.getElementById('cw-exec-confirm-msg');
+      msgEl.textContent = (data.message || '') + '  Lệnh: ' + (data.command || cmd);
       return;
     }
     outEl.textContent = `$ ${cmd}\nexit code: ${data.exit_code}  (${data.duration_sec}s)\n\n${data.stdout}${data.stderr ? '\n--- stderr ---\n' + data.stderr : ''}`;
   } catch (e) {
-    outEl.textContent = 'Lỗi: ' + e.message;
+    const m = String(e.message || e);
+    outEl.textContent = /chế độ safe|exec_mode_safe/.test(m)
+      ? 'Host đang ở chế độ safe — chỉ cho phép lệnh đọc. ' + m
+      : 'Lỗi: ' + m;
   }
 }
 

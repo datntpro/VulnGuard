@@ -348,9 +348,21 @@ async def _run_sideeffect(folder_id: str, action: str, args: Dict[str, Any]) -> 
         cwd = str(args.get("cwd", "") or "")
         if not command:
             return "LỖI: thiếu 'command' cho exec."
-        data = await _host_request("POST", "/fs/exec", json={
-            "folder_id": folder_id, "command": command, "cwd": cwd, "confirm": True,
-        })
+        # Người dùng đã duyệt ở UI agent → gọi host KHÔNG kèm confirm; nếu host (chế độ trusted)
+        # trả needs_confirm + confirm_id thì gọi lại đúng 1 lần với confirm_id đó.
+        payload = {"folder_id": folder_id, "command": command, "cwd": cwd}
+        try:
+            data = await _host_request("POST", "/fs/exec", json=payload)
+            if data.get("needs_confirm") and data.get("confirm_id"):
+                data = await _host_request("POST", "/fs/exec", json={**payload, "confirm_id": data["confirm_id"]})
+        except HTTPException as e:
+            code = (e.headers or {}).get("X-Coworker-Code")
+            if e.status_code == 403 and code in ("exec_mode_safe", "exec_disabled"):
+                return ("LỖI: exec bị tắt/hạn chế trên Coworker Host (chế độ safe/off) — lệnh này không chạy được. "
+                        f"Chi tiết: {e.detail}. Hãy dùng các tool đọc/ghi file thay thế hoặc báo người dùng.")
+            raise
+        if data.get("needs_confirm"):
+            return "LỖI: host yêu cầu xác nhận nhưng không cấp confirm_id — lệnh không được chạy."
         out = (data.get("stdout") or "") + (("\n[stderr]\n" + data.get("stderr")) if data.get("stderr") else "")
         code = data.get("exit_code", data.get("returncode", "?"))
         return f"Lệnh '{command}' (exit={code}):\n{out[:MAX_OBS_CHARS]}"
