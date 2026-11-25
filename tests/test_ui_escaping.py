@@ -148,7 +148,7 @@ def test_p18_confidence_badge_escaped_and_no_verified_tick():
 
 def test_p18_roe_card_escapes_every_dynamic_value():
     body = _fn("renderRoeCard")
-    for raw in ("${e.emergency_contact", "${e.roe_note", "${w.tz", "${w.start", "${w.end", "${set}", "${real}"):
+    for raw in ("${e.emergency_contact", "${e.roe_note}", "${w.tz", "${w.start", "${w.end", "${set}", "${real}"):
         assert raw not in body, raw
     for esc in ("escHtml(e.emergency_contact", "escHtml(e.roe_note", "escHtml(w.tz", "escHtml(set)", "escHtml(real)"):
         assert esc in body, esc
