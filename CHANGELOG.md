@@ -15,3 +15,11 @@
 - Host header parsing handles IPv6 (`[::1]:8765`); an empty Host is rejected (421).
 - The auto-generated token is no longer logged (only its file path). `coworker_host/run.sh` no longer sources `.env`.
 - Scanner subprocesses no longer inherit `VULNGUARD_COWORKER_TOKEN`, API keys or cloud secrets.
+- Hardening after independent adversarial review: all path policies (folder grants, write denylist, DATA_DIR,
+  `COWORKER_ALLOWED_ROOTS`) compare case-insensitively (`~/.SSH`, `/USERS/x`, `.GIT/config` on APFS/NTFS);
+  git runs with `--attr-source=<empty tree>` (needs git >= 2.40) so `filter`/`textconv` drivers from `.gitattributes`
+  cannot execute; safe-mode `git branch` is list-only; `git blame --contents`, `--no-index`, `--ignore-revs-file`,
+  `-O` are denied and every git path-like value is confined; `find` global flags (`-H -L -f -P -x ...`) are parsed
+  before confinement; `grep`/`tail`/`tree`/`ls` short-option clusters (`-rf`, `-fPATH`, `-rS`, `-lH`) are parsed
+  getopt-style; writes to `.gitattributes`/`.gitmodules` are refused; child stdin is `/dev/null`; bracketed Host
+  headers must be well-formed (`[::1]evil` -> 421).

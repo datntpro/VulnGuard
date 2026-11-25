@@ -139,11 +139,15 @@ for _h in (os.environ.get("COWORKER_ALLOWED_HOSTS") or "").split(","):
 _PUBLIC_PATHS = {"/health"}
 
 
+_BRACKET_HOST_RE = re.compile(r"^(\[[0-9a-f:.]+\])(:\d+)?$")
+
+
 def _host_only(h: str) -> str:
-    """Tách cổng khỏi Host header, hiểu cả IPv6 dạng [::1]:8765 (N-6)."""
+    """Tách cổng khỏi Host header, hiểu cả IPv6 dạng [::1]:8765 (N-6). Host dạng [..] sai cú pháp → ''."""
     h = h.strip().lower()
     if h.startswith("["):
-        return h[: h.find("]") + 1] if "]" in h else h
+        m = _BRACKET_HOST_RE.match(h)
+        return m.group(1) if m else ""
     return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
 
 
@@ -219,30 +223,54 @@ def _resolved(p) -> Path:
         return Path(p)
 
 
+def _cf_parts(p) -> tuple:
+    """Các thành phần path đã casefold — so sánh KHÔNG phân biệt hoa/thường (APFS/NTFS mặc định
+    case-insensitive: ~/.SSH, /USERS/x, .GIT/config là cùng một nơi)."""
+    return tuple(x.casefold() for x in Path(p).parts)
+
+
+def _under(p, base) -> bool:
+    """p nằm trong (hoặc bằng) base, so sánh casefold."""
+    pp, bp = _cf_parts(p), _cf_parts(base)
+    return len(pp) >= len(bp) and pp[: len(bp)] == bp
+
+
+def _forms(p) -> list:
+    """Dạng tuyệt đối chưa resolve + dạng đã resolve (vd /etc và /private/etc đều được kiểm)."""
+    raw = Path(os.path.abspath(str(p)))
+    res = _resolved(p)
+    return [raw] if raw == res else [raw, res]
+
+
 def _folder_allowed(path) -> Optional[str]:
     """Trả về lý do từ chối (str) hoặc None nếu folder được phép cấp quyền."""
-    p = _resolved(path)
-    home = _resolved(Path.home())
-    data = _resolved(DATA_DIR)
-    if p == Path(p.anchor):
-        return "Không cho phép cấp quyền toàn bộ root filesystem"
-    if p == home or p in home.parents:
-        return "Không cho phép cấp quyền home directory hoặc thư mục cha của nó — hãy chọn folder dự án cụ thể"
-    if p == data or p in data.parents or data in p.parents:
-        return "Folder trùng/chứa/nằm trong thư mục dữ liệu của Coworker Host"
+    pforms = _forms(path)
+    homes = _forms(Path.home())
+    datas = _forms(DATA_DIR)
+    for p in pforms:
+        if len(p.parts) <= 1:
+            return "Không cho phép cấp quyền toàn bộ root filesystem"
+        for h in homes:
+            if _under(h, p):  # p == home hoặc tổ tiên của home
+                return "Không cho phép cấp quyền home directory hoặc thư mục cha của nó — hãy chọn folder dự án cụ thể"
+        for d in datas:
+            if _under(p, d) or _under(d, p):
+                return "Folder trùng/chứa/nằm trong thư mục dữ liệu của Coworker Host"
     # Vùng hệ thống chỉ áp dụng cho path NGOÀI home (home có thể nằm dưới /root, /var/...).
-    sensitive = [_resolved(home / d) for d in _HOME_SENSITIVE]
-    if home not in p.parents:
-        sensitive += [_resolved(d) for d in _SYSTEM_DIRS]
-    for s_ in sensitive:
-        if p == s_ or s_ in p.parents:
-            return f"Folder nằm trong vùng nhạy cảm ({s_}) — không cho phép"
-        if p in s_.parents:
-            return f"Folder chứa vùng nhạy cảm ({s_}) — hãy chọn folder cụ thể hơn"
+    inside_home = any(_under(p, h) for p in pforms for h in homes)
+    sensitive = [f for h in homes for d in _HOME_SENSITIVE for f in _forms(h / d)]
+    if not inside_home:
+        sensitive += [f for d in _SYSTEM_DIRS for f in _forms(d)]
+    for p in pforms:
+        for s_ in sensitive:
+            if _under(p, s_):
+                return f"Folder nằm trong vùng nhạy cảm ({s_}) — không cho phép"
+            if _under(s_, p):
+                return f"Folder chứa vùng nhạy cảm ({s_}) — hãy chọn folder cụ thể hơn"
     roots = [r.strip() for r in (os.environ.get("COWORKER_ALLOWED_ROOTS") or "").split(",") if r.strip()]
     if roots:
-        rr = [_resolved(Path(r).expanduser()) for r in roots]
-        if not any(p == r or r in p.parents for r in rr):
+        rr = [f for r in roots for f in _forms(Path(r).expanduser())]
+        if not any(_under(p, r) for p in pforms for r in rr):
             return "Folder nằm ngoài COWORKER_ALLOWED_ROOTS"
     return None
 
@@ -478,16 +506,18 @@ def fs_read_file_b64(folder_id: str, path: str):
 
 
 _WRITE_DENY_DIRS = {".git", ".husky", ".vscode", ".idea", ".direnv"}
+_WRITE_DENY_NAMES = {".envrc", ".gitattributes", ".gitmodules"}
 
 
 def _check_write_allowed(folder: dict, target: Path):
     root = Path(folder["path"]).resolve()
-    rel_parts = target.relative_to(root).parts
-    if any(part in _WRITE_DENY_DIRS for part in rel_parts) or target.name == ".envrc":
-        raise CodedError(403, "write_denied", "Không cho ghi vào .git/.husky/.vscode/.idea/.direnv/.envrc (có thể tự chạy mã)")
-    data = _resolved(DATA_DIR)
-    if target == data or data in target.parents:
-        raise CodedError(403, "write_denied", "Không cho ghi vào thư mục dữ liệu của Coworker Host")
+    rel_parts = [x.casefold() for x in target.relative_to(root).parts]
+    if any(part in _WRITE_DENY_DIRS for part in rel_parts) or (rel_parts and rel_parts[-1] in _WRITE_DENY_NAMES):
+        raise CodedError(403, "write_denied",
+                         "Không cho ghi vào .git/.husky/.vscode/.idea/.direnv/.envrc/.gitattributes/.gitmodules (có thể tự chạy mã)")
+    for d in _forms(DATA_DIR):
+        if _under(target, d):
+            raise CodedError(403, "write_denied", "Không cho ghi vào thư mục dữ liệu của Coworker Host")
 
 
 @app.post("/fs/file")
@@ -563,14 +593,26 @@ def _consume_confirm(cid: str, h: str) -> bool:
 
 # ── Giới hạn đối số trong folder root ─────────────────────────
 _FIND_DENIED = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf",
-                "-fls", "-L", "-follow"}
-_GREP_DENIED = {"-R", "--dereference-recursive"}
-_TREE_DENIED = {"-o", "-l"}
-_TAIL_DENIED = {"-f", "-F", "--follow"}
+                "-fls", "-L", "-H", "-f", "-D", "-follow", "-files0-from"}
+_FIND_GLOBAL_OK = {"-P", "-E", "-X", "-d", "-s", "-x"}          # cờ toàn cục vô hại (đứng trước path)
+_FIND_PATH_OPERANDS = {"-newer", "-anewer", "-cnewer", "-samefile", "-mnewer"}
+_GREP_DENIED_CHARS = set("RSO")
+_GREP_VALUE_CHARS = set("efmABCdD")
+_GREP_LONG_PATHS = {"--file", "--exclude-from"}
+_GREP_LONG_DENIED = {"--dereference-recursive"}
+_TREE_DENIED_CHARS = set("ol")
+_TAIL_DENIED_CHARS = set("fF")
+_TAIL_DENIED_LONG = {"--follow", "--retry", "--pid"}
+_LS_DENIED_CHARS = set("LH")
 _GIT_SUBCOMMANDS = {"status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "blame"}
-_GIT_DENIED = {"--output", "-o", "--ext-diff", "--textconv", "--upload-pack", "--exec", "-O",
-               "--open-files-in-pager"}
-_PATH_CMDS = {"cat", "head", "tail", "wc", "diff", "ls", "tree"}
+_GIT_DENIED = {"--output", "--ext-diff", "--textconv", "--upload-pack", "--exec", "-O",
+               "--open-files-in-pager", "--contents", "--no-index", "--show-signature", "--paginate",
+               "--ignore-revs-file", "--git-dir", "--work-tree", "--exec-path", "--config-env"}
+_GIT_BRANCH_FLAGS = set("arvl")
+_GIT_BRANCH_LONG = {"--all", "--remotes", "--verbose", "--list", "--show-current", "--no-color", "--color",
+                    "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort",
+                    "--format", "--column", "--no-column", "--abbrev", "--no-abbrev", "--ignore-case"}
+_GIT_BRANCH_VALUE_LONG = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
 
 
 def _arg_err(code: str, msg: str):
@@ -582,12 +624,211 @@ def _confine(value: str, root: Path, cwd: Path):
         raise _arg_err("arg_outside_root", f"Đối số '{value}' bắt đầu bằng '~' — không cho phép")
     p = Path(value)
     p = (p if p.is_absolute() else cwd / p).resolve()
-    if p != root and root not in p.parents:
+    if not _under(p, root):
         raise _arg_err("arg_outside_root", f"Đối số '{value}' nằm ngoài folder được cấp quyền")
+
+
+def _confine_if_pathlike(value: str, root: Path, cwd: Path):
+    """Dùng cho slot có thể là pattern/revision: chỉ ép khi trông như path (~, có ..) hoặc đang
+    tồn tại trên đĩa (kể cả symlink trỏ ra ngoài). Path tuyệt đối không tồn tại thì vô hại."""
+    if not value or value == "-":
+        return
+    try:
+        exists = os.path.lexists(value if value.startswith("/") else cwd / value)
+    except (OSError, ValueError):
+        exists = False
+    if value.startswith("~") or ".." in Path(value).parts or exists:
+        _confine(value, root, cwd)
 
 
 def _opt_name(t: str) -> str:
     return t.split("=", 1)[0] if t.startswith("--") else t
+
+
+def _is_short_cluster(t: str) -> bool:
+    return len(t) > 1 and t[0] == "-" and t[1] != "-" and not t[1:].isdigit()
+
+
+def _deny(cmd: str, t: str):
+    return _arg_err("option_denied", f"{cmd}: tùy chọn '{t}' bị cấm")
+
+
+def _check_generic(executable: str, tokens: List[str], root: Path, cwd: Path,
+                   denied_chars=frozenset(), denied_long=frozenset()):
+    """cat/head/tail/wc/diff/ls/tree (và best-effort cho lệnh trusted): mọi positional và mọi --opt=value là path."""
+    end_opts = False
+    for t in tokens:
+        if end_opts:
+            _confine(t, root, cwd)
+        elif t == "--":
+            end_opts = True
+        elif t.startswith("--"):
+            if _opt_name(t) in denied_long:
+                raise _deny(executable, t)
+            if "=" in t:
+                _confine(t.split("=", 1)[1], root, cwd)
+        elif _is_short_cluster(t):
+            bad = denied_chars & set(t[1:])
+            if bad:
+                raise _deny(executable, t)
+        elif t.startswith("-") and t != "-":
+            continue
+        else:
+            _confine(t, root, cwd)
+
+
+def _check_find(tokens: List[str], root: Path, cwd: Path):
+    for t in tokens:
+        if t in _FIND_DENIED:
+            raise _deny("find", t)
+    i = 0
+    while i < len(tokens) and (tokens[i] in _FIND_GLOBAL_OK or re.fullmatch(r"-O\d", tokens[i])):
+        i += 1
+    while i < len(tokens) and not (tokens[i].startswith("-") or tokens[i] in ("(", "!")):
+        _confine(tokens[i], root, cwd)
+        i += 1
+    while i < len(tokens):
+        t = tokens[i]
+        if (t in _FIND_PATH_OPERANDS or t.startswith("-newer")) and i + 1 < len(tokens):
+            _confine(tokens[i + 1], root, cwd)
+            i += 1
+        i += 1
+
+
+def _check_grep(tokens: List[str], root: Path, cwd: Path):
+    have_pattern_opt = False
+    have_pattern_slot = False  # đã gặp positional đầu (pattern)
+    i = 0
+    n = len(tokens)
+    end_opts = False
+    # Quét lần 1: có -e/-f/--regexp/--file không (khi đó positional đầu là file, không phải pattern)
+    for t in tokens:
+        if t == "--":
+            break
+        if t.startswith("--"):
+            if _opt_name(t) in ("--regexp", "--file"):
+                have_pattern_opt = True
+        elif _is_short_cluster(t):
+            body = t[1:]
+            for ch in body:
+                if ch in "ef":
+                    have_pattern_opt = True
+                    break
+                if ch in _GREP_VALUE_CHARS:
+                    break
+    while i < n:
+        t = tokens[i]
+        if end_opts:
+            if not have_pattern_opt and not have_pattern_slot:
+                have_pattern_slot = True
+                _confine_if_pathlike(t, root, cwd)
+            else:
+                _confine(t, root, cwd)
+        elif t == "--":
+            end_opts = True
+        elif t.startswith("--"):
+            name = _opt_name(t)
+            if name in _GREP_LONG_DENIED:
+                raise _deny("grep", t)
+            val = t.split("=", 1)[1] if "=" in t else None
+            if name in _GREP_LONG_PATHS:
+                if val is None:
+                    i += 1
+                    val = tokens[i] if i < n else ""
+                _confine(val, root, cwd)
+            elif name == "--regexp":
+                if val is None:
+                    i += 1
+                    val = tokens[i] if i < n else ""
+                _confine_if_pathlike(val, root, cwd)
+            elif val is not None:
+                _confine_if_pathlike(val, root, cwd)
+        elif _is_short_cluster(t):
+            body = t[1:]
+            if _GREP_DENIED_CHARS & set(body):
+                raise _deny("grep", t)
+            for k, ch in enumerate(body):
+                if ch in _GREP_VALUE_CHARS:
+                    val = body[k + 1:]
+                    if not val:
+                        i += 1
+                        val = tokens[i] if i < n else ""
+                    if ch == "f":
+                        _confine(val, root, cwd)
+                    else:
+                        _confine_if_pathlike(val, root, cwd)
+                    break
+        elif t.startswith("-") and t != "-":
+            pass
+        else:
+            if not have_pattern_opt and not have_pattern_slot:
+                have_pattern_slot = True
+                _confine_if_pathlike(t, root, cwd)
+            else:
+                _confine(t, root, cwd)
+        i += 1
+
+
+def _check_git(tokens: List[str], root: Path, cwd: Path):
+    if not tokens or tokens[0] not in _GIT_SUBCOMMANDS:
+        raise _arg_err("option_denied", f"git: chỉ cho phép subcommand {', '.join(sorted(_GIT_SUBCOMMANDS))} "
+                                         "(không có tùy chọn trước subcommand)")
+    sub, rest = tokens[0], tokens[1:]
+    end_opts = False
+    for t in rest:
+        if end_opts:
+            _confine(t, root, cwd)
+            continue
+        if t == "--":
+            end_opts = True
+            continue
+        if _opt_name(t) in _GIT_DENIED or t.startswith("-O") or t.startswith("--out") or t.startswith("--cont") \
+                or t.startswith("--no-ind") or t.startswith("--ignore-revs"):
+            raise _deny("git", t)
+        if t.startswith("--"):
+            if "=" in t:
+                _confine_if_pathlike(t.split("=", 1)[1], root, cwd)
+        elif _is_short_cluster(t):
+            if "O" in t[1:]:
+                raise _deny("git", t)
+            if len(t) > 2:
+                _confine_if_pathlike(t[2:], root, cwd)
+        else:
+            _confine_if_pathlike(t, root, cwd)
+    if sub == "branch":
+        _check_git_branch(rest)
+
+
+def _check_git_branch(rest: List[str]):
+    """`git branch` chỉ ở chế độ liệt kê (safe mode là read-only)."""
+    listing = False
+    positionals = []
+    expect_value = False
+    for t in rest:
+        if expect_value:
+            expect_value = False
+            continue
+        if t == "--":
+            continue
+        if t.startswith("--"):
+            name = _opt_name(t)
+            if name not in _GIT_BRANCH_LONG:
+                raise _deny("git branch", t)
+            if name in ("--list", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"):
+                listing = True
+            if name in _GIT_BRANCH_VALUE_LONG and "=" not in t:
+                expect_value = True
+        elif _is_short_cluster(t):
+            if not set(t[1:]) <= _GIT_BRANCH_FLAGS:
+                raise _deny("git branch", t)
+            if "l" in t[1:]:
+                listing = True
+        elif t.startswith("-"):
+            raise _deny("git branch", t)
+        else:
+            positionals.append(t)
+    if positionals and not listing:
+        raise _deny("git branch", positionals[0] + " (tạo branch)")
 
 
 def _check_args(executable: str, tokens: List[str], root: Path, cwd: Path):
@@ -595,78 +836,50 @@ def _check_args(executable: str, tokens: List[str], root: Path, cwd: Path):
     if executable == "echo":
         return
     if executable == "find":
-        for t in tokens:
-            if t in _FIND_DENIED:
-                raise _arg_err("option_denied", f"find: tùy chọn '{t}' bị cấm")
-        for t in tokens:
-            if t.startswith("-") or t in ("(", "!"):
-                break
-            _confine(t, root, cwd)
-        return
+        return _check_find(tokens, root, cwd)
     if executable == "grep":
-        for t in tokens:
-            if _opt_name(t) in _GREP_DENIED:
-                raise _arg_err("option_denied", f"grep: tùy chọn '{t}' bị cấm")
-        pattern_given = any(t in ("-e", "-f") or t.startswith(("--regexp", "--file")) for t in tokens)
-        skip_pattern = not pattern_given
-        i = 0
-        while i < len(tokens):
-            t = tokens[i]
-            if t in ("-f", "--file") and i + 1 < len(tokens):
-                _confine(tokens[i + 1], root, cwd)
-                i += 2
-                continue
-            if t.startswith("--file="):
-                _confine(t.split("=", 1)[1], root, cwd)
-            elif t in ("-e", "--regexp"):
-                i += 2
-                continue
-            elif t.startswith("-"):
-                pass
-            elif skip_pattern:
-                skip_pattern = False
-            else:
-                _confine(t, root, cwd)
-            i += 1
-        return
+        return _check_grep(tokens, root, cwd)
     if executable == "git":
-        _check_git(tokens)
-        # positional paths (sau subcommand) — chỉ confine thứ trông giống path tuyệt đối/~/..
-        for t in tokens[1:]:
-            if not t.startswith("-") and (t.startswith(("/", "~")) or ".." in Path(t).parts):
-                _confine(t, root, cwd)
-        return
-    # Lệnh path-style (và best-effort cho lệnh ngoài whitelist ở chế độ trusted)
-    denied = {"tree": _TREE_DENIED, "tail": _TAIL_DENIED}.get(executable, set())
-    for t in tokens:
-        if _opt_name(t) in denied:
-            raise _arg_err("option_denied", f"{executable}: tùy chọn '{t}' bị cấm")
-    for t in tokens:
-        if t.startswith("--") and "=" in t:
-            _confine(t.split("=", 1)[1], root, cwd)
-        elif t.startswith("-") and t != "-":
-            continue
-        else:
-            _confine(t, root, cwd)
+        return _check_git(tokens, root, cwd)
+    if executable == "tree":
+        return _check_generic(executable, tokens, root, cwd, denied_chars=_TREE_DENIED_CHARS)
+    if executable == "tail":
+        return _check_generic(executable, tokens, root, cwd, denied_chars=_TAIL_DENIED_CHARS,
+                              denied_long=_TAIL_DENIED_LONG)
+    if executable == "ls":
+        return _check_generic(executable, tokens, root, cwd, denied_chars=_LS_DENIED_CHARS)
+    return _check_generic(executable, tokens, root, cwd)
 
 
-def _check_git(tokens: List[str]):
-    if not tokens or tokens[0] not in _GIT_SUBCOMMANDS:
-        raise _arg_err("option_denied", f"git: chỉ cho phép subcommand {', '.join(sorted(_GIT_SUBCOMMANDS))} "
-                                         "(không có tùy chọn trước subcommand)")
-    for t in tokens:
-        if _opt_name(t) in _GIT_DENIED:
-            raise _arg_err("option_denied", f"git: tùy chọn '{t}' bị cấm")
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+_GIT_ATTR_SUPPORT: Optional[bool] = None
+
+
+def _git_attr_source_supported() -> bool:
+    """git >= 2.40 có --attr-source. Dùng để vô hiệu hóa .gitattributes (filter/diff/textconv driver)."""
+    global _GIT_ATTR_SUPPORT
+    if _GIT_ATTR_SUPPORT is None:
+        try:
+            r = subprocess.run(["git", f"--attr-source={_EMPTY_TREE}", "--version"], capture_output=True,  # nosec B603 B607
+                               stdin=subprocess.DEVNULL, env=_child_env(), timeout=10)
+            _GIT_ATTR_SUPPORT = r.returncode == 0
+        except Exception:
+            _GIT_ATTR_SUPPORT = False
+    return _GIT_ATTR_SUPPORT
 
 
 def _build_argv(tokens: List[str]) -> List[str]:
-    """argv thật sự chạy. Với git: vô hiệu hóa fsmonitor/hooks/pager/ext-diff."""
+    """argv thật sự chạy. Với git: vô hiệu hóa fsmonitor/hooks/pager/ext-diff VÀ attribute driver
+    (filter/textconv/diff) bằng cách đọc attributes từ empty tree thay vì worktree/.git/info."""
     if os.path.basename(tokens[0]) != "git":
         return tokens
     sub, rest = tokens[1], tokens[2:]
     extra = ["--no-ext-diff", "--no-textconv"] if sub in ("diff", "log", "show") else []
-    return ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
-            "-c", "diff.external=", "-c", "protocol.allow=never", "--no-pager", sub, *extra, *rest]
+    return ["git", f"--attr-source={_EMPTY_TREE}",
+            "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
+            "-c", "core.attributesFile=/dev/null", "-c", "core.sshCommand=false", "-c", "gpg.program=false",
+            "-c", "log.showSignature=false", "-c", "diff.external=", "-c", "protocol.allow=never",
+            "--no-pager", sub, *extra, *rest]
 
 
 def _child_env() -> Dict[str, str]:
@@ -715,6 +928,8 @@ def fs_exec(req: ExecRequest):
 
     root = Path(folder["path"]).resolve()
     _check_args(executable, tokens[1:], root, cwd_path)
+    if executable == "git" and not _git_attr_source_supported():
+        raise CodedError(403, "git_too_old", "git quá cũ (cần >= 2.40 để vô hiệu hóa attribute driver) — không chạy git ở safe mode")
 
     if not whitelisted:  # chỉ tới được ở chế độ trusted
         h = _confirm_hash(req.folder_id, req.cwd, command)
@@ -736,6 +951,7 @@ def fs_exec(req: ExecRequest):
         proc = subprocess.run(  # nosec B603 - shell=False, argv đã kiểm tra, env tối thiểu
             _build_argv(tokens),
             cwd=str(cwd_path),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

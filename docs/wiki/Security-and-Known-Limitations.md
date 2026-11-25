@@ -86,3 +86,6 @@ container đọc được nó (`/proc/1/environ`). Vì vậy **chính sách phí
 
 Rủi ro còn lại: đọc token cùng uid trong container; ở chế độ `trusted` người giữ token chạy được mã
 (interpreter thoát được giới hạn đối số theo thiết kế); file code được ghi sẽ chạy khi nhà phát triển chạy nó.
+
+Rủi ro còn lại (Coworker, bổ sung): hardlink có sẵn trong folder trỏ tới file ngoài root (không tạo được bằng lệnh safe);
+`.git/config` độc hại có thể đặt `core.worktree` trỏ nơi khác — chỉ nhận repo đáng tin; chế độ `trusted` = người giữ token chạy được mã.

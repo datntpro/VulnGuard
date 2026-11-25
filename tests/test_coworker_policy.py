@@ -314,3 +314,23 @@ def test_agent_exec_safe_mode_is_observation(monkeypatch):
     monkeypatch.setattr(ca, "_host_request", fake)
     out = _run(ca._run_sideeffect("f1", "exec", {"command": "python3 -c 1"}))
     assert out.startswith("LỖI") and "safe" in out
+
+
+def test_git_info_attributes_filter_not_run(env):
+    _, c, _, proj, fid = env
+    _git_repo(proj)
+    cfg = proj / ".git" / "config"
+    cfg.write_text(cfg.read_text() + '[filter "x"]\n\tclean = "touch PWNED_INFO; cat"\n')
+    (proj / ".git" / "info").mkdir(exist_ok=True)
+    (proj / ".git" / "info" / "attributes").write_text("*.txt filter=x\n")
+    time.sleep(1.1)
+    (proj / "ok.txt").write_text("changed\n")
+    assert _exec(c, fid, "git status").status_code == 200
+    assert _exec(c, fid, "git diff").status_code == 200
+    assert not (proj / "PWNED_INFO").exists()
+
+
+def test_stdin_is_devnull(env):
+    _, c, _, proj, fid = env
+    r = _exec(c, fid, "cat", timeout=5)
+    assert r.status_code == 200 and r.json()["stdout"] == ""
