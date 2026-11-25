@@ -12,7 +12,7 @@ import sys
 import api.main  # tạo bảng
 from api.database import SessionLocal
 from api.auth_models import User, UserRole
-from api.security import hash_password
+from api.security import hash_password, validate_password_strength
 from api.config import settings
 
 
@@ -28,6 +28,13 @@ def gen_password(n: int = 20) -> str:
 
 def main():
     email = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("ADMIN_EMAIL") or "admin@vulnguard.local").strip().lower()
+    env_pw = os.environ.get("ADMIN_PASSWORD")
+    if env_pw:
+        try:
+            validate_password_strength(env_pw, email)
+        except ValueError as e:
+            print(f"❌ ADMIN_PASSWORD không đạt chính sách mật khẩu: {e}")
+            sys.exit(1)
     db = SessionLocal()
     try:
         if db.query(User).count() > 0:

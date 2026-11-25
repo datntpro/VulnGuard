@@ -13,6 +13,7 @@ import hmac
 import logging
 import os
 import secrets
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -84,9 +85,11 @@ def validate_password_strength(pw: str, email: str = "") -> None:
     """Raise ValueError (thông báo tiếng Việt) nếu mật khẩu không đạt chính sách."""
     if not isinstance(pw, str) or not (10 <= len(pw) <= 200):
         raise ValueError(PASSWORD_RULES_TEXT)
+    # Phân loại theo Unicode category — khớp đúng với client (\p{Ll}, \p{Lu}, \p{Nd}, [^\p{L}\p{N}])
+    cats = [unicodedata.category(c) for c in pw]
     classes = sum(bool(x) for x in (
-        any(c.islower() for c in pw), any(c.isupper() for c in pw),
-        any(c.isdigit() for c in pw), any(not c.isalnum() for c in pw)))
+        "Ll" in cats, "Lu" in cats, "Nd" in cats,
+        any(not c.isalnum() for c in pw)))
     if classes < 3 or len(set(pw)) == 1:
         raise ValueError(PASSWORD_RULES_TEXT)
     local = (email or "").split("@")[0].strip().lower()
