@@ -88,3 +88,6 @@ storage/admin_credentials.txt
 storage/scan_uploads/
 /.coworker_venv/
 *.bak
+
+# Pentest safety eval
+eval/out/
