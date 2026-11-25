@@ -1,0 +1,11 @@
+# Tuỳ chọn: mở UI (8080) cho máy khác trong LAN, GIỮ proxy MITM 8788 ở loopback.
+#   docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d
+# Tương đương đặt VULNGUARD_BIND=0.0.0.0. Điều kiện: AUTH_ENABLED=true, đã có ADMIN/setup token,
+# ALLOWED_HOSTS=<ip/hostname LAN>, firewall; khuyến nghị TLS (xem wiki "Truy cập từ máy khác trong LAN").
+services:
+  vulnguard:
+    environment:
+      - VULNGUARD_BIND=0.0.0.0
+    ports: !override
+      - "0.0.0.0:${VULNGUARD_PORT:-8080}:8080"
+      - "${PENTEST_PROXY_BIND:-127.0.0.1}:${PENTEST_PROXY_PORT:-8788}:8788"

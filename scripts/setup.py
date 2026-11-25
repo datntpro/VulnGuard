@@ -327,12 +327,12 @@ _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 def resolve_bind_host(environ=None):
     """Host uvicorn sẽ bind (B-5/M-2). Mặc định loopback; từ chối mở ra ngoài khi AUTH_ENABLED=false."""
     env = os.environ if environ is None else environ
-    host = (env.get("VULNGUARD_HOST") or "127.0.0.1").strip()
+    host = (env.get("VULNGUARD_BIND") or env.get("VULNGUARD_HOST") or "127.0.0.1").strip()
     auth_on = (env.get("AUTH_ENABLED") or "true").strip().lower() not in ("false", "0", "no", "off")
     if not auth_on and host not in _LOOPBACK_HOSTS:
         raise SystemExit(
-            f"❌ AUTH_ENABLED=false không được phép khi VULNGUARD_HOST={host} (mở ra mạng không xác thực). "
-            "Bật AUTH_ENABLED=true hoặc dùng VULNGUARD_HOST=127.0.0.1.")
+            f"❌ AUTH_ENABLED=false không được phép khi VULNGUARD_BIND={host} (mở ra mạng không xác thực). "
+            "Bật AUTH_ENABLED=true hoặc dùng VULNGUARD_BIND=127.0.0.1.")
     return host
 
 

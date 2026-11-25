@@ -21,8 +21,16 @@
   parser returns no results; Bandit B314 ×4 gone). `defusedxml` is pinned in `api/requirements.in` + the hash lock (PR-H).
 - **BREAKING:** VulnGuard supports a single worker. `run.sh`, `install/run.sh` and the systemd unit force `--workers 1`;
   `VULNGUARD_WORKERS>1` is ignored with a warning (in-memory scan locks, proxy registry, scheduler, lockout, Co-work nonces).
-- **BREAKING:** native `scripts/setup.py` now binds `VULNGUARD_HOST` (default `127.0.0.1`, was `0.0.0.0`); the systemd
+- **BREAKING:** native `scripts/setup.py` now binds `VULNGUARD_BIND` (default `127.0.0.1`, was `0.0.0.0`); the systemd
   template binds `127.0.0.1`. `run.sh`/`setup.py`/`install/run.sh` refuse to start with `AUTH_ENABLED=false` and a non-loopback host.
+- **LAN access (opt-in, documented):** one variable `VULNGUARD_BIND` (default `127.0.0.1`) now controls the bind for Docker compose
+  *and* native `run.sh`/`run.ps1`/`install/run.sh`/`setup.py`; `VULNGUARD_HOST` stays as a deprecated alias (warning). The app and every
+  launcher refuse to start on a non-loopback bind with `AUTH_ENABLED=false`. Startup logs warn on LAN bind without `ALLOWED_HOSTS` /
+  with plain-HTTP cookies. The pentest MITM proxy port has its own `PENTEST_PROXY_BIND` (default loopback) so opening the UI does not
+  expose it; optional `docker-compose.lan.yml`. Compose now passes `AUTH_ENABLED`, `ALLOWED_HOSTS`, `COOKIE_SECURE`, `CORS_ALLOW_ORIGINS`,
+  `VULNGUARD_SECRET_KEY`, `SESSION_TTL_HOURS`, `EXPOSE_API_DOCS`, `SCM_*` into the container (previously `.env` had no effect there).
+  `run_demo.sh` now binds loopback by default. New wiki page "Truy cập từ máy khác trong LAN" (incl. Caddy TLS), fixes wrong Installation.md.
+  The "anyone on the LAN can claim ADMIN via `/api/auth/setup`" gap is closed by the setup token in #42 (not duplicated here).
 - Skipped on purpose: L-4 (pentest proxy auth, loopback default, CA lifetime) — already implemented in #37.
 
 ### Fixed — first-login change-password UX (BREAKING for API clients)

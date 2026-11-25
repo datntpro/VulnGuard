@@ -49,7 +49,8 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 
 | Biến | Nơi dùng | Ý nghĩa |
 |---|---|---|
-| `VULNGUARD_HOST` | `run.sh`, `run.ps1`, `install/run.sh` | Địa chỉ bind, mặc định `127.0.0.1`. Đặt `0.0.0.0` để mở ra ngoài (script in cảnh báo) |
+| `VULNGUARD_BIND` | compose, `run.sh`, `run.ps1`, `install/run.sh`, `setup.py` | Địa chỉ bind, mặc định `127.0.0.1`. `0.0.0.0` để mở LAN — xem [[LAN Access|LAN-Access]]. Bị từ chối khi `AUTH_ENABLED=false`. `VULNGUARD_HOST` = alias deprecated |
+| `PENTEST_PROXY_BIND` | compose | Bind riêng của proxy MITM (8788), mặc định `127.0.0.1` |
 | `VULNGUARD_PORT` | các script, compose | Cổng, mặc định `8080` |
 | `VULNGUARD_WORKERS` | `run.sh` | **Bị bỏ qua** nếu >1: chỉ hỗ trợ 1 worker (state trong bộ nhớ) |
 | `VULNGUARD_VENV` | `run.sh` | Thư mục venv, mặc định `.venv` |

@@ -11,7 +11,10 @@ if (-not $env:DEPLOY_MODE)    { $env:DEPLOY_MODE    = "native" }
 New-Item -ItemType Directory -Force -Path "storage\db" | Out-Null
 # Dua .venv\Scripts len dau PATH de scanner trong venv luon duoc tim thay (P0.1)
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
-# Mac dinh chi nghe localhost; mo ra ngoai bang VULNGUARD_HOST=0.0.0.0 (P0.2)
-$vhost = if ($env:VULNGUARD_HOST) { $env:VULNGUARD_HOST } else { "127.0.0.1" }
+# Mac dinh chi nghe localhost; mo LAN bang VULNGUARD_BIND=0.0.0.0 (VULNGUARD_HOST la alias deprecated)
+$vhost = if ($env:VULNGUARD_BIND) { $env:VULNGUARD_BIND } elseif ($env:VULNGUARD_HOST) { Write-Warning "VULNGUARD_HOST deprecated - dung VULNGUARD_BIND"; $env:VULNGUARD_HOST } else { "127.0.0.1" }
+$env:VULNGUARD_BIND = $vhost
+if ($env:AUTH_ENABLED -in @("false","0","no","off") -and $vhost -notin @("127.0.0.1","localhost","::1")) {
+  Write-Host "AUTH_ENABLED=false khong duoc phep khi VULNGUARD_BIND=$vhost"; exit 1 }
 Write-Host "VulnGuard PRODUCTION: http://${vhost}:$port  (Ctrl+C de dung)"
 & ".venv\Scripts\python.exe" -m uvicorn api.main:app --host $vhost --port $port

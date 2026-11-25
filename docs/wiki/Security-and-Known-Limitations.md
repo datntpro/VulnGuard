@@ -4,7 +4,7 @@ Trang này liệt kê các điểm cần biết khi triển khai, đã đối ch
 
 ## Đã được xử lý (so với bản trước 23/11/2026)
 
-- `run.sh` / `run.ps1` bind `127.0.0.1` mặc định (`VULNGUARD_HOST`) và thêm `.venv/bin` vào `PATH`.
+- `run.sh` / `run.ps1` bind `127.0.0.1` mặc định (`VULNGUARD_BIND`) và thêm `.venv/bin` vào `PATH`.
 - `scripts/bootstrap_admin.py` không in mật khẩu ra console, đặt `must_change_password=True`.
 - MCP HTTP bắt buộc `VULNGUARD_MCP_TOKEN` (fail-closed), bind `127.0.0.1` mặc định.
 - Crawl và web scan bắt buộc xác minh quyền sở hữu domain.
@@ -17,13 +17,12 @@ Trang này liệt kê các điểm cần biết khi triển khai, đã đối ch
 
 | Vấn đề | Nơi | Khuyến nghị |
 |---|---|---|
-| `scripts/setup.py` (gọi từ `setup.sh` khi không có `--no-run`) không thêm `.venv/bin` vào `PATH` (đã bind `127.0.0.1` mặc định theo `VULNGUARD_HOST`; từ chối `AUTH_ENABLED=false` + host không phải loopback) | `scripts/setup.py` | Dùng `bash setup.sh --no-run` rồi `bash run.sh` |
-| `run_demo.sh` bind `0.0.0.0` | `run_demo.sh` | Chỉ chạy demo trên máy cá nhân / mạng tin cậy |
+| `scripts/setup.py` (gọi từ `setup.sh` khi không có `--no-run`) không thêm `.venv/bin` vào `PATH` (đã bind `127.0.0.1` mặc định theo `VULNGUARD_BIND`; từ chối `AUTH_ENABLED=false` + host không phải loopback) | `scripts/setup.py` | Dùng `bash setup.sh --no-run` rồi `bash run.sh` |
 | Unit systemd mẫu dùng `venv/` (không phải `.venv/`); đã đổi sang `--host 127.0.0.1 --workers 1` | `install/vulnguard.service.template`, `install/run.sh` | Sửa đường dẫn venv trước khi cài; muốn mở ra ngoài thì đặt reverse proxy TLS phía trước |
 | Docker publish `8080`, `8788` (và `9000` của SonarQube) trên mọi interface của host | `docker-compose.yml` | Đổi thành `127.0.0.1:8080:8080` hoặc đặt firewall/reverse proxy |
 | Quét image local cần `docker-compose.local-images.yml`: container `docker-socket-proxy` vẫn giữ `docker.sock` (chỉ cho GET image/ping/version, POST = 403) | `docker-compose.local-images.yml` | Chỉ bật khi cần; không publish cổng 2375. Mặc định app không mount socket |
 | Base image (`python:3.11-slim`) và gói apt (nmap, sqlmap, chromium) chưa pin theo digest/phiên bản | `api/Dockerfile` | Dependabot theo dõi tag; pin digest khi phát hành |
-| Proxy MITM pentest `bind_host` mặc định `0.0.0.0` | `api/routes/pentest.py` | Truyền `bind_host: "127.0.0.1"` khi start |
+| Proxy MITM pentest (Docker 8788) có biến bind riêng `PENTEST_PROXY_BIND` (mặc định loopback), không đi theo `VULNGUARD_BIND` | `docker-compose.yml` | Chỉ mở nếu cần dùng proxy từ máy khác |
 | CSP nền cho phép `'unsafe-inline'` script | `api/main.py` | Hạn chế rò rỉ/nhúng khung nhưng không chặn XSS inline; CSP nghiêm ngặt cần refactor `onclick` inline (đã hoãn) |
 | SCM `base_url`: chỉ kiểm tra IP lúc dùng, chưa pin IP | `scanner/scm/providers.py` | DNS rebinding hẹp nhưng chưa loại trừ; dải private mặc định cho phép (`SCM_ALLOW_PRIVATE_HOSTS=false` để cấm) |
 

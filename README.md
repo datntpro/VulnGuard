@@ -90,7 +90,7 @@ The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sq
 ## Security & privacy
 
 - **Local by default** — scanners + Ollama run on your machine. In **local-only mode** no scan data is sent out. Cloud AI / connectors are opt-in and do send data — see [`docs/DATA_FLOW.md`](docs/DATA_FLOW.md).
-- **Listens on `127.0.0.1` by default** — expose externally only via `VULNGUARD_HOST=0.0.0.0` (behind auth + firewall).
+- **Listens on `127.0.0.1` by default** — to reach it from other machines on your LAN set `VULNGUARD_BIND=0.0.0.0` (Docker **and** native; `VULNGUARD_HOST` is a deprecated alias) with auth enabled, `ALLOWED_HOSTS` set and ideally TLS — see [LAN access](docs/wiki/LAN-Access.md). The app refuses to start on a non-loopback bind with `AUTH_ENABLED=false`; the pentest MITM proxy has its own `PENTEST_PROXY_BIND` (loopback).
 - **Auth + RBAC**; `setup.sh` generates the ADMIN password into `storage/admin_credentials.txt` (chmod 600, **not printed to the terminal**) and forces a change on first login — read it, log in, change it, delete the file.
 - **Secrets encrypted at rest** (Fernet): cloud AI keys, connector credentials — only hints are shown, never raw values.
 - **Cloud AI is opt-in**; in hybrid/cloud mode only findings + redacted code context are sent (secrets and Vietnamese PII such as CCCD/phone/email/internal IPs are masked first).

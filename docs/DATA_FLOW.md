@@ -29,7 +29,7 @@ Khi gửi ra AI đám mây, VulnGuard tự động che:
 > `mode=local_only`.
 
 ## Mặc định an toàn
-- App nghe `127.0.0.1` (localhost) — mở ra ngoài phải chủ động đặt `VULNGUARD_HOST=0.0.0.0`.
+- App nghe `127.0.0.1` (localhost) — mở ra ngoài phải chủ động đặt `VULNGUARD_BIND=0.0.0.0` (xem [LAN-Access](wiki/LAN-Access.md)).
 - Quét chủ động (web/crawl/pentest) bị khoá khi `AUTH_ENABLED=false`.
 - Mật khẩu ADMIN không in ra màn hình; lưu file `storage/admin_credentials.txt` (chmod 600),
   bắt đổi lần đăng nhập đầu.
