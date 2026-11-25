@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -185,6 +187,15 @@ app = FastAPI(
     redoc_url="/redoc" if app_settings.expose_api_docs else None,
     openapi_url="/openapi.json" if app_settings.expose_api_docs else None,
 )
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request, exc: RequestValidationError):
+    """422 không được echo lại giá trị đầu vào (`input`/`ctx`): body có thể chứa mật khẩu/token."""
+    errors = [{"type": e.get("type"), "loc": list(e.get("loc", [])),
+               "msg": str(e.get("msg", "")).removeprefix("Value error, ")}
+              for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
+
 
 # M-2/D-5: mặc định SAME-ORIGIN (không CORS). Chỉ bật khi liệt kê origin trong CORS_ALLOW_ORIGINS.
 _cors_origins = [o.strip() for o in app_settings.cors_allow_origins.split(",") if o.strip()]

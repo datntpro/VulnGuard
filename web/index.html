@@ -1976,7 +1976,7 @@
     <div class="modal-body">
       <div class="form-group"><label>Họ tên *</label><input id="nu-name" placeholder="Nguyễn Văn A"></div>
       <div class="form-group"><label>Email *</label><input id="nu-email" type="email" placeholder="a.nguyen@company.com"></div>
-      <div class="form-group"><label>Mật khẩu tạm *</label><input id="nu-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự"></div>
+      <div class="form-group"><label>Mật khẩu tạm *</label><input id="nu-password" type="password" autocomplete="new-password" placeholder="10+ ký tự, 3/4 loại (thường/hoa/số/ký tự đặc biệt)"></div>
       <div class="form-group"><label>Vai trò</label>
         <select id="nu-role"><option value="VIEWER">VIEWER — chỉ xem</option><option value="ANALYST" selected>ANALYST — chạy scan, xử lý finding</option><option value="ADMIN">ADMIN — toàn quyền</option></select>
       </div>
@@ -1995,7 +1995,7 @@
     <div class="modal-header"><strong>Đặt lại mật khẩu</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('reset-pw-modal').classList.remove('open')">✕</button></div>
     <div class="modal-body">
       <p class="text-sm" style="margin-bottom:12px;">Người dùng: <strong id="rp-user" style="color:var(--text)"></strong></p>
-      <div class="form-group"><label>Mật khẩu mới *</label><input id="rp-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự"></div>
+      <div class="form-group"><label>Mật khẩu mới *</label><input id="rp-password" type="password" autocomplete="new-password" placeholder="10+ ký tự, 3/4 loại (thường/hoa/số/ký tự đặc biệt)"></div>
       <div class="form-group"><label>Nhập lại mật khẩu *</label><input id="rp-password2" type="password" autocomplete="new-password"></div>
       <div id="rp-error" class="text-sm" style="color:var(--critical);"></div>
     </div>
@@ -2059,7 +2059,7 @@ function errText(t) {
   try {
     const j = JSON.parse(t);
     if (typeof j.detail === 'string') return j.detail;
-    if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+    if (Array.isArray(j.detail)) return j.detail.map(d => String(d.msg || JSON.stringify(d)).replace(/^Value error, /, '')).join('; ');
   } catch {}
   return t;
 }
@@ -5007,30 +5007,69 @@ async function initAuth() {
   renderUserChip();
 }
 
+const PW_RULES_TEXT = 'Mật khẩu 10–200 ký tự, gồm ít nhất 3 trong 4 loại (chữ thường, chữ hoa, số, ký tự đặc biệt), không chứa phần tên của email và không lặp một ký tự.';
+function pwClasses(v) {   // Unicode, khớp server (unicodedata: Ll, Lu, Nd, không-alnum)
+  return [/\p{Ll}/u, /\p{Lu}/u, /\p{Nd}/u, /[^\p{L}\p{N}]/u].filter(r => r.test(v)).length;
+}
+function pwScore(v) {   // 0..4 — dùng cho thanh đo độ mạnh (cùng logic login.html)
+  let score = 0;
+  if (v.length >= 10) score++;
+  if (v.length >= 12) score++;
+  if (pwClasses(v) >= 3) score++;
+  if (/[^\p{L}\p{N}]/u.test(v)) score++;
+  return score;
+}
+function pwPolicyError(v, email) {
+  if (v.length < 10 || v.length > 200 || pwClasses(v) < 3 || new Set(v).size === 1) return PW_RULES_TEXT;
+  const local = String(email || '').split('@')[0].toLowerCase();
+  if (local.length >= 3 && v.toLowerCase().includes(local)) return PW_RULES_TEXT;
+  return '';
+}
+
 function forceChangePassword() {
   if (document.getElementById('force-cp-overlay')) return;   // api() có thể gọi nhiều lần song song
   const ov = document.createElement('div');
   ov.id = 'force-cp-overlay';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;display:flex;align-items:center;justify-content:center;';
-  ov.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:420px;width:92%;">
+  ov.innerHTML = `<form id="force-cp-form" style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:420px;width:92%;">
     <h2 style="margin:0 0 8px;">🔐 Đổi mật khẩu lần đầu</h2>
     <p class="text-sm" style="color:var(--text2);margin-bottom:12px;">Tài khoản đang dùng mật khẩu khởi tạo — bắt buộc đổi trước khi tiếp tục.</p>
     <div class="form-group"><label>Mật khẩu hiện tại</label><input id="cp-cur" type="password" autocomplete="current-password"></div>
-    <div class="form-group"><label>Mật khẩu mới (≥10 ký tự)</label><input id="cp-new" type="password" autocomplete="new-password"></div>
-    <div class="flex" style="gap:8px;align-items:center;"><button class="btn btn-primary" id="cp-go">Đổi mật khẩu</button><span id="cp-msg" class="text-sm"></span></div>
-  </div>`;
+    <div class="form-group"><label>Mật khẩu mới</label><input id="cp-new" type="password" autocomplete="new-password">
+      <div id="cp-strength" style="display:flex;gap:3px;margin-top:6px;"><i style="flex:1;height:4px;border-radius:2px;background:var(--border)"></i><i style="flex:1;height:4px;border-radius:2px;background:var(--border)"></i><i style="flex:1;height:4px;border-radius:2px;background:var(--border)"></i><i style="flex:1;height:4px;border-radius:2px;background:var(--border)"></i></div>
+      <div id="cp-rules" class="text-sm" style="color:var(--text2);margin-top:4px;">${PW_RULES_TEXT}</div></div>
+    <div class="form-group"><label>Nhập lại mật khẩu mới</label><input id="cp-confirm" type="password" autocomplete="new-password"></div>
+    <label class="text-sm" style="display:block;margin-bottom:10px;"><input id="cp-show" type="checkbox"> Hiện mật khẩu</label>
+    <div class="flex" style="gap:8px;align-items:center;"><button class="btn btn-primary" id="cp-go" type="submit">Đổi mật khẩu</button><span id="cp-msg" class="text-sm" role="alert"></span></div>
+  </form>`;
   document.body.appendChild(ov);
-  ov.querySelector('#cp-go').onclick = async () => {
-    const cur = ov.querySelector('#cp-cur').value, nw = ov.querySelector('#cp-new').value;
-    const msg = ov.querySelector('#cp-msg');
-    if (nw.length < 10) { msg.style.color = 'var(--critical)'; msg.textContent = 'Mật khẩu mới ≥10 ký tự'; return; }
-    msg.style.color = 'var(--text2)'; msg.textContent = 'Đang đổi...';
+  const $ = (id) => ov.querySelector(id);
+  const colors = ['var(--critical)', 'var(--high)', 'var(--medium)', 'var(--low)'];
+  $('#cp-new').addEventListener('input', () => {
+    const sc = pwScore($('#cp-new').value);
+    ov.querySelectorAll('#cp-strength i').forEach((el, i) => { el.style.background = i < sc ? colors[Math.max(0, sc - 1)] : 'var(--border)'; });
+  });
+  $('#cp-show').addEventListener('change', (e) => {
+    ['#cp-cur', '#cp-new', '#cp-confirm'].forEach(id => { $(id).type = e.target.checked ? 'text' : 'password'; });
+  });
+  $('#force-cp-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const cur = $('#cp-cur').value, nw = $('#cp-new').value, cf = $('#cp-confirm').value;
+    const msg = $('#cp-msg'), btn = $('#cp-go');
+    const fail = (t, focus) => { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + t; if (focus) $(focus).focus(); };
+    if (!cur || !nw || !cf) return fail('Nhập đủ các ô mật khẩu');
+    const pe = pwPolicyError(nw, currentUser && currentUser.email);
+    if (pe) return fail(pe, '#cp-new');
+    if (nw === cur) return fail('Mật khẩu mới phải khác mật khẩu cũ', '#cp-new');
+    if (nw !== cf) return fail('Hai mật khẩu không khớp', '#cp-confirm');
+    msg.style.color = 'var(--text2)'; msg.textContent = 'Đang đổi...'; btn.disabled = true;
     try {
-      await api('/api/auth/change-password', { method: 'POST', body: { current_password: cur, new_password: nw } });
-      ov.remove(); if (currentUser) currentUser.must_change_password = false;
-      toast && toast('Đã đổi mật khẩu', 'success');
-    } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
-  };
+      await api('/api/auth/change-password', { method: 'POST', body: { current_password: cur, new_password: nw, confirm_password: cf } });
+      msg.style.color = 'var(--low)'; msg.textContent = '✅ Đã đổi mật khẩu — các phiên khác đã bị đăng xuất. Đang tải lại...';
+      toast && toast('Đã đổi mật khẩu — các phiên khác đã bị đăng xuất', 'success');
+      setTimeout(() => location.reload(), 800);   // tải lại để xoá mọi trạng thái lỗi 403 cũ
+    } catch (e) { btn.disabled = false; fail(String(e.message || e).replace(/^Value error, /, '')); }
+  });
 }
 function canAdmin() { return !currentUser || currentUser.role === 'ADMIN'; }
 function initials(name) {
@@ -5128,7 +5167,8 @@ async function createUser() {
   const role = document.getElementById('nu-role').value;
   const err = document.getElementById('nu-error');
   if (!name || !email) { err.textContent = 'Nhập họ tên và email'; return; }
-  if (password.length < 10) { err.textContent = 'Mật khẩu tối thiểu 10 ký tự'; return; }
+  const pe = pwPolicyError(password, email);
+  if (pe) { err.textContent = pe; return; }
   try {
     await api('/api/auth/users', { method: 'POST', body: { email, name, password, role } });
     closeUserModal();
@@ -5149,7 +5189,8 @@ async function submitResetPassword() {
   const p1 = document.getElementById('rp-password').value;
   const p2 = document.getElementById('rp-password2').value;
   const err = document.getElementById('rp-error');
-  if (p1.length < 10) { err.textContent = 'Mật khẩu tối thiểu 10 ký tự'; return; }
+  const pe = pwPolicyError(p1, (usersCache.find(x => x.id === resetPwUserId) || {}).email);
+  if (pe) { err.textContent = pe; return; }
   if (p1 !== p2) { err.textContent = 'Hai mật khẩu không khớp'; return; }
   document.getElementById('reset-pw-modal').classList.remove('open');
   await updateUser(resetPwUserId, { password: p1 });

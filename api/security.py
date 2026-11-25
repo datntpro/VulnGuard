@@ -13,6 +13,7 @@ import hmac
 import logging
 import os
 import secrets
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -74,6 +75,26 @@ def verify_password(password: str, stored: Optional[str]) -> bool:
         return hmac.compare_digest(dk, base64.b64decode(dk_b64))
     except Exception:
         return False
+
+
+PASSWORD_RULES_TEXT = ("Mật khẩu 10–200 ký tự, gồm ít nhất 3 trong 4 loại (chữ thường, chữ hoa, số, ký tự đặc biệt), "
+                       "không chứa phần tên của email và không lặp một ký tự.")
+
+
+def validate_password_strength(pw: str, email: str = "") -> None:
+    """Raise ValueError (thông báo tiếng Việt) nếu mật khẩu không đạt chính sách."""
+    if not isinstance(pw, str) or not (10 <= len(pw) <= 200):
+        raise ValueError(PASSWORD_RULES_TEXT)
+    # Phân loại theo Unicode category — khớp đúng với client (\p{Ll}, \p{Lu}, \p{Nd}, [^\p{L}\p{N}])
+    cats = [unicodedata.category(c) for c in pw]
+    classes = sum(bool(x) for x in (
+        "Ll" in cats, "Lu" in cats, "Nd" in cats,
+        any(not c.isalnum() for c in pw)))
+    if classes < 3 or len(set(pw)) == 1:
+        raise ValueError(PASSWORD_RULES_TEXT)
+    local = (email or "").split("@")[0].strip().lower()
+    if len(local) >= 3 and local in pw.lower():
+        raise ValueError(PASSWORD_RULES_TEXT)
 
 
 # ── JWT session ───────────────────────────────────────────

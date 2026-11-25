@@ -161,7 +161,7 @@
           <div class="field"><label for="setup-email">Email</label>
             <div class="input"><input id="setup-email" type="email" autocomplete="username" placeholder="admin@congty.vn" required></div></div>
           <div class="field"><label for="setup-password">Mật khẩu</label>
-            <div class="input has-eye"><input id="setup-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự" required>
+            <div class="input has-eye"><input id="setup-password" type="password" autocomplete="new-password" placeholder="10+ ký tự, 3/4 loại (thường/hoa/số/đặc biệt)" required>
               <button type="button" class="eye" data-eye="setup-password">Hiện</button></div>
             <div class="strength" id="pw-strength"><i></i><i></i><i></i><i></i></div>
             <div class="hint" id="pw-hint">Nên dùng ≥ 12 ký tự, có chữ hoa, số và ký tự đặc biệt.</div></div>
@@ -258,14 +258,15 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 });
 
 // ── Setup ──
+const PW_RULES_TEXT = 'Mật khẩu 10–200 ký tự, gồm ít nhất 3 trong 4 loại (chữ thường, chữ hoa, số, ký tự đặc biệt), không chứa phần tên của email và không lặp một ký tự.';
 const pw = document.getElementById('setup-password');
 pw.addEventListener('input', () => {
   const v = pw.value;
   let score = 0;
   if (v.length >= 10) score++;
   if (v.length >= 12) score++;
-  if (/[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v)) score++;
-  if (/[^A-Za-z0-9]/.test(v)) score++;
+  if (/\p{Ll}/u.test(v) && /\p{Lu}/u.test(v) && /\p{Nd}/u.test(v)) score++;
+  if (/[^\p{L}\p{N}]/u.test(v)) score++;
   const colors = ['var(--critical)', 'var(--high)', 'var(--medium)', 'var(--low)'];
   document.querySelectorAll('#pw-strength i').forEach((el, i) => { el.style.background = i < score ? colors[Math.max(0, score - 1)] : ''; });
   document.getElementById('pw-hint').textContent = !v ? 'Nên dùng ≥ 12 ký tự, có chữ hoa, số và ký tự đặc biệt.'
@@ -280,7 +281,11 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
   const confirmPw = document.getElementById('setup-confirm').value;
   if (!name || !email) return showError('setup-error', 'Nhập họ tên và email');
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) return showError('setup-error', 'Email không hợp lệ');
-  if (password.length < 10) return showError('setup-error', 'Mật khẩu tối thiểu 10 ký tự');
+  if (password.length < 10 || password.length > 200) return showError('setup-error', PW_RULES_TEXT);
+  if ([/\p{Ll}/u, /\p{Lu}/u, /\p{Nd}/u, /[^\p{L}\p{N}]/u].filter(r => r.test(password)).length < 3 || new Set(password).size === 1)
+    return showError('setup-error', PW_RULES_TEXT);
+  const local = email.split('@')[0].toLowerCase();
+  if (local.length >= 3 && password.toLowerCase().includes(local)) return showError('setup-error', PW_RULES_TEXT);
   if (password !== confirmPw) return showError('setup-error', 'Hai mật khẩu không khớp');
   const btn = document.getElementById('setup-btn');
   setBusy(btn, true);

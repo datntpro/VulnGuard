@@ -53,7 +53,7 @@ def test_must_change_password_enforced_in_api():
     r = c.get("/api/projects", headers=h)
     assert r.status_code == 403 and r.json()["code"] == "must_change_password"
     assert c.get("/api/auth/me", headers=h).status_code == 200
-    r = c.post("/api/auth/change-password", json={"current_password": PASSWORD, "new_password": "brand-new-pass-9"}, headers=h)
+    r = c.post("/api/auth/change-password", json={"current_password": PASSWORD, "new_password": "brand-new-pass-9", "confirm_password": "brand-new-pass-9"}, headers=h)
     assert r.status_code == 200
     assert c.get("/api/projects", headers=bearer(r.json()["token"])).status_code == 200
 
@@ -114,7 +114,7 @@ def test_viewer_created_by_admin_can_change_password():
     t = login(vc, email, "initial-pass-12")
     h = bearer(t)
     assert vc.get("/api/projects", headers=h).status_code == 403
-    r = vc.post("/api/auth/change-password", json={"current_password": "initial-pass-12", "new_password": "viewer-new-pass-9"}, headers=h)
+    r = vc.post("/api/auth/change-password", json={"current_password": "initial-pass-12", "new_password": "viewer-new-pass-9", "confirm_password": "viewer-new-pass-9"}, headers=h)
     assert r.status_code == 200, r.text
     assert vc.get("/api/projects", headers=bearer(r.json()["token"])).status_code == 200
     # VIEWER vẫn không ghi được các route khác
@@ -126,7 +126,7 @@ def test_change_password_new_works_old_rejected():
     email, _ = make_user(must_change_password=True)
     c = new_client()
     h = bearer(login(c, email))
-    r = c.post("/api/auth/change-password", json={"current_password": PASSWORD, "new_password": "totally-new-pass-9"}, headers=h)
+    r = c.post("/api/auth/change-password", json={"current_password": PASSWORD, "new_password": "totally-new-pass-9", "confirm_password": "totally-new-pass-9"}, headers=h)
     assert r.status_code == 200
     assert c.get("/api/auth/me", headers=h).status_code == 401            # token cũ bị thu hồi
     c2 = new_client()
