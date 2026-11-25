@@ -90,19 +90,51 @@ def _sigstate_path(dest_path: str) -> str:
     return dest_path + ".sigstate"
 
 
+def _read_sigstate_checked(dest_path: str):
+    """(state, corrupt). corrupt=True nếu sidecar TỒN TẠI nhưng không đọc/thiếu signed_version
+    → coi như 'đã từng thấy bản ký' (fail closed)."""
+    path = _sigstate_path(dest_path)
+    if not os.path.exists(path):
+        return {}, False
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        if isinstance(d, dict) and isinstance(d.get("signed_version"), str) and d["signed_version"]:
+            return d, False
+    except Exception:
+        pass
+    log.error("KB .sigstate hỏng/không hợp lệ — coi như đã từng cài bản ký (bắt buộc chữ ký)")
+    return {}, True
+
+
 def _read_sigstate(dest_path: str) -> Dict[str, Any]:
     """Trạng thái chỉ-ghi-khi-đã-verify-chữ-ký: {signed_version, signed_built_at}."""
-    try:
-        with open(_sigstate_path(dest_path)) as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    return _read_sigstate_checked(dest_path)[0]
 
 
 def _write_sigstate(dest_path: str, version: str, built_at: Optional[str]) -> None:
-    with open(_sigstate_path(dest_path), "w") as f:
-        json.dump({"signed_version": version, "signed_built_at": built_at}, f)
+    """Ghi nguyên tử: tmp + fsync + rename (+ fsync thư mục)."""
+    path = _sigstate_path(dest_path)
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".sigstate.tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"signed_version": version, "signed_built_at": built_at}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    try:
+        dfd = os.open(d, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
 
 
 def _version_in_future(v: str) -> bool:
@@ -212,8 +244,10 @@ def check_and_update(manifest_url: Optional[str] = None, dest_path: Optional[str
 
     local = get_meta(dest_path)
     local_ver = local.get("version") if local.get("available") else None
-    state = _read_sigstate(dest_path)
+    state, corrupt = _read_sigstate_checked(dest_path)
     floor = state.get("signed_version")
+    # Sticky: đã từng cài bản ký (sidecar hợp lệ, sidecar hỏng, hoặc cờ trong meta KB) → bắt buộc chữ ký.
+    sticky = bool(floor) or corrupt or bool(local.get("signed_seen"))
     stale = False
     try:
         with httpx.Client(timeout=60, follow_redirects=True) as c:
@@ -225,7 +259,7 @@ def check_and_update(manifest_url: Optional[str] = None, dest_path: Optional[str
                 if not verify_manifest_signature(raw, sig):
                     return {"updated": False, "from": local_ver,
                             "reason": "chữ ký manifest không hợp lệ"}
-            elif settings.kb_require_signature or floor:
+            elif settings.kb_require_signature or sticky:
                 return {"updated": False, "from": local_ver,
                         "reason": "manifest thiếu chữ ký (.sig) — bị từ chối"}
             else:
@@ -250,7 +284,7 @@ def check_and_update(manifest_url: Optional[str] = None, dest_path: Optional[str
                     return {"updated": False, "from": local_ver, "to": ver,
                             "reason": "từ chối bản build cũ hơn cùng version (replay)", "stale": stale}
                 # Chưa có sàn đã-ký (vd. đang có bản chưa ký) → cài bản ký đầu tiên bất kể version local.
-                need = (not floor) or _ver_tuple(ver) > _ver_tuple(floor) or \
+                need = (not floor) or (not local.get("available")) or _ver_tuple(ver) > _ver_tuple(floor) or \
                     (same and str(m.get("built_at") or "") > str(state.get("signed_built_at") or ""))
                 if not force and not need:
                     return {"updated": False, "from": local_ver, "to": ver,
@@ -276,6 +310,8 @@ def check_and_update(manifest_url: Optional[str] = None, dest_path: Optional[str
     try:
         import_file(dl.name, dest_path, expected_sha256=m["sha256"])
         if signed:
+            from scanner.knowledge.store import set_meta
+            set_meta(dest_path, signed_seen=True)   # dự phòng nếu sidecar bị xóa
             _write_sigstate(dest_path, ver, m.get("built_at"))
     except Exception as e:
         return {"updated": False, "from": local_ver, "to": m.get("version"),

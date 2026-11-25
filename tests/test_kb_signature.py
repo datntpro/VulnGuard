@@ -340,3 +340,124 @@ def test_gzip_bomb_via_signed_update_rejected(env, monkeypatch):
     r = updater.check_and_update(URL, dest)
     assert r["updated"] is False and "giới hạn" in r["reason"]
     assert not os.path.exists(dest)
+
+
+# ── R-SHOULD-3: .sigstate tamper / atomic write ──
+def _signed_install(env):
+    key, served, dest, settings = env
+    settings.kb_require_signature = False
+    m, b = _make(version=_today(-1))
+    _serve(served, m, b, _sign(key, m))
+    assert updater.check_and_update(URL, dest)["updated"] is True
+    nm, nb = _make()          # kẻ tấn công: bản chưa ký, mới hơn, không có .sig
+    _serve(served, nm, nb)
+    served.pop(URL + ".sig", None)
+    return dest
+
+
+@pytest.mark.parametrize("tamper", ["delete", "truncate", "garbage", "null_version", "list"])
+def test_sigstate_tamper_fails_closed(env, tamper):
+    dest = _signed_install(env)
+    sp = dest + ".sigstate"
+    assert os.path.exists(sp)
+    if tamper == "delete":
+        os.unlink(sp)
+    else:
+        open(sp, "w").write({"truncate": '{"signed_ver', "garbage": "\x00\xffnot json",
+                             "null_version": '{"signed_version": null}', "list": "[]"}[tamper])
+    r = updater.check_and_update(URL, dest)
+    assert r["updated"] is False and ".sig" in r["reason"], r
+
+
+def test_sigstate_corrupt_then_signed_update_recovers(env):
+    key, served, dest, _ = env
+    dest = _signed_install(env)
+    open(dest + ".sigstate", "w").write("garbage")
+    nm, nb = _make(built_at=_now_iso(0))
+    _serve(served, nm, nb, _sign(key, nm))
+    assert updater.check_and_update(URL, dest)["updated"] is True
+    assert updater._read_sigstate_checked(dest)[1] is False
+
+
+def test_sigstate_write_is_atomic_and_leaves_no_tmp(tmp_path, monkeypatch):
+    dest = str(tmp_path / "kb.sqlite")
+    updater._write_sigstate(dest, "2026.11.25", "2026-11-25T00:00:00Z")
+    assert json.load(open(dest + ".sigstate"))["signed_version"] == "2026.11.25"
+    # lỗi giữa chừng → file cũ còn nguyên, không còn tmp
+    def boom(*a, **k): raise OSError("disk full")
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        updater._write_sigstate(dest, "2099.01.01", "x")
+    monkeypatch.undo()
+    assert json.load(open(dest + ".sigstate"))["signed_version"] == "2026.11.25"
+    assert [p.name for p in tmp_path.iterdir()] == ["kb.sqlite.sigstate"]
+
+
+def test_missing_local_kb_is_restored_when_same_version(env):
+    key, served, dest, _ = env
+    m, b = _make()
+    _serve(served, m, b, _sign(key, m))
+    assert updater.check_and_update(URL, dest)["updated"] is True
+    os.unlink(dest)
+    assert updater.check_and_update(URL, dest)["updated"] is True
+
+
+# ── R-SHOULD-2: sign-job bundle check script ──
+def _load_checker():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "kb_check", os.path.join(os.path.dirname(__file__), "..", ".github", "scripts", "kb_check_manifest.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+EXPECTED = "https://github.com/o/r/releases/download/kb-latest/kb.sqlite.gz"
+
+
+def _bundle(tmp_path, **over):
+    man, blob = _make()
+    m = json.loads(man)
+    m.update({"url": EXPECTED, "advisory_count": 1, "format": "sqlite+gzip"})
+    m.update(over)
+    d = tmp_path / "b"
+    d.mkdir()
+    (d / "kb.sqlite.gz").write_bytes(blob)
+    if "sha256" not in over:
+        m["sha256"] = hashlib.sha256(blob).hexdigest()
+    (d / "kb-manifest.json").write_text(json.dumps(m))
+    return str(d)
+
+
+def test_check_script_accepts_good_bundle(tmp_path):
+    assert _load_checker().check(_bundle(tmp_path), EXPECTED)["url"] == EXPECTED
+
+
+@pytest.mark.parametrize("over,msg", [
+    ({"sha256": "0" * 64}, "sha256"),
+    ({"url": "https://evil.test/x.gz"}, "url"),
+    ({"version": "2020.01.01"}, "version"),
+    ({"built_at": "2020-01-01T00:00:00Z"}, "built_at"),
+    ({"extra": 1}, "key"),
+    ({"format": "zip"}, "format"),
+])
+def test_check_script_rejects_bad_manifest(tmp_path, over, msg):
+    with pytest.raises(ValueError, match=msg):
+        _load_checker().check(_bundle(tmp_path, **over), EXPECTED)
+
+
+def test_check_script_rejects_extra_file_symlink_and_rollback(tmp_path):
+    c = _load_checker()
+    d = _bundle(tmp_path)
+    open(os.path.join(d, "base64.py"), "w").write("evil")
+    with pytest.raises(ValueError, match="2 file"):
+        c.check(d, EXPECTED)
+    os.unlink(os.path.join(d, "base64.py"))
+    prev = {"version": _today(1), "built_at": _now_iso()}
+    with pytest.raises(ValueError, match="rollback|thấp hơn"):
+        c.check(d, EXPECTED, prev)
+    real = tmp_path / "real.gz"
+    os.rename(os.path.join(d, "kb.sqlite.gz"), real)
+    os.symlink(real, os.path.join(d, "kb.sqlite.gz"))
+    with pytest.raises(ValueError, match="file thường"):
+        c.check(d, EXPECTED)
