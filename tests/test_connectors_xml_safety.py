@@ -49,3 +49,11 @@ def test_connectors_do_not_import_stdlib_etree():
             else:
                 continue
             assert not any(n.startswith("xml.etree") for n in names), p.name
+
+
+def test_rejected_xml_is_logged(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        assert qualys.parse_hosts_xml(BILLION_LAUGHS) == []
+        assert openvas.parse_results_xml(XXE_RESULTS) == []
+    assert "bị từ chối" in caplog.text

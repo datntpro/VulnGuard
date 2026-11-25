@@ -14,8 +14,7 @@
 
 - **Giữ `AUTH_ENABLED=true`.** App **từ chối khởi động** nếu bind không phải loopback mà `AUTH_ENABLED=false` (cả `run.sh`,
   `run.ps1`, `install/run.sh`, `scripts/setup.py` lẫn chính app). Khi auth tắt, Host cũng luôn bị giới hạn loopback.
-- **Tạo tài khoản ADMIN trước khi mở LAN.** Khi chưa có user, `POST /api/auth/setup` là đường chiếm quyền ADMIN. Phiên bản có
-  *setup token* (PR-G, `VULNGUARD_SETUP_TOKEN` / `storage/setup_token`) chặn việc này; vẫn nên tạo admin khi còn ở localhost.
+- **Lần đầu cần setup token.** Khi chưa có user, `POST /api/auth/setup` yêu cầu *setup token* (`VULNGUARD_SETUP_TOKEN` hoặc file `storage/setup_token`), nên người khác trong LAN không tự chiếm ADMIN được; dù vậy vẫn nên tạo admin khi còn ở localhost.
 - Firewall chỉ cho mạng tin cậy. Proxy MITM (8788) và `coworker_host` (8765) **không** nên mở ra LAN.
 
 ## 2. Docker
@@ -52,8 +51,7 @@ vulnguard.lan {
     reverse_proxy 127.0.0.1:8080
 }
 ```
-Rồi đặt: `ALLOWED_HOSTS=vulnguard.lan`, `COOKIE_SECURE=true`, chạy uvicorn với
-`--proxy-headers --forwarded-allow-ips=127.0.0.1` nếu cần. Import CA nội bộ của Caddy vào máy khách.
+Rồi đặt: `ALLOWED_HOSTS=vulnguard.lan`, `COOKIE_SECURE=true` (Caddy giữ nguyên `Host`). Import CA nội bộ của Caddy vào máy khách.
 (`COOKIE_SECURE=true` trên HTTP thuần sẽ gây vòng lặp đăng nhập → 401.)
 
 ## 5. Chẩn đoán
@@ -64,6 +62,7 @@ Rồi đặt: `ALLOWED_HOSTS=vulnguard.lan`, `COOKIE_SECURE=true`, chạy uvicor
 | `421 {"code":"bad_host"}` | `ALLOWED_HOSTS` đã đặt nhưng thiếu IP/hostname này; hoặc `AUTH_ENABLED=false` | Thêm vào `ALLOWED_HOSTS`; bật auth |
 | `403 {"code":"bad_origin"}` | Request ghi từ origin khác Host (vd qua proxy đổi Host) | Proxy phải giữ nguyên `Host`; hoặc đặt `CORS_ALLOW_ORIGINS` |
 | Đăng nhập xong vẫn `401` | `COOKIE_SECURE=true` nhưng truy cập qua HTTP | Dùng HTTPS hoặc `COOKIE_SECURE=false` |
+| Docker: container `Restarting` | Bind LAN + `AUTH_ENABLED=false` bị từ chối | `docker compose logs vulnguard` |
 | App không khởi động: "AUTH_ENABLED=false không được phép…" | Bind LAN + auth tắt | Bật auth hoặc bind loopback |
 
 Kiểm tra nhanh: `curl -s http://<IP-LAN>:8080/api/auth/status`.

@@ -264,7 +264,8 @@ app.include_router(knowledge.router)
 async def _check_bind():
     """Từ chối khởi động khi auth tắt mà bind non-loopback (compose/run.sh truyền VULNGUARD_BIND vào env)."""
     from api import bind_policy
-    bind, deprecated = bind_policy.resolve_bind()
+    _, deprecated = bind_policy.resolve_bind()
+    bind = bind_policy.detect_runtime_bind()
     if deprecated:
         import logging
         logging.getLogger(__name__).warning("[bind] VULNGUARD_HOST đã deprecated — dùng VULNGUARD_BIND.")

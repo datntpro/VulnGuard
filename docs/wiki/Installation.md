@@ -76,7 +76,7 @@ Việc cần làm: mở file, đăng nhập, đổi mật khẩu, rồi **xoá f
 
 Nếu không chạy bootstrap, lần đầu mở app sẽ hiện màn hình tạo ADMIN (`POST /api/auth/setup`, chỉ dùng được khi DB chưa có user nào).
 
-> **Nên dùng `--no-run` rồi `bash run.sh`.** Khi `setup.py` tự chạy server (không có `--no-run`), nó gọi `uvicorn --host 0.0.0.0` và không thêm `.venv/bin` vào `PATH`. Khi đó app nghe trên mọi interface và các tool cài trong `.venv` (semgrep, bandit, pip-audit, detect-secrets, checkov) sẽ bị báo `skipped`. `run.sh` thì nghe `127.0.0.1` và đưa `.venv/bin` lên đầu `PATH`.
+> **Nên dùng `--no-run` rồi `bash run.sh`.** Khi `setup.py` tự chạy server (không có `--no-run`), nó bind `VULNGUARD_BIND` (mặc định `127.0.0.1`) nhưng không thêm `.venv/bin` vào `PATH`. Khi đó các tool cài trong `.venv` (semgrep, bandit, pip-audit, detect-secrets, checkov) sẽ bị báo `skipped`. `run.sh` thì đưa `.venv/bin` lên đầu `PATH`.
 
 ### `run.sh` làm gì
 

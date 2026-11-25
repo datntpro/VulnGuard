@@ -5,6 +5,7 @@ Mặc định loopback. Mở ra ngoài (non-loopback) bị từ chối khi `AUTH
 """
 import logging
 import os
+import sys
 from typing import Mapping, Optional, Tuple
 
 log = logging.getLogger(__name__)
@@ -24,12 +25,35 @@ def resolve_bind(env: Optional[Mapping[str, str]] = None) -> Tuple[str, bool]:
     return "127.0.0.1", False
 
 
+def detect_runtime_bind(env: Optional[Mapping[str, str]] = None, argv: Optional[list] = None) -> str:
+    """Bind thực tế: ưu tiên VULNGUARD_BIND/HOST; nếu không đặt thì dò `--host` của uvicorn trong argv /
+    UVICORN_HOST (chạy thẳng `uvicorn api.main:app --host 0.0.0.0`, không qua launcher)."""
+    e = os.environ if env is None else env
+    bind, _ = resolve_bind(e)
+    explicit = bool((e.get("VULNGUARD_BIND") or e.get("VULNGUARD_HOST") or "").strip())
+    if explicit:
+        return bind
+    a = sys.argv if argv is None else argv
+    for i, tok in enumerate(a):
+        if tok == "--host" and i + 1 < len(a):
+            return a[i + 1].strip()
+        if tok.startswith("--host="):
+            return tok.split("=", 1)[1].strip()
+    return (e.get("UVICORN_HOST") or "").strip() or bind
+
+
 def is_loopback(bind: str) -> bool:
     return bind.strip().lower() in LOOPBACK
 
 
 def check_startup(bind: str, auth_enabled: bool, allowed_hosts: str, cookie_secure: bool) -> None:
     """Từ chối khởi động nếu auth tắt mà bind non-loopback; cảnh báo các cấu hình LAN kém an toàn."""
+    if not auth_enabled:
+        extra = [h.strip() for h in (allowed_hosts or "").split(",")
+                 if h.strip() and h.strip().lower().split(":")[0] not in LOOPBACK]
+        if extra:
+            raise RuntimeError(
+                f"AUTH_ENABLED=false không được phép khi ALLOWED_HOSTS có host ngoài loopback ({', '.join(extra)}).")
     if is_loopback(bind):
         return
     if not auth_enabled:

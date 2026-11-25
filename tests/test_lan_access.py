@@ -79,3 +79,29 @@ def test_same_origin_write_via_lan_ip_vs_cross_origin(monkeypatch):
     bad = c.post("/api/auth/login", json={"email": "x@t.local", "password": "bad"},
                  headers={"Host": LAN, "Origin": "http://evil.example"})
     assert bad.status_code == 403 and bad.json()["code"] == "bad_origin"
+
+
+def test_detect_runtime_bind_from_uvicorn_argv():
+    d = bind_policy.detect_runtime_bind
+    assert d({}, ["uvicorn", "api.main:app", "--host", "0.0.0.0"]) == "0.0.0.0"
+    assert d({}, ["uvicorn", "api.main:app", "--host=192.168.1.5"]) == "192.168.1.5"
+    assert d({}, ["pytest"]) == "127.0.0.1"
+    assert d({"VULNGUARD_BIND": "127.0.0.1"}, ["uvicorn", "--host", "0.0.0.0"]) == "127.0.0.1"  # biến tường minh thắng
+
+
+def test_raw_uvicorn_auth_off_lan_refused(monkeypatch):
+    """Chạy thẳng `uvicorn --host 0.0.0.0` (không qua launcher, không đặt VULNGUARD_BIND) vẫn bị chặn."""
+    import sys
+    monkeypatch.delenv("VULNGUARD_BIND", raising=False)
+    monkeypatch.delenv("VULNGUARD_HOST", raising=False)
+    monkeypatch.setattr(sys, "argv", ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080"])
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    with pytest.raises(RuntimeError):
+        with TestClient(app):
+            pass
+
+
+def test_auth_off_with_lan_allowed_hosts_refused():
+    with pytest.raises(RuntimeError):
+        bind_policy.check_startup("127.0.0.1", False, "192.168.1.63", False)
+    bind_policy.check_startup("127.0.0.1", False, "localhost,127.0.0.1", False)

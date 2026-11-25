@@ -9,11 +9,14 @@ base_url: host[:port] của Greenbone (vd gvm.corp.vn:9390). Secret: username/pa
 Hàm parse XML là pure (test được không cần GVM).
 """
 import defusedxml.ElementTree as ET
+import logging
 from defusedxml import DefusedXmlException
 from typing import Any, Dict, List, Tuple
 
 from scanner.connectors.base import BaseConnector, ConnectorError, NormAlert, NormAsset
 
+
+log = logging.getLogger(__name__)
 
 def _sev_from_cvss(score: float) -> str:
     if score >= 9.0:
@@ -37,7 +40,11 @@ def parse_results_xml(xml_text: str) -> List[NormAlert]:
     out = []
     try:
         root = ET.fromstring(xml_text)
-    except (ET.ParseError, DefusedXmlException):
+    except DefusedXmlException as e:
+        # DTD/entity bị từ chối: có thể là MITM hoặc server lạ → không im lặng.
+        log.warning("[%s] phản hồi XML bị từ chối (DTD/entity): %s", __name__, e)
+        return out
+    except ET.ParseError:
         return out
     for r in root.iter("result"):
         host_el = r.find("host")
@@ -69,7 +76,11 @@ def parse_assets_xml(xml_text: str) -> List[NormAsset]:
     out = []
     try:
         root = ET.fromstring(xml_text)
-    except (ET.ParseError, DefusedXmlException):
+    except DefusedXmlException as e:
+        # DTD/entity bị từ chối: có thể là MITM hoặc server lạ → không im lặng.
+        log.warning("[%s] phản hồi XML bị từ chối (DTD/entity): %s", __name__, e)
+        return out
+    except ET.ParseError:
         return out
     for a in root.iter("asset"):
         name = _txt(a, "name")                 # thường là IP
