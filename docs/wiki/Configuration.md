@@ -38,7 +38,12 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 | `BLOCK_SEVERITY_THRESHOLD` | `HIGH` | Ngưỡng chặn approve (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`) |
 | `SONARQUBE_URL`, `SONARQUBE_TOKEN` | rỗng | SonarQube. Có thể ghi đè trong Settings |
 | `SONARQUBE_TIMEOUT` | `900` | Giây |
-| `FEATURE_COWORKER`, `FEATURE_DOCREVIEW`, `FEATURE_FILE_ASSISTANT` | `true` | Tắt module. API của module bị tắt trả 404 |
+| `FEATURE_COWORKER`, `FEATURE_DOCREVIEW` | `true` | Tắt module. API của module bị tắt trả 404 |
+| `FEATURE_FILE_ASSISTANT` | `false` | File Assistant chưa có UI nên mặc định tắt (404). Bật bằng `true` |
+| `SCAN_ALLOWED_ROOTS` | rỗng | CSV thư mục được phép scan. Rỗng: Docker `/workspace`, native thư mục home. Luôn thêm `storage/scan_uploads`. Áp dụng cho mọi vai trò |
+| `FILE_ASSISTANT_ALLOWED_ROOTS` | rỗng | CSV thư mục File Assistant được đọc. Rỗng: như `SCAN_ALLOWED_ROOTS` |
+| `BODY_MAX_BYTES` | 300 MiB | Giới hạn body cho mọi request POST/PUT/PATCH khác (413 khi vượt) |
+| `UPLOAD_MAX_BYTES`, `UPLOAD_MAX_UNCOMPRESSED_BYTES`, `UPLOAD_MAX_FILES`, `UPLOAD_MAX_RATIO` | 300 MiB, 2 GiB, 50000, 200 | Giới hạn upload zip (chống zip bomb). Vượt giới hạn trả 413 |
 
 ## Biến dùng bởi script và module khác
 

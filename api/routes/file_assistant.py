@@ -5,11 +5,14 @@ Chat with files using local Ollama
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Path, WebSocket
 from fastapi.responses import StreamingResponse
+import asyncio
 import logging
+import os
 import json
 import uuid
 from typing import List, Optional
 from datetime import datetime
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.database import get_db
@@ -29,6 +32,8 @@ from api.config import settings
 
 logger = logging.getLogger(__name__)
 
+MAX_FILE_BYTES = 20 * 1024 * 1024
+
 router = APIRouter(prefix="/api/file-assistant", tags=["file-assistant"])
 
 
@@ -44,9 +49,17 @@ async def health_check(db: Session = Depends(get_db)):
     # Test DB connection
     db_available = True
     try:
-        db.execute("SELECT 1")
-    except:
+        db.execute(text("SELECT 1"))
+    except Exception:
         db_available = False
+
+    coworker_available = False
+    try:
+        from api.routes.coworker import _host_request
+        await asyncio.wait_for(_host_request("GET", "/health"), timeout=3)
+        coworker_available = True
+    except Exception:
+        coworker_available = False
 
     status = "ok"
     if not ollama_available or not db_available:
@@ -56,7 +69,7 @@ async def health_check(db: Session = Depends(get_db)):
         status=status,
         ollama_available=ollama_available,
         database_available=db_available,
-        coworker_host_available=True,  # TODO: check coworker_host
+        coworker_host_available=coworker_available,
         message="System ready" if status == "ok" else "Some services unavailable"
     )
 
@@ -79,12 +92,28 @@ async def create_session(
         if len(request.files) > 3:
             raise HTTPException(status_code=400, detail="Maximum 3 files per session")
 
+        from api.services.path_policy import (
+            PathNotAllowed, file_assistant_roots, resolve_under_roots)
+        roots = file_assistant_roots()
         for file_info in request.files:
             if not is_supported_file(file_info.path):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unsupported file type: {file_info.path}"
                 )
+            try:
+                real = resolve_under_roots(file_info.path, roots, "file")
+            except PathNotAllowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Đường dẫn phải nằm trong: {', '.join(roots)}")
+            size = os.path.getsize(real)
+            if size > MAX_FILE_BYTES:
+                raise HTTPException(status_code=413, detail="File quá lớn (tối đa 20MB)")
+            if not is_supported_file(real):
+                raise HTTPException(status_code=400, detail=f"Unsupported file type: {real}")
+            file_info.path = real
+            file_info.size_bytes = size  # bỏ qua giá trị client gửi
 
         # Create session
         session_id = str(uuid.uuid4())
@@ -369,6 +398,13 @@ async def get_file_chunk(
         file_path = files_json[file_index].get("path")
         if not file_path:
             raise HTTPException(status_code=400, detail="Invalid file path")
+
+        from api.services.path_policy import (
+            PathNotAllowed, file_assistant_roots, resolve_under_roots)
+        try:
+            resolve_under_roots(file_path, file_assistant_roots(), "file")
+        except PathNotAllowed:
+            raise HTTPException(status_code=400, detail="Đường dẫn file nằm ngoài thư mục cho phép")
 
         engine = ChatEngine(db=db)
         result = await engine.get_file_chunk(

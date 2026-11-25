@@ -18,6 +18,12 @@ from api.services.chunker import FileChunker
 logger = logging.getLogger(__name__)
 
 
+def _safe(path: str) -> str:
+    """Re-validate đường dẫn đã lưu (session cũ / symlink bị thay) trước khi đọc."""
+    from api.services.path_policy import file_assistant_roots, resolve_under_roots
+    return resolve_under_roots(path, file_assistant_roots(), "file")
+
+
 class ChatEngine:
     """Main chat orchestration engine"""
 
@@ -50,7 +56,7 @@ class ChatEngine:
             try:
                 # Extract file content
                 logger.info(f"Processing file: {file_path}")
-                content, line_count = await extract_text_from_file(file_path)
+                content, line_count = await extract_text_from_file(_safe(file_path))
 
                 file_type = get_file_type(file_path)
                 file_size = len(content.encode('utf-8'))
@@ -197,7 +203,7 @@ class ChatEngine:
 
         # Re-extract file and get chunk content
         try:
-            content, _ = await extract_text_from_file(file_path)
+            content, _ = await extract_text_from_file(_safe(file_path))
             chunks = self.chunker.chunk_text(content, summary.file_type)
 
             # Find chunk by ID
@@ -261,7 +267,7 @@ class ChatEngine:
                 continue
 
             try:
-                content, _ = await extract_text_from_file(file_path)
+                content, _ = await extract_text_from_file(_safe(file_path))
                 file_type = get_file_type(file_path)
 
                 chunks = self.chunker.chunk_text(content, file_type)

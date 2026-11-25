@@ -23,9 +23,18 @@ def test_coworker_get_blocked(off):
     assert off.get("/api/coworker/folders", headers=LOCAL).status_code == 403
 
 
-def test_file_assistant_blocked(off):
+def test_file_assistant_blocked(off, monkeypatch):
+    # Module bật → lockdown auth-off trả 403.
+    from api.config import settings
+    monkeypatch.setattr(settings, "feature_file_assistant", True)
     r = off.post("/api/file-assistant/sessions", json={}, headers=LOCAL)
     assert r.status_code == 403 and r.json()["code"] == "auth_required"
+
+
+def test_file_assistant_off_by_default_is_blocked(off):
+    # D-8: FEATURE_FILE_ASSISTANT mặc định tắt → 404 (cũng là bị chặn).
+    r = off.post("/api/file-assistant/sessions", json={}, headers=LOCAL)
+    assert r.status_code in (403, 404)
 
 
 def test_admin_settings_blocked(off):

@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     # 1.9: feature flags — tắt để ẩn module ngoài ICP khỏi bản bán.
     feature_coworker: bool = True
     feature_docreview: bool = True
-    feature_file_assistant: bool = True
+    # File Assistant chưa có UI (B-4) → mặc định tắt (D-8). Bật: FEATURE_FILE_ASSISTANT=true
+    feature_file_assistant: bool = False
     # Secret ký JWT + mã hoá API key cloud AI. Để trống → tự sinh & lưu vào
     # <storage>/secret.key (chmod 600). Đặt cố định nếu chạy nhiều instance.
     vulnguard_secret_key: str = ""
@@ -75,6 +76,20 @@ class Settings(BaseSettings):
     kb_manifest_url: str = "https://github.com/datntpro/vulnguard/releases/download/kb-latest/kb-manifest.json"
     kb_auto_update: bool = True            # kiểm tra + tải bản mới hàng ngày
     kb_update_interval_hours: int = 24     # chu kỳ kiểm tra
+
+    # ── Allow-list đường dẫn (M-3/H-1, D-7) ──
+    # CSV các thư mục được phép scan. Rỗng → docker: /workspace; native: thư mục home.
+    scan_allowed_roots: str = ""
+    # CSV thư mục File Assistant được đọc. Rỗng → dùng như scan_allowed_roots.
+    file_assistant_allowed_roots: str = ""
+
+    # ── Giới hạn upload zip (M-5) ──
+    upload_max_bytes: int = 300 * 1024 * 1024
+    upload_max_uncompressed_bytes: int = 2 * 1024 * 1024 * 1024
+    upload_max_files: int = 50_000
+    upload_max_ratio: int = 200
+    # Giới hạn body cho mọi route POST/PUT/PATCH khác (docreview, knowledge import, logo…)
+    body_max_bytes: int = 300 * 1024 * 1024
 
     @property
     def storage_dir(self) -> str:

@@ -12,6 +12,32 @@
   stale "must change password" errors disappear.
 - Tests: `tests/test_change_password.py` (API) and `tests/test_ui_change_password.py` (headless Chromium, runs in CI).
 
+
+### Security — path allow-lists, zip bomb, File Assistant (fix/path-policy)
+- **M-3** `scan_path` must resolve (realpath, so symlinks and `..` cannot escape) under an allowed root for every role. New `api/services/path_policy.py`; roots from `SCAN_ALLOWED_ROOTS`, default `/workspace` (Docker) or the user's home (native), plus `storage/scan_uploads`. The app storage directory (DB, `secret.key`) is always refused. Violations return 400.
+- **H-1** File Assistant file paths are validated against `FILE_ASSISTANT_ALLOWED_ROOTS` (default: scan roots) at session creation (client `size_bytes` is ignored, max 20 MiB) and re-validated before every read, so legacy sessions or swapped symlinks are rejected.
+- **M-5** Zip uploads are streamed to a temp file (413 above `UPLOAD_MAX_BYTES`) and extracted with limits on file count, total uncompressed size, compression ratio and actual bytes written per member (lying headers abort), plus a free-disk check. Failed extractions are removed; rotating out an old upload scan deletes its directory.
+- **B-4** File Assistant health uses `text("SELECT 1")` (database check was always false) and really probes the Coworker Host.
+
+### PR #32 verification fixes
+- Deny-list (app storage, credential dirs) is compared casefold + NFC on both the raw and resolved path, so `STORAGE`/`.DOCKER` on case-insensitive APFS no longer bypass it.
+- Credential deny-list for scan and File Assistant: `~/.ssh`, `.gnupg`, `.aws`, `.azure`, `.config`, `.docker`, `.kube`, `.local`, `Library`, `.netrc`, `.npmrc`, `.pypirc`, git credentials; files `.env*`, `*.pem`, `*.key`, `*.p12`, keychains, `id_*`, the app `.env`. Scanning a directory that contains such a folder (e.g. `~` itself) is refused: pick the project folder.
+- `storage/scan_uploads` is no longer a selectable root (cross-project read); rotation only deletes `scan_uploads/<own project>/<hex>`, never a RUNNING scan or a path another scan still references.
+- Relative `scan_path` is rejected; relative or missing configured roots are ignored with a warning.
+- Zip: End-of-Central-Directory entry count / size is checked before `zipfile` parses the directory; `Content-Length` (or streamed bytes) over `UPLOAD_MAX_BYTES` + 1 MiB is rejected with 413 by a middleware before Starlette spools the body.
+- File Assistant re-checks the file extension on the resolved path.
+
+### PR #32 re-verification fixes
+- Credential deny-list is now a blanket rule: every top-level dot entry under `$HOME` (`~/.*`, casefold + NFC) plus `~/Library` is refused for both scan and File Assistant, and `~` itself (or an ancestor) cannot be scanned. A project placed under a dot directory of home (or `SCAN_ALLOWED_ROOTS` pointing into one) is therefore refused too. macOS firmlink aliases (`/System/Volumes/Data/...`) are normalised.
+- Zip pre-check no longer trusts EOCD counts: it locates the central directory the way CPython does (always probing the Zip64 locator) and counts records without building `ZipInfo`, aborting past `UPLOAD_MAX_FILES`.
+- A chunked upload over the limit now returns a real 413. Every POST/PUT/PATCH body is bounded (`BODY_MAX_BYTES`, default 300 MiB; `/scan-upload` uses `UPLOAD_MAX_BYTES`).
+
+### Breaking changes (path-policy)
+- Scanning `~` itself, or any directory containing a credential folder, is refused in native mode.
+- **D-7** Scans of paths outside the allowed roots are now refused (400), for all roles. Set `SCAN_ALLOWED_ROOTS` to widen. Existing scans are unaffected.
+- **D-8** `FEATURE_FILE_ASSISTANT` now defaults to `false` (module returns 404) until its UI exists; set it to `true` to use the API.
+- Known residual: a directory swapped for a symlink between validation and scan (TOCTOU) is not prevented.
+
 ### Security — Coworker Host exec policy (BREAKING)
 - `COWORKER_EXEC_MODE` (`safe` default / `trusted` / `off`). In `safe`, Co-work can no longer run
   `python3`, `pytest`, `npm`, `make`, `go`, `cargo`... Set `COWORKER_EXEC_MODE=trusted` on the host to opt in
