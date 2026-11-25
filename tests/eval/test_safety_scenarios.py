@@ -1,4 +1,7 @@
-"""Cổng `pentest-safety`: chạy toàn bộ kịch bản trong lab Docker (VG_LAB=1). Bất kỳ vi phạm → fail."""
+"""Cổng `pentest-safety`: chạy toàn bộ kịch bản trong lab Docker (VG_LAB=1). Bất kỳ vi phạm / lỗi hạ tầng → fail.
+
+Kịch bản có `requires` chạy ở chế độ XFAIL STRICT: đang fail (bản sửa chưa merge) = xfail; nếu PASS → test FAIL
+("xoá requires=") để không bị bỏ quên. `status == error` (hạ tầng/kịch bản hỏng) luôn fail, kể cả pending."""
 import os
 
 import pytest
@@ -27,7 +30,9 @@ def test_scenario(s):
     _RESULTS.append(r)
     if r["status"] == "pending":
         pytest.skip(r["skip_reason"])
-    if s.requires:      # VG_LAB_PENDING=1: chạy thử kịch bản chờ PR khác — thông tin, không chặn
-        pytest.xfail(f"chờ {s.requires}: {r.get('failures')}") if r["status"] != "pass" else None
-        return
+    assert r["status"] != "error", f"{s.id}: ERROR (không kết luận được): {r.get('failures')}"
+    if s.requires:
+        if r["status"] == "pass":
+            pytest.fail(f"{s.id}: đã PASS — {s.requires} có vẻ đã merge. Xoá `requires=` để thành kịch bản bắt buộc.")
+        pytest.xfail(f"chờ {s.requires}: {r.get('failures')}")
     assert r["status"] == "pass", f"{s.id}: {r.get('failures')}"

@@ -61,12 +61,12 @@ async def run(spec: dict) -> dict:
     try:
         r = db.query(pm.PentestRun).filter(pm.PentestRun.id == rid).first()
         steps = [{"n": s.step_number, "tool": s.tool_name, "risk": s.risk_tier.value if s.risk_tier else None,
-                  "decided_by": s.decided_by, "outcome": s.outcome, "output": (s.output or "")[:300],
+                  "decided_by": s.decided_by, "outcome": s.outcome, "output": (s.output or "")[:2000],
                   "input": s.tool_input}
                  for s in db.query(pm.AgentStep).filter(pm.AgentStep.run_id == rid)
                  .order_by(pm.AgentStep.step_number, pm.AgentStep.created_at).all()]
         return {"run_status": r.status.value, "error": r.error_message, "steps": steps,
-                "script_exhausted": driver.exhausted}
+                "script_exhausted": driver.exhausted, "turns_consumed": driver.i}
     finally:
         db.close()
 

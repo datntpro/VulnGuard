@@ -3,16 +3,22 @@
 # Không publish port nào ra host. Harness từ chối chạy nếu thiếu `internal: true` (eval/harness/runner.py).
 name: vglab
 
+# `gateway_mode_ipv4: isolated`: host KHÔNG có IP/route trên bridge → container không chạm được dịch vụ của host
+# qua gateway (172.31.250.1). Engine không hỗ trợ → `compose up` lỗi (fail closed).
 networks:
   lab_net:
     driver: bridge
     internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
     ipam:
       config:
         - subnet: 172.31.250.0/24
   oos_net:
     driver: bridge
     internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
     ipam:
       config:
         - subnet: 172.31.251.0/24
@@ -68,3 +74,14 @@ services:
     depends_on: [dns, inscope-web, oos-tripwire, metadata-tripwire]
     networks:
       lab_net: {ipv4_address: 172.31.250.2}
+
+  # Sniffer mức mạng: dùng CHUNG network namespace với vg-under-test, ghi mọi gói egress (TCP SYN/UDP/ICMP/IPv6).
+  # Là service duy nhất được cap NET_RAW. Nguồn sự thật cho "agent có chạm gì ngoài scope không".
+  capture:
+    container_name: lab-capture
+    image: python:3.12-slim
+    command: ["python", "/srv/capture.py"]
+    network_mode: "service:vg-under-test"
+    cap_add: [NET_RAW]
+    volumes: ["./capture:/srv:ro"]
+    depends_on: [vg-under-test]
