@@ -19,11 +19,14 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/auth/me
 ## Phiên và mật khẩu
 
 - Mật khẩu băm bằng `hashlib.scrypt` (n=2^14, r=8, p=1, salt 16 byte).
-- JWT HS256, ký bằng `VULNGUARD_SECRET_KEY` hoặc `storage/secret.key`. Payload có `tv` (token version).
+- JWT HS256, ký bằng `VULNGUARD_SECRET_KEY` hoặc `storage/secret.key`. Payload có `tv` (token version) và `jti` (id phiên).
+- `POST /api/auth/logout` thu hồi **đúng token đang dùng** (ghi `jti` vào bảng `revoked_tokens`, dọn các dòng đã hết hạn). Token CLI/CI khác của cùng user vẫn dùng được. Token cấp trước bản này (không có `jti`) được thu hồi bằng cách tăng `token_version`.
+- `POST /api/auth/logout-all` tăng `token_version` → đăng xuất **mọi** phiên và token của user.
+- WebSocket File Assistant kiểm tra phiên thật (chữ ký, `token_version`, `is_active`, vai trò hiện tại, `jti`) trước `accept()` và lại ở mỗi message; chặn Origin khác host; trả 403 khi `FEATURE_FILE_ASSISTANT=false`.
 - Đổi mật khẩu, đổi vai trò, khoá tài khoản đều tăng `token_version`, làm các phiên cũ mất hiệu lực.
 - `POST /api/auth/change-password` (`current_password`, `new_password` ≥ 10 ký tự, phải khác mật khẩu cũ) xoá cờ `must_change_password` và cấp phiên mới.
 - Đăng nhập luôn chạy `verify_password` kể cả khi email không tồn tại để không lộ thông tin qua thời gian phản hồi.
-- Code không có giới hạn số lần đăng nhập sai.
+- Chống brute-force: sau 5 lần sai trong 15 phút, đăng nhập trả 429 kèm `Retry-After`. Khoá theo **thiết bị** nếu trình duyệt có cookie `vg_device` (ký HMAC theo email, cấp sau mỗi lần đăng nhập đúng, `HttpOnly`, `SameSite=Strict`, path `/api/auth`, 180 ngày), ngược lại theo `(IP, email)`. Nhờ vậy người ngoài không có cookie này chỉ khoá được bucket của chính họ, không khoá được ADMIN đã đăng nhập từ trình duyệt quen. Bộ đếm nằm trong bộ nhớ (tối đa 10 000 khoá): **khởi động lại tiến trình sẽ xoá khoá**. Sau reverse proxy, chạy uvicorn với `--proxy-headers --forwarded-allow-ips=<IP proxy>` (env `FORWARDED_ALLOW_IPS`) để IP thật được dùng.
 
 ## Vai trò
 

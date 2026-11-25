@@ -12,19 +12,27 @@ Phân quyền (enforce ở middleware, theo prefix):
   ANALYST — chạy scan, đổi trạng thái vuln, waiver…
   ADMIN   — + quản lý user, cấu hình AI / scanner / Ollama, Co-work (chạy lệnh trên host)
 """
+import hashlib
+import hmac
+import secrets
+import threading
+import time as _time
+from collections import OrderedDict
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy.exc import IntegrityError
+from starlette.requests import HTTPConnection
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from api.auth_models import User, UserRole
+from api.auth_models import RevokedToken, User, UserRole
 from api.config import settings
 from api.database import get_db, SessionLocal
 from api.security import (
-    COOKIE_NAME, create_token, decode_token, hash_password, verify_password,
+    COOKIE_NAME, create_token, decode_token, get_secret_key, hash_password, verify_password,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -112,29 +120,37 @@ class UserUpdate(BaseModel):
 # ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
-def _token_from_request(request: Request) -> Optional[str]:
+def _token_from_request(request: HTTPConnection) -> Optional[str]:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
     return request.cookies.get(COOKIE_NAME)
 
 
-def resolve_user(request: Request) -> Optional[User]:
-    token = _token_from_request(request)
+def _resolve(token: Optional[str]) -> Tuple[Optional[User], Optional[dict]]:
+    """Giải mã + kiểm tra DB (user active, token_version, jti chưa bị thu hồi)."""
     if not token:
-        return None
+        return None, None
     payload = decode_token(token)
     if not payload:
-        return None
+        return None, None
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == payload.get("sub")).first()
         if not user or not user.is_active or user.token_version != payload.get("tv", 0):
-            return None
+            return None, None
+        jti = payload.get("jti")
+        if jti and db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+            return None, None
         db.expunge(user)
-        return user
+        return user, payload
     finally:
         db.close()
+
+
+def resolve_user(request: HTTPConnection) -> Optional[User]:
+    """Dùng được cho cả Request và WebSocket (cùng có .headers / .cookies)."""
+    return _resolve(_token_from_request(request))[0]
 
 
 def _set_session(response: Response, user: User) -> str:
@@ -238,19 +254,43 @@ def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depend
     return {"user": UserOut.model_validate(user), "token": token}
 
 
-# M5: chống brute-force đăng nhập — khoá tạm theo (IP, email) sau nhiều lần sai.
-import threading
-import time as _time
-
-_LOGIN_FAILS: dict = {}            # key → [count, first_ts]
+# M5/N-3: chống brute-force đăng nhập — khoá tạm sau nhiều lần sai.
+# Khoá theo "thiết bị" (cookie ký HMAC cấp sau lần đăng nhập đúng) nếu có, ngược lại theo (IP, email).
+# Kẻ tấn công không có device cookie của nạn nhân chỉ khoá được bucket "ip|email" của chính nó,
+# nên ADMIN thật (trình duyệt đã đăng nhập trước đó) không bị DoS. Lockout nằm trong bộ nhớ:
+# khởi động lại tiến trình sẽ xoá.
+DEVICE_COOKIE = "vg_device"
+_LOGIN_FAILS: "OrderedDict[str, list]" = OrderedDict()   # key → [count, first_ts]
 _LOGIN_LOCK = threading.Lock()
 _MAX_FAILS = 5
 _LOCK_WINDOW = 15 * 60             # 15 phút
+_MAX_KEYS = 10_000
 
 
-def _login_key(request: Request, email: str) -> str:
+def _login_key(request, email: str) -> str:
     ip = request.client.host if request.client else "?"
     return f"{ip}|{(email or '').lower()}"
+
+
+def _device_sig(email: str, nonce: str) -> str:
+    return hmac.new(get_secret_key(), f"device|{email}|{nonce}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _device_nonce(request: Request, email: str) -> Optional[str]:
+    raw = request.cookies.get(DEVICE_COOKIE) or ""
+    nonce, _, sig = raw.partition(".")
+    if not nonce or not sig:
+        return None
+    if hmac.compare_digest(sig, _device_sig((email or "").lower(), nonce)):
+        return nonce
+    return None
+
+
+def _set_device_cookie(response: Response, email: str, nonce: Optional[str] = None):
+    nonce = nonce or secrets.token_urlsafe(16)
+    response.set_cookie(DEVICE_COOKIE, f"{nonce}.{_device_sig(email.lower(), nonce)}",
+                        max_age=180 * 86400, httponly=True, samesite="strict",
+                        secure=settings.cookie_secure, path="/api/auth")
 
 
 def _check_lockout(key: str):
@@ -263,22 +303,35 @@ def _check_lockout(key: str):
             _LOGIN_FAILS.pop(key, None)
             return
         if count >= _MAX_FAILS:
-            retry = int(_LOCK_WINDOW - (_time.time() - first))
+            retry = max(1, int(_LOCK_WINDOW - (_time.time() - first)))
             raise HTTPException(status_code=429,
-                                detail=f"Quá nhiều lần đăng nhập sai. Thử lại sau {retry // 60 + 1} phút.")
+                                detail=f"Quá nhiều lần đăng nhập sai. Thử lại sau {retry // 60 + 1} phút.",
+                                headers={"Retry-After": str(retry)})
 
 
 def _record_fail(key: str):
     with _LOGIN_LOCK:
-        count, first = _LOGIN_FAILS.get(key, [0, _time.time()])
-        if _time.time() - first > _LOCK_WINDOW:
-            count, first = 0, _time.time()
+        now = _time.time()
+        count, first = _LOGIN_FAILS.get(key, [0, now])
+        if now - first > _LOCK_WINDOW:
+            count, first = 0, now
         _LOGIN_FAILS[key] = [count + 1, first]
+        _LOGIN_FAILS.move_to_end(key)
+        # dọn bản ghi hết hạn ở đầu hàng đợi, rồi cắt cho đủ giới hạn
+        while _LOGIN_FAILS:
+            k0, (_, f0) = next(iter(_LOGIN_FAILS.items()))
+            if now - f0 > _LOCK_WINDOW:
+                _LOGIN_FAILS.popitem(last=False)
+            else:
+                break
+        while len(_LOGIN_FAILS) > _MAX_KEYS:
+            _LOGIN_FAILS.popitem(last=False)
 
 
 @router.post("/login")
 def login(payload: LoginIn, response: Response, request: Request, db: Session = Depends(get_db)):
-    key = _login_key(request, payload.email)
+    nonce = _device_nonce(request, payload.email)
+    key = f"dev|{nonce}" if nonce else f"ip|{_login_key(request, payload.email)}"
     _check_lockout(key)
     user = db.query(User).filter(User.email == payload.email).first()
     # verify_password chạy cả khi user không tồn tại → không lộ timing "email có tồn tại"
@@ -291,19 +344,43 @@ def login(payload: LoginIn, response: Response, request: Request, db: Session = 
     user.last_login_at = datetime.utcnow()
     db.commit()
     token = _set_session(response, user)
+    _set_device_cookie(response, payload.email, nonce)
     return {"user": UserOut.model_validate(user), "token": token}
 
 
 @router.post("/logout")
 def logout(response: Response, request: Request, db: Session = Depends(get_db)):
-    # M5: thu hồi JWT — tăng token_version để MỌI token đã cấp mất hiệu lực ngay
-    # (current_user kiểm tra tv khớp token_version). Không chỉ xoá cookie.
-    user = getattr(request.state, "user", None)
-    if user is not None and getattr(user, "id", None):
-        row = db.query(User).filter(User.id == user.id).first()
-        if row:
-            row.token_version = (row.token_version or 0) + 1
-            db.commit()
+    """N-1: thu hồi đúng token đang dùng (jti denylist). Endpoint public để xoá được cả cookie hỏng/hết hạn,
+    nên tự giải mã token ở đây (middleware không gắn request.state.user cho path public)."""
+    user, payload = _resolve(_token_from_request(request))
+    if user is not None and payload is not None:
+        jti = payload.get("jti")
+        if jti:
+            try:
+                db.add(RevokedToken(jti=jti, user_id=user.id,
+                                    expires_at=datetime.utcfromtimestamp(payload["exp"])))
+                db.commit()
+            except IntegrityError:        # logout lặp lại
+                db.rollback()
+        else:
+            # token cũ (trước khi có jti) — cách duy nhất để thu hồi là tăng token_version
+            row = db.query(User).filter(User.id == user.id).first()
+            if row:
+                row.token_version = (row.token_version or 0) + 1
+                db.commit()
+        db.query(RevokedToken).filter(RevokedToken.expires_at < datetime.utcnow()).delete()
+        db.commit()
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@router.post("/logout-all")
+def logout_all(response: Response, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Đăng xuất MỌI phiên (web + token CLI/CI) của chính user: tăng token_version."""
+    row = db.query(User).filter(User.id == user.id).first()
+    if row:
+        row.token_version = (row.token_version or 0) + 1
+        db.commit()
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"ok": True}
 
