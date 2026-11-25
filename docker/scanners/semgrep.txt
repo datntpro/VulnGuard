@@ -495,13 +495,7 @@ semgrep==1.136.0 \
     --hash=sha256:c04a15e4e589dee123a5ac2010bb00986feb6028e48ec78610d0662590a6fa86 \
     --hash=sha256:e02713314c034f6db23e337ac0196f70d6f01486a26403322da7a5b4f808a66d \
     --hash=sha256:e6be1750a08756bc2b626372ec95b10c857c36de6fafccd21b1065187626b440
-    # via -r docker/scanners/semgrep.in
-setuptools==80.10.2 \
-    --hash=sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f29a437945fbc219b70 \
-    --hash=sha256:95b30ddfb717250edb492926c92b5221f7ef3fbcc2b07579bcd4a27da21d0173
-    # via
-    #   -r docker/scanners/semgrep.in
-    #   opentelemetry-instrumentation
+    # via -r semgrep.in
 tomli==2.0.2 \
     --hash=sha256:2ebe24485c53d303f690b0ec092806a085f07af5a5aa1464f3931eec36caaa38 \
     --hash=sha256:d46d457a85337051c36524bc5349dd91b1877838e2979ac5ced3e710ed8a60ed
@@ -511,7 +505,6 @@ typing-extensions==4.16.0 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
     # via
     #   opentelemetry-sdk
-    #   referencing
     #   semgrep
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
