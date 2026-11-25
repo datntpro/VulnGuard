@@ -110,6 +110,8 @@ async def create_session(
             size = os.path.getsize(real)
             if size > MAX_FILE_BYTES:
                 raise HTTPException(status_code=413, detail="File quá lớn (tối đa 20MB)")
+            if not is_supported_file(real):
+                raise HTTPException(status_code=400, detail=f"Unsupported file type: {real}")
             file_info.path = real
             file_info.size_bytes = size  # bỏ qua giá trị client gửi
 

@@ -19,7 +19,16 @@
 - **M-5** Zip uploads are streamed to a temp file (413 above `UPLOAD_MAX_BYTES`) and extracted with limits on file count, total uncompressed size, compression ratio and actual bytes written per member (lying headers abort), plus a free-disk check. Failed extractions are removed; rotating out an old upload scan deletes its directory.
 - **B-4** File Assistant health uses `text("SELECT 1")` (database check was always false) and really probes the Coworker Host.
 
+### PR #32 verification fixes
+- Deny-list (app storage, credential dirs) is compared casefold + NFC on both the raw and resolved path, so `STORAGE`/`.DOCKER` on case-insensitive APFS no longer bypass it.
+- Credential deny-list for scan and File Assistant: `~/.ssh`, `.gnupg`, `.aws`, `.azure`, `.config`, `.docker`, `.kube`, `.local`, `Library`, `.netrc`, `.npmrc`, `.pypirc`, git credentials; files `.env*`, `*.pem`, `*.key`, `*.p12`, keychains, `id_*`, the app `.env`. Scanning a directory that contains such a folder (e.g. `~` itself) is refused: pick the project folder.
+- `storage/scan_uploads` is no longer a selectable root (cross-project read); rotation only deletes `scan_uploads/<own project>/<hex>`, never a RUNNING scan or a path another scan still references.
+- Relative `scan_path` is rejected; relative or missing configured roots are ignored with a warning.
+- Zip: End-of-Central-Directory entry count / size is checked before `zipfile` parses the directory; `Content-Length` (or streamed bytes) over `UPLOAD_MAX_BYTES` + 1 MiB is rejected with 413 by a middleware before Starlette spools the body.
+- File Assistant re-checks the file extension on the resolved path.
+
 ### Breaking changes (path-policy)
+- Scanning `~` itself, or any directory containing a credential folder, is refused in native mode.
 - **D-7** Scans of paths outside the allowed roots are now refused (400), for all roles. Set `SCAN_ALLOWED_ROOTS` to widen. Existing scans are unaffected.
 - **D-8** `FEATURE_FILE_ASSISTANT` now defaults to `false` (module returns 404) until its UI exists; set it to `true` to use the API.
 - Known residual: a directory swapped for a symlink between validation and scan (TOCTOU) is not prevented.

@@ -426,7 +426,7 @@ async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, ba
     async with _get_project_lock(project_id):
         scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.scan_number).all()
         if len(scans) >= settings.max_scans_per_project:
-            _remove_upload_dir(scans[0].scan_path)
+            _remove_upload_dir(db, scans[0])
             db.delete(scans[0]); db.commit(); scans = scans[1:]
         next_number = (scans[-1].scan_number + 1) if scans else 1
         scan = Scan(project_id=project_id, scan_number=next_number, scan_path=scan_path,
@@ -436,19 +436,61 @@ async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, ba
     return scan
 
 
-def _remove_upload_dir(scan_path: str) -> None:
-    """Xóa thư mục upload của scan bị xoay vòng (tránh đầy đĩa theo thời gian)."""
+def _remove_upload_dir(db, scan) -> None:
+    """Xóa thư mục upload của scan bị xoay vòng. Chỉ xóa đúng
+    scan_uploads/<project_id của scan>/<hex>, không khi scan còn đang chạy, và không khi
+    scan khác vẫn tham chiếu thư mục đó."""
     try:
         uploads = os.path.realpath(os.path.join(settings.storage_dir, "scan_uploads"))
-        real = os.path.realpath(scan_path or "")
-        if real != uploads and real.startswith(uploads + os.sep):
-            shutil.rmtree(real, ignore_errors=True)
+        real = os.path.realpath(scan.scan_path or "")
+        if scan.status == ScanStatus.RUNNING:
+            return
+        if os.path.dirname(os.path.dirname(real)) != uploads or \
+                os.path.basename(os.path.dirname(real)) != str(scan.project_id):
+            return
+        if db.query(Scan).filter(Scan.scan_path == scan.scan_path, Scan.id != scan.id).first():
+            return
+        shutil.rmtree(real, ignore_errors=True)
     except Exception:
         pass
 
 
 class ZipLimitExceeded(ValueError):
     """Zip vượt giới hạn (số file, dung lượng giải nén, tỉ lệ nén)."""
+
+
+def _precheck_central_directory(src, max_files: int) -> None:
+    """Đọc End-of-Central-Directory (và Zip64) để biết số entry / kích thước central directory
+    TRƯỚC khi zipfile.ZipFile() dựng ZipInfo cho từng entry (chống cạn RAM)."""
+    import struct
+    opened = None
+    f = src
+    if isinstance(src, (str, os.PathLike)):
+        opened = f = open(src, "rb")
+    try:
+        pos = f.tell() if hasattr(f, "tell") else 0
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        tail_len = min(end, 22 + 0xFFFF)
+        f.seek(end - tail_len)
+        tail = f.read(tail_len)
+        i = tail.rfind(b"PK\x05\x06")
+        if i < 0 or len(tail) - i < 22:
+            return  # để zipfile báo BadZipFile
+        total, cd_size = struct.unpack("<HI", tail[i + 10:i + 16])
+        if (total == 0xFFFF or cd_size == 0xFFFFFFFF) and i >= 20 \
+                and tail[i - 20:i - 16] == b"PK\x06\x07":
+            z64_off = struct.unpack("<Q", tail[i - 12:i - 4])[0]
+            f.seek(z64_off)
+            rec = f.read(56)
+            if rec[:4] == b"PK\x06\x06" and len(rec) >= 48:
+                total, cd_size = struct.unpack("<QQ", rec[32:48])
+        if total > max_files or cd_size > max_files * 1024:
+            raise ZipLimitExceeded(f"Zip có quá nhiều file (tối đa {max_files})")
+        f.seek(pos)
+    finally:
+        if opened:
+            opened.close()
 
 
 def _safe_extract_zip(src, dest_dir: str) -> int:
@@ -461,6 +503,7 @@ def _safe_extract_zip(src, dest_dir: str) -> int:
     max_ratio = settings.upload_max_ratio
     if isinstance(src, (bytes, bytearray)):
         src = io.BytesIO(src)
+    _precheck_central_directory(src, max_files)
     os.makedirs(dest_dir, exist_ok=True)
     root = os.path.realpath(dest_dir)
     n = 0

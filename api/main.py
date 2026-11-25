@@ -210,6 +210,8 @@ if _cors_origins:
 
 # Auth: gắn user vào request.state + chặn /api/* chưa đăng nhập (xem api/routes/auth.py)
 app.middleware("http")(auth.auth_middleware)
+from api.upload_limit import UploadSizeLimitMiddleware  # noqa: E402
+app.add_middleware(UploadSizeLimitMiddleware)  # M-5: chặn body quá lớn trước khi spool
 
 # Baseline CSP (D-12: CSP nghiêm ngặt không inline hoãn lại). Font Google được brand.css @import.
 _CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "

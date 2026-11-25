@@ -66,10 +66,13 @@ def test_storage_dir_blocked_even_inside_root(monkeypatch):
     st = os.path.realpath(settings.storage_dir)
     os.makedirs(st, exist_ok=True)
     monkeypatch.setattr(settings, "scan_allowed_roots", os.path.dirname(st))
+    roots = path_policy.allowed_scan_roots()
     with pytest.raises(PathNotAllowed):
-        resolve_under_roots(st, path_policy.allowed_scan_roots(), "dir")
+        resolve_under_roots(st, roots, "dir")
+    # scan_uploads không còn là root client chọn được
     up = os.path.join(st, "scan_uploads", "x"); os.makedirs(up, exist_ok=True)
-    assert resolve_under_roots(up, path_policy.allowed_scan_roots(), "dir") == os.path.realpath(up)
+    with pytest.raises(PathNotAllowed):
+        resolve_under_roots(up, roots, "dir")
 
 
 def test_default_roots_by_mode(monkeypatch):
@@ -276,3 +279,222 @@ def test_fa_health_flags(fa, monkeypatch):
     assert j["coworker_host_available"] is False and j["database_available"] is True
     monkeypatch.setattr(coworker, "_host_request", ok)
     assert c.get("/api/file-assistant/health", headers=h).json()["coworker_host_available"] is True
+
+
+# ══════ PR #32 verification fixes ══════
+def _case_variant(p):
+    head, tail = os.path.split(p)
+    return os.path.join(head, tail.swapcase())
+
+
+def test_storage_deny_is_case_insensitive(monkeypatch):
+    """BYPASS-1: casefold + NFC cho deny-list (APFS). Phần logic chạy được trên mọi FS."""
+    st = os.path.realpath(settings.storage_dir)
+    os.makedirs(os.path.join(st, "db"), exist_ok=True)
+    open(os.path.join(st, "ai.json"), "w").write("{}")
+    monkeypatch.setattr(settings, "scan_allowed_roots", os.path.dirname(st))
+    roots = path_policy.allowed_scan_roots()
+    assert path_policy._deny_reason([_case_variant(st)], "dir")
+    assert path_policy._deny_reason([os.path.join(_case_variant(st), "ai.json")], "file")
+    variant = _case_variant(st)
+    if os.path.isdir(variant):  # FS không phân biệt hoa/thường (APFS)
+        with pytest.raises(PathNotAllowed):
+            resolve_under_roots(variant, roots, "dir")
+        with pytest.raises(PathNotAllowed):
+            resolve_under_roots(os.path.join(variant, "ai.json"), roots, "file")
+        c, h = _client()
+        pid = _project(c, h)
+        r = c.post(f"/api/projects/{pid}/scans", json={"scan_path": variant}, headers=h)
+        assert r.status_code == 400
+
+
+def test_unicode_nfd_variant_denied():
+    import unicodedata
+    assert path_policy._norm("café") == path_policy._norm(unicodedata.normalize("NFD", "café"))
+
+
+@pytest.fixture
+def fake_home(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    (home / ".docker").mkdir(parents=True)
+    (home / ".docker" / "config.json").write_text('{"auths":{}}')
+    (home / ".config" / "gcloud").mkdir(parents=True)
+    (home / ".config" / "gcloud" / "application_default_credentials.json").write_text("{}")
+    (home / "proj").mkdir()
+    (home / "proj" / "app.py").write_text("x=1")
+    (home / "proj" / ".env").write_text("K=v")
+    (home / "proj" / "server.pem").write_text("x")
+    (home / "proj" / "notes.txt").write_text("ok")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(settings, "scan_allowed_roots", "")
+    monkeypatch.setattr(settings, "file_assistant_allowed_roots", "")
+    monkeypatch.setattr(settings, "deploy_mode", "native")
+    monkeypatch.setattr(settings, "feature_file_assistant", True)
+    return os.path.realpath(str(home))
+
+
+def test_native_default_fa_blocks_home_credentials(fake_home):
+    """BYPASS-2: ~/.docker, gcloud ADC, .env, *.pem không đọc được dưới cấu hình mặc định."""
+    c, h = _client(UserRole.ADMIN)
+    bad = [f"{fake_home}/.docker/config.json",
+           f"{fake_home}/.config/gcloud/application_default_credentials.json",
+           f"{fake_home}/.DOCKER/config.json",
+           f"{fake_home}/proj/.env", f"{fake_home}/proj/server.pem"]
+    for p in bad:
+        body = {"files": [{"name": "c", "path": p, "size_bytes": 1, "type": "json"}]}
+        r = c.post("/api/file-assistant/sessions", json=body, headers=h)
+        assert r.status_code == 400, (p, r.text)
+    body = {"files": [{"name": "n", "path": f"{fake_home}/proj/notes.txt", "size_bytes": 1, "type": "text"}]}
+    assert c.post("/api/file-assistant/sessions", json=body, headers=h).status_code == 201
+
+
+def test_native_default_scan_blocks_credential_dirs(fake_home):
+    c, h = _client()
+    pid = _project(c, h)
+    for p in (f"{fake_home}/.docker", f"{fake_home}/.config/gcloud", fake_home):
+        r = c.post(f"/api/projects/{pid}/scans", json={"scan_path": p}, headers=h)
+        assert r.status_code == 400, (p, r.text)
+    r = c.post(f"/api/projects/{pid}/scans", json={"scan_path": f"{fake_home}/proj"}, headers=h)
+    assert r.status_code == 202, r.text
+
+
+def test_symlink_to_secret_with_innocent_name_denied(fake_home):
+    link = os.path.join(fake_home, "proj", "notes2.txt")
+    os.symlink(f"{fake_home}/.docker/config.json", link)
+    with pytest.raises(PathNotAllowed):
+        resolve_under_roots(link, path_policy.file_assistant_roots(), "file")
+
+
+def test_relative_and_bad_roots_rejected(root, monkeypatch):
+    with pytest.raises(PathNotAllowed):
+        resolve_under_roots(".", [root], "dir")
+    monkeypatch.setattr(settings, "scan_allowed_roots", "api,/definitely/not/here")
+    roots = path_policy.allowed_scan_roots()
+    assert all(os.path.isabs(r) for r in roots) and "api" not in roots
+
+
+def test_fa_extension_rechecked_on_real_path(fa):
+    real = os.path.join(fa, "id_data")  # không có đuôi hỗ trợ
+    open(real, "w").write("x")
+    link = os.path.join(fa, "notes.txt"); os.symlink(real, link)
+    c, h = _client(UserRole.ADMIN)
+    body = {"files": [{"name": "n", "path": link, "size_bytes": 1, "type": "text"}]}
+    assert c.post("/api/file-assistant/sessions", json=body, headers=h).status_code == 400
+
+
+def _upload(c, h, pid, name="a.zip"):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("app.py", "print(1)")
+    return c.post(f"/api/projects/{pid}/scan-upload", headers=h,
+                  files={"file": (name, buf.getvalue(), "application/zip")})
+
+
+def test_cross_project_upload_not_selectable_and_not_deleted(root, monkeypatch):
+    monkeypatch.setattr(settings, "max_scans_per_project", 1)
+    c, h = _client()
+    pa, pb = _project(c, h), _project(c, h)
+    a_dir = _upload(c, h, pa).json()["scan_path"]
+    assert os.path.isdir(a_dir)
+    for p in (a_dir, os.path.dirname(a_dir)):
+        r = c.post(f"/api/projects/{pb}/scans", json={"scan_path": p}, headers=h)
+        assert r.status_code == 400, r.text
+    for _ in range(2):  # B xoay vòng scan của chính nó → upload của A còn nguyên
+        assert c.post(f"/api/projects/{pb}/scans", json={"scan_path": root}, headers=h).status_code == 202
+    assert os.path.isdir(a_dir)
+
+
+def test_rotation_skips_running_and_shared_paths():
+    from api.database import SessionLocal
+    from api.models import Scan, ScanStatus
+    from api.routes.scans import _remove_upload_dir
+    c, h = _client()
+    pid = _project(c, h)
+    d = _upload(c, h, pid).json()["scan_path"]
+    db = SessionLocal()
+    try:
+        sc = db.query(Scan).filter(Scan.project_id == pid).first()
+        sc.status = ScanStatus.RUNNING; db.commit()
+        _remove_upload_dir(db, sc)
+        assert os.path.isdir(d)
+        sc.status = ScanStatus.COMPLETED; db.commit()
+        other = Scan(project_id=pid, scan_number=99, scan_path=d, scan_types=["SAST"], status=ScanStatus.COMPLETED)
+        db.add(other); db.commit()
+        _remove_upload_dir(db, sc)
+        assert os.path.isdir(d)  # scan khác còn tham chiếu
+        db.delete(other); db.commit()
+        _remove_upload_dir(db, sc)
+        assert not os.path.exists(d)
+    finally:
+        db.close()
+
+
+def test_eocd_count_checked_before_zipfile_parses(tmp_path, monkeypatch):
+    from api.routes import scans
+    monkeypatch.setattr(settings, "upload_max_files", 10)
+    p = tmp_path / "many.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        for i in range(50):
+            z.writestr(f"f{i}", b"")
+    raw = p.read_bytes()
+
+    def boom(*a, **k):
+        raise AssertionError("ZipFile must not be constructed")
+    monkeypatch.setattr(zipfile, "ZipFile", boom)
+    with pytest.raises(scans.ZipLimitExceeded):
+        scans._safe_extract_zip(str(p), str(tmp_path / "d"))
+    with pytest.raises(scans.ZipLimitExceeded):
+        scans._safe_extract_zip(raw, str(tmp_path / "d2"))
+
+
+def test_content_length_over_limit_413_without_reading_body(monkeypatch):
+    import asyncio
+    from api.upload_limit import UploadSizeLimitMiddleware
+    monkeypatch.setattr(settings, "upload_max_bytes", 1 << 20)
+    reached = {"app": False, "recv": 0}
+
+    async def app(scope, receive, send):
+        reached["app"] = True
+
+    async def receive():
+        reached["recv"] += 1
+        return {"type": "http.request", "body": b"", "more_body": False}
+    sent = []
+
+    async def send(m):
+        sent.append(m)
+    scope = {"type": "http", "method": "POST", "path": "/api/projects/x/scan-upload",
+             "headers": [(b"content-length", str(50 << 20).encode())]}
+    asyncio.run(UploadSizeLimitMiddleware(app)(scope, receive, send))
+    assert sent[0]["status"] == 413 and not reached["app"] and reached["recv"] == 0
+
+
+def test_chunked_body_over_limit_aborted(monkeypatch):
+    import asyncio
+    from api.upload_limit import UploadSizeLimitMiddleware
+    monkeypatch.setattr(settings, "upload_max_bytes", 1 << 20)
+
+    async def app(scope, receive, send):
+        while True:
+            m = await receive()
+            if not m.get("more_body"):
+                break
+
+    async def receive():
+        return {"type": "http.request", "body": b"\0" * (1 << 20), "more_body": True}
+    sent = []
+
+    async def send(m):
+        sent.append(m)
+    scope = {"type": "http", "method": "POST", "path": "/api/projects/x/scan-upload", "headers": []}
+    asyncio.run(UploadSizeLimitMiddleware(app)(scope, receive, send))
+    assert sent[0]["status"] == 413
+
+
+def test_upload_api_content_length_413(monkeypatch):
+    monkeypatch.setattr(settings, "upload_max_bytes", 1 << 20)
+    c, h = _client()
+    pid = _project(c, h)
+    r = c.post(f"/api/projects/{pid}/scan-upload", headers=h,
+               files={"file": ("a.zip", b"\0" * (3 << 20), "application/zip")})
+    assert r.status_code == 413
