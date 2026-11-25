@@ -12,15 +12,23 @@ def make_fingerprint(tool: str, rule_id: str, file_path: str, line: int, title: 
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
+# Biến môi trường nhạy cảm KHÔNG được kế thừa bởi subprocess của scanner (N-7/N-8: giảm
+# nguy cơ lộ token qua tool bên thứ ba). Muốn truyền thì dùng tham số `env` tường minh.
+_SCRUB_ENV = {
+    "VULNGUARD_COWORKER_TOKEN", "VULNGUARD_SECRET_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "SONARQUBE_TOKEN",
+}
+
+
 async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
                       env: dict = None) -> tuple[int, str, str]:
     """Chạy command async và trả về (returncode, stdout, stderr).
 
     env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế)."""
     import os as _os
-    run_env = None
+    run_env = {k: v for k, v in _os.environ.items() if k not in _SCRUB_ENV}
     if env:
-        run_env = {**_os.environ, **env}
+        run_env.update(env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,

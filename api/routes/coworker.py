@@ -45,11 +45,15 @@ async def _host_request(method: str, path: str, **kwargs):
         async with httpx.AsyncClient(timeout=COWORKER_TIMEOUT, trust_env=False) as client:
             r = await client.request(method, f"{COWORKER_URL}{path}", headers=headers, **kwargs)
             if r.status_code >= 400:
+                code = None
                 try:
-                    detail = r.json().get("detail", r.text)
+                    body = r.json()
+                    detail = body.get("detail", r.text)
+                    code = body.get("code")
                 except Exception:
                     detail = r.text
-                raise HTTPException(status_code=r.status_code, detail=detail)
+                raise HTTPException(status_code=r.status_code, detail=detail,
+                                    headers={"X-Coworker-Code": str(code)} if code else None)
             return r.json()
     except HTTPException:
         raise
@@ -90,7 +94,8 @@ class ExecRequest(BaseModel):
     folder_id: str
     command: str
     cwd: str = ""
-    confirm: bool = False
+    confirm: bool = False  # legacy — host bỏ qua; xác nhận thật dùng confirm_id
+    confirm_id: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────
