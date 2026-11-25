@@ -281,6 +281,8 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
   if (!name || !email) return showError('setup-error', 'Nhập họ tên và email');
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) return showError('setup-error', 'Email không hợp lệ');
   if (password.length < 10) return showError('setup-error', 'Mật khẩu tối thiểu 10 ký tự');
+  if ([/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(password)).length < 3)
+    return showError('setup-error', 'Mật khẩu cần ít nhất 3 trong 4 loại: chữ thường, chữ hoa, số, ký tự đặc biệt');
   if (password !== confirmPw) return showError('setup-error', 'Hai mật khẩu không khớp');
   const btn = document.getElementById('setup-btn');
   setBusy(btn, true);

@@ -27,14 +27,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.requests import HTTPConnection
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from api.auth_models import RevokedToken, User, UserRole
 from api.config import settings
 from api.database import get_db, SessionLocal
 from api.security import (
-    COOKIE_NAME, create_token, decode_token, get_secret_key, hash_password, verify_password,
+    COOKIE_NAME, create_token, decode_token, get_secret_key, hash_password, validate_password_strength,
+    verify_password,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -114,6 +115,11 @@ class SetupIn(BaseModel):
     def _check_email(cls, v: str) -> str:
         return _norm_email(v)
 
+    @model_validator(mode="after")
+    def _check_strength(self):
+        validate_password_strength(self.password, self.email)
+        return self
+
 
 class UserCreate(SetupIn):
     role: UserRole = UserRole.ANALYST
@@ -124,6 +130,13 @@ class UserUpdate(BaseModel):
     role: Optional[UserRole] = None
     is_active: Optional[bool] = None
     password: Optional[str] = Field(default=None, min_length=10, max_length=200)
+
+    @field_validator("password")
+    @classmethod
+    def _check_pw(cls, v):
+        if v is not None:
+            validate_password_strength(v)
+        return v
 
 
 # ─────────────────────────────────────────────
@@ -516,6 +529,14 @@ def me(user: User = Depends(current_user)):
 class ChangePasswordIn(BaseModel):
     current_password: str
     new_password: str = Field(min_length=10, max_length=200)
+    confirm_password: str = Field(max_length=200)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError("Mật khẩu xác nhận không khớp")
+        validate_password_strength(self.new_password)
+        return self
 
 
 @router.post("/change-password")
@@ -531,12 +552,22 @@ def change_password(payload: ChangePasswordIn, response: Response,
         raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng")
     if payload.new_password == payload.current_password:
         raise HTTPException(status_code=400, detail="Mật khẩu mới phải khác mật khẩu cũ")
+    try:
+        validate_password_strength(payload.new_password, user.email)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if verify_password(payload.new_password, user.password_hash or ""):
+        raise HTTPException(status_code=400, detail="Mật khẩu mới phải khác mật khẩu cũ")
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
-    user.token_version = (user.token_version or 0) + 1   # vô hiệu các phiên cũ
+    user.token_version = (user.token_version or 0) + 1   # vô hiệu các phiên cũ (mọi thiết bị khác)
     db.commit()
-    token = _set_session(response, user)   # cấp lại phiên cho chính người đổi
-    return {"ok": True, "token": token}
+    db.refresh(user)
+    with _LOGIN_LOCK:   # không để lần gõ nhầm trước đó khoá người vừa đổi mật khẩu
+        for k in [k for k in _LOGIN_FAILS if k == f"untrusted|{user.email}"]:
+            _LOGIN_FAILS.pop(k, None)
+    token = _set_session(response, user)   # phiên mới gắn token_version mới đã lưu DB
+    return {"ok": True, "token": token, "user": UserOut.model_validate(user)}
 
 
 # ── User management (ADMIN) ──
