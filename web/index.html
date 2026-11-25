@@ -1976,7 +1976,7 @@
     <div class="modal-body">
       <div class="form-group"><label>Họ tên *</label><input id="nu-name" placeholder="Nguyễn Văn A"></div>
       <div class="form-group"><label>Email *</label><input id="nu-email" type="email" placeholder="a.nguyen@company.com"></div>
-      <div class="form-group"><label>Mật khẩu tạm *</label><input id="nu-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự"></div>
+      <div class="form-group"><label>Mật khẩu tạm *</label><input id="nu-password" type="password" autocomplete="new-password" placeholder="10+ ký tự, 3/4 loại (thường/hoa/số/ký tự đặc biệt)"></div>
       <div class="form-group"><label>Vai trò</label>
         <select id="nu-role"><option value="VIEWER">VIEWER — chỉ xem</option><option value="ANALYST" selected>ANALYST — chạy scan, xử lý finding</option><option value="ADMIN">ADMIN — toàn quyền</option></select>
       </div>
@@ -1995,7 +1995,7 @@
     <div class="modal-header"><strong>Đặt lại mật khẩu</strong><button class="btn btn-ghost btn-sm" onclick="document.getElementById('reset-pw-modal').classList.remove('open')">✕</button></div>
     <div class="modal-body">
       <p class="text-sm" style="margin-bottom:12px;">Người dùng: <strong id="rp-user" style="color:var(--text)"></strong></p>
-      <div class="form-group"><label>Mật khẩu mới *</label><input id="rp-password" type="password" autocomplete="new-password" placeholder="Tối thiểu 10 ký tự"></div>
+      <div class="form-group"><label>Mật khẩu mới *</label><input id="rp-password" type="password" autocomplete="new-password" placeholder="10+ ký tự, 3/4 loại (thường/hoa/số/ký tự đặc biệt)"></div>
       <div class="form-group"><label>Nhập lại mật khẩu *</label><input id="rp-password2" type="password" autocomplete="new-password"></div>
       <div id="rp-error" class="text-sm" style="color:var(--critical);"></div>
     </div>
@@ -2059,7 +2059,7 @@ function errText(t) {
   try {
     const j = JSON.parse(t);
     if (typeof j.detail === 'string') return j.detail;
-    if (Array.isArray(j.detail)) return j.detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+    if (Array.isArray(j.detail)) return j.detail.map(d => String(d.msg || JSON.stringify(d)).replace(/^Value error, /, '')).join('; ');
   } catch {}
   return t;
 }
@@ -5008,15 +5008,15 @@ async function initAuth() {
 }
 
 const PW_RULES_TEXT = 'Mật khẩu 10–200 ký tự, gồm ít nhất 3 trong 4 loại (chữ thường, chữ hoa, số, ký tự đặc biệt), không chứa phần tên của email và không lặp một ký tự.';
-function pwClasses(v) {
-  return [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(v)).length;
+function pwClasses(v) {   // Unicode, khớp server (unicodedata: Ll, Lu, Nd, không-alnum)
+  return [/\p{Ll}/u, /\p{Lu}/u, /\p{Nd}/u, /[^\p{L}\p{N}]/u].filter(r => r.test(v)).length;
 }
 function pwScore(v) {   // 0..4 — dùng cho thanh đo độ mạnh (cùng logic login.html)
   let score = 0;
   if (v.length >= 10) score++;
   if (v.length >= 12) score++;
-  if (/[A-Z]/.test(v) && /[a-z]/.test(v) && /\d/.test(v)) score++;
-  if (/[^A-Za-z0-9]/.test(v)) score++;
+  if (pwClasses(v) >= 3) score++;
+  if (/[^\p{L}\p{N}]/u.test(v)) score++;
   return score;
 }
 function pwPolicyError(v, email) {
@@ -5167,7 +5167,8 @@ async function createUser() {
   const role = document.getElementById('nu-role').value;
   const err = document.getElementById('nu-error');
   if (!name || !email) { err.textContent = 'Nhập họ tên và email'; return; }
-  if (password.length < 10) { err.textContent = 'Mật khẩu tối thiểu 10 ký tự'; return; }
+  const pe = pwPolicyError(password, email);
+  if (pe) { err.textContent = pe; return; }
   try {
     await api('/api/auth/users', { method: 'POST', body: { email, name, password, role } });
     closeUserModal();
@@ -5188,7 +5189,8 @@ async function submitResetPassword() {
   const p1 = document.getElementById('rp-password').value;
   const p2 = document.getElementById('rp-password2').value;
   const err = document.getElementById('rp-error');
-  if (p1.length < 10) { err.textContent = 'Mật khẩu tối thiểu 10 ký tự'; return; }
+  const pe = pwPolicyError(p1, (usersCache.find(x => x.id === resetPwUserId) || {}).email);
+  if (pe) { err.textContent = pe; return; }
   if (p1 !== p2) { err.textContent = 'Hai mật khẩu không khớp'; return; }
   document.getElementById('reset-pw-modal').classList.remove('open');
   await updateUser(resetPwUserId, { password: p1 });

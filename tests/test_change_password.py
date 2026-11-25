@@ -142,10 +142,80 @@ def test_bootstrap_admin_first_login_flow(tmp_path, monkeypatch):
 
 
 def test_no_route_mutates_current_user_without_requery():
-    """RC1 guard: route nhận Depends(current_user) rồi gán user.<attr> phải nạp lại hàng DB trước."""
+    """RC1 guard (AST): route có tham số Depends(current_user) mà gán `<param>.attr = ...` phải nạp lại
+    hàng DB (`<param> = db.query(...)`) TRƯỚC lệnh gán đó, vì user của middleware đã bị expunge."""
+    import ast
+    offenders, seen_mutating = [], 0
     for f in Path("api/routes").glob("*.py"):
-        src = f.read_text(encoding="utf-8")
-        for m in re.finditer(r"\ndef (\w+)\([^)]*Depends\(current_user\)[^)]*\):(.*?)(?=\n(?:def |@router|class )|\Z)", src, re.S):
-            body = m.group(2)
-            if re.search(r"\buser\.\w+\s*=[^=]", body):
-                assert re.search(r"user\s*=\s*db\.query\(User\)", body), f"{f.name}:{m.group(1)}"
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            args = fn.args.args + fn.args.kwonlyargs
+            defaults = [None] * (len(fn.args.args) - len(fn.args.defaults)) + list(fn.args.defaults) + list(fn.args.kw_defaults)
+            names = {a.arg for a, d in zip(args, defaults)
+                     if isinstance(d, ast.Call) and getattr(d.func, "id", "") == "Depends"
+                     and d.args and getattr(d.args[0], "id", "") == "current_user"}
+            for name in names:
+                requery_line = min((n.lineno for n in ast.walk(fn)
+                                    if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)
+                                    and "query" in ast.dump(n.value)), default=None)
+                for n in ast.walk(fn):
+                    tg = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AugAssign) else []
+                    if any(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == name for t in tg):
+                        seen_mutating += 1
+                        if requery_line is None or requery_line > n.lineno:
+                            offenders.append(f"{f.name}:{fn.name}:{n.lineno}")
+    assert seen_mutating >= 1, "guard không thấy route nào gán thuộc tính user (change_password?) — kiểm tra lại AST"
+    assert not offenders, offenders
+
+
+def test_validation_errors_do_not_echo_passwords():
+    email, _ = make_user(must_change_password=True)
+    c = new_client()
+    h = bearer(login(c, email))
+    secret_new = "Echo-Secret-2026"
+    r = c.post("/api/auth/change-password", headers=h, json={
+        "current_password": PASSWORD, "new_password": secret_new, "confirm_password": secret_new + "x"})
+    assert r.status_code == 422
+    for secret in (PASSWORD, secret_new):
+        assert secret not in r.text
+    assert "input" not in r.text and "Value error" not in r.text
+    assert "không khớp" in r.text
+    # setup/login type errors cũng không echo
+    r = new_client().post("/api/auth/login", json={"email": email, "password": {"x": "leak-me-please"}})
+    assert r.status_code == 422 and "leak-me-please" not in r.text
+
+
+def test_unicode_classes_match_client_rule():
+    validate_password_strength("mậtkhẩu-mới2026")        # thường + số + ký tự đặc biệt
+    with pytest.raises(ValueError):
+        validate_password_strength("mậtkhẩumới2026")      # chỉ thường + số (2 loại)
+
+
+def test_lockout_cleared_after_password_change():
+    from api.routes import auth as auth_routes
+    email, _ = make_user(must_change_password=True)
+    c = new_client()
+    h = bearer(login(c, email))
+    attacker = new_client()
+    for _ in range(auth_routes._MAX_FAILS):
+        attacker.post("/api/auth/login", json={"email": email, "password": "wrong-pass-xx"})
+    assert new_client().post("/api/auth/login", json={"email": email, "password": PASSWORD}).status_code == 429
+    assert _change(c, h).status_code == 200
+    assert new_client().post("/api/auth/login", json={"email": email, "password": NEW}).status_code == 200
+
+
+def test_bootstrap_rejects_weak_admin_password(monkeypatch, capsys):
+    import scripts.bootstrap_admin as ba
+    monkeypatch.setenv("ADMIN_PASSWORD", "aaaaaaaaaa")
+    monkeypatch.setenv("ADMIN_EMAIL", "weak-boot@t.local")
+    monkeypatch.setattr("sys.argv", ["bootstrap_admin"])
+    with pytest.raises(SystemExit) as ei:
+        ba.main()
+    assert ei.value.code == 1
+    db = SessionLocal()
+    try:
+        assert db.query(User).filter(User.email == "weak-boot@t.local").first() is None
+    finally:
+        db.close()
