@@ -639,3 +639,80 @@ def test_RV4_other_upload_routes_bounded(monkeypatch):
     r = c.post("/api/settings/report-logo", headers=h,
                files={"file": ("l.png", b"\0" * (3 << 20), "image/png")})
     assert r.status_code == 413, r.text
+
+
+# ══════ Re-verify 2 (RV2-1): pre-check must read the same central directory as ZipFile ══════
+def _precheck(path, max_files=10):
+    from api.routes.scans import _precheck_central_directory
+    _precheck_central_directory(str(path), max_files)
+
+
+def test_Z1_zip64_extensible_data_fake_adjacent_record(tmp_path):
+    from api.routes.scans import ZipLimitExceeded
+    n = 70_000
+    p = tmp_path / "z.zip"; _many_entry_zip(p, n)
+    d = bytearray(p.read_bytes())
+    e = d.rfind(b"PK\x05\x06"); loc = e - 20; real = e - 76
+    assert d[loc:loc + 4] == b"PK\x06\x07" and d[real:real + 4] == b"PK\x06\x06"
+    struct_ = __import__("struct")
+    struct_.pack_into("<Q", d, real + 4, 44 + 56)          # sz bao cả 56 byte extensible data
+    fake = bytearray(d[real:real + 56])
+    struct_.pack_into("<Q", fake, 4, 44)
+    struct_.pack_into("<QQ", fake, 24, 0, 0)
+    struct_.pack_into("<QQ", fake, 40, 0, 0)               # dirsize=0
+    d[loc:loc] = fake
+    p.write_bytes(bytes(d))
+    with zipfile.ZipFile(p) as z:                          # CPython chấp nhận, thấy đủ entry
+        assert len(z.infolist()) == n
+    with pytest.raises(ZipLimitExceeded):
+        _precheck(p)
+
+
+def test_Z2_eocd_signature_inside_offset_field(tmp_path):
+    import struct
+    from api.routes.scans import ZipLimitExceeded
+    n = 200
+    src = tmp_path / "s.zip"; _many_entry_zip(src, n)
+    d = src.read_bytes()
+    e = d.rfind(b"PK\x05\x06")
+    cd_size, cd_off = struct.unpack_from("<II", d, e + 12)
+    cd = d[cd_off:cd_off + cd_size]
+    off = struct.unpack("<I", b"PK\x05\x06")[0]            # offset khai báo = chữ ký EOCD
+    p = tmp_path / "z2.zip"
+    with open(p, "wb") as f:
+        f.truncate(off)                                    # sparse padding
+        f.seek(off); f.write(cd)
+        f.write(struct.pack("<4sHHHHIIH", b"PK\x05\x06", 0, 0, n, n, len(cd), off, 0))
+    with zipfile.ZipFile(p) as z:
+        assert len(z.infolist()) == n
+    with pytest.raises(ZipLimitExceeded):
+        _precheck(p)  # trước đây: rfind rơi vào trong EOCD → return sớm (fail-open)
+
+
+def test_precheck_fails_closed_on_garbage(tmp_path):
+    p = tmp_path / "g.bin"; p.write_bytes(b"not a zip at all" * 10)
+    with pytest.raises(zipfile.BadZipFile):
+        _precheck(p)
+    q = tmp_path / "t.zip"; _many_entry_zip(q, 5)
+    raw = bytearray(q.read_bytes())
+    raw[0:4] = b"XXXX"; q.write_bytes(bytes(raw))  # không ảnh hưởng CD → vẫn đếm được
+    _precheck(q, 100)
+    raw = bytearray(q.read_bytes())
+    e = raw.rfind(b"PK\x05\x06")
+    import struct
+    cd_off = struct.unpack_from("<I", raw, e + 16)[0]
+    raw[cd_off:cd_off + 4] = b"XXXX"; q.write_bytes(bytes(raw))
+    with pytest.raises(zipfile.BadZipFile):
+        _precheck(q, 100)
+
+
+@pytest.mark.parametrize("n", [30, 70_000])
+def test_precheck_count_matches_zipfile(tmp_path, n):
+    """Chống lệch phiên bản CPython: precheck đếm đúng số entry mà ZipFile sẽ parse."""
+    from api.routes.scans import ZipLimitExceeded
+    p = tmp_path / "m.zip"; _many_entry_zip(p, n)
+    with zipfile.ZipFile(p) as z:
+        assert len(z.infolist()) == n
+    _precheck(p, n)
+    with pytest.raises(ZipLimitExceeded):
+        _precheck(p, n - 1)

@@ -460,41 +460,29 @@ class ZipLimitExceeded(ValueError):
 
 
 def _precheck_central_directory(src, max_files: int) -> None:
-    """Đếm record trong central directory MÀ KHÔNG dựng ZipInfo, bằng đúng cách CPython xác
-    định vị trí CD (luôn dò Zip64 locator ngay trước EOCD). Không tin số entry khai báo.
-    Vượt max_files → ZipLimitExceeded, TRƯỚC khi zipfile.ZipFile() ăn RAM."""
+    """Đếm record trong central directory MÀ KHÔNG dựng ZipInfo, tại ĐÚNG vị trí zipfile.ZipFile
+    sẽ parse: dùng chính zipfile._EndRecData (Zip64, fast path, comment) + công thức start_dir
+    của ZipFile._RealGetContents (CPython 3.12; CI/Docker dùng 3.12). Không tin số entry khai báo. Mọi bất thường → fail closed."""
     import struct
     import zipfile
     opened = None
     f = src
-    if isinstance(src, (str, os.PathLike)):
-        opened = f = open(src, "rb")
     try:
+        if isinstance(src, (str, os.PathLike)):
+            opened = f = open(src, "rb")
         pos0 = f.tell()
-        f.seek(0, os.SEEK_END)
-        end = f.tell()
-        tail_len = min(end, 22 + 0xFFFF)
-        f.seek(end - tail_len)
-        tail = f.read(tail_len)
-        i = tail.rfind(b"PK\x05\x06")
-        if i < 0 or len(tail) - i < 22:
-            return  # để zipfile báo BadZipFile
-        eocd_pos = end - tail_len + i
-        cd_size = struct.unpack("<I", tail[i + 12:i + 16])[0]
-        cd_end = eocd_pos
-        if eocd_pos >= 76:  # luôn dò Zip64 như CPython (không phụ thuộc giá trị 0xFFFF)
-            f.seek(eocd_pos - 20)
-            if f.read(4) == b"PK\x06\x07":
-                f.seek(eocd_pos - 76)
-                rec = f.read(56)
-                if len(rec) == 56 and rec[:4] == b"PK\x06\x06":
-                    cd_size = struct.unpack("<Q", rec[40:48])[0]
-                    cd_end = eocd_pos - 76
-        start = cd_end - cd_size
+        endrec = zipfile._EndRecData(f)  # noqa: SLF001 — cùng hàm ZipFile dùng
+        if not endrec:
+            raise zipfile.BadZipFile("File is not a zip file")
+        size_cd = endrec[zipfile._ECD_SIZE]
+        offset_cd = endrec[zipfile._ECD_OFFSET]
+        concat = endrec[zipfile._ECD_LOCATION] - size_cd - offset_cd
+        start = offset_cd + concat
         if start < 0:
             raise zipfile.BadZipFile("Bad offset for central directory")
+        end = start + size_cd
         pos, count = start, 0
-        while pos < cd_end:
+        while pos < end:
             f.seek(pos)
             h = f.read(46)
             if len(h) < 46 or h[:4] != b"PK\x01\x02":
@@ -504,7 +492,13 @@ def _precheck_central_directory(src, max_files: int) -> None:
             count += 1
             if count > max_files:
                 raise ZipLimitExceeded(f"Zip có quá nhiều file (tối đa {max_files})")
+        if pos != end:
+            raise zipfile.BadZipFile("Central directory size mismatch")
         f.seek(pos0)
+    except (ZipLimitExceeded, zipfile.BadZipFile):
+        raise
+    except Exception as e:  # fail closed
+        raise zipfile.BadZipFile(f"Cannot verify central directory: {e}")
     finally:
         if opened:
             opened.close()
