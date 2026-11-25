@@ -13,6 +13,7 @@
 - **B-6:** `api/requirements.in` → hash-locked `api/requirements.txt` (`uv pip compile --universal --generate-hashes`), installed once with `--require-hashes`.
   semgrep, bandit, checkov, pip-audit each get their own venv from `docker/scanners/<tool>.txt`; `detect-secrets` stays in the app env. `requirements-dev.txt` and `coworker_host/requirements.txt` are locked too.
   CI installs from the lock and runs `pip-audit` on it; `.github/dependabot.yml` added. Image smoke test now also runs `grype`, `hadolint` and `pip check`.
+- Review follow-ups: `FORWARDED_ALLOW_IPS` is now passed through `docker-compose.yml` (`.env` setting works); `defusedxml` added to `requirements.in` + lock (PR #43 should drop its raw `requirements.txt` line); entrypoint also detects root-owned files inside storage (e.g. `db/vulnguard.db`) and derives the path from `DATABASE_URL`; `install/install.sh` installs semgrep/bandit/checkov/pip-audit into separate venvs from `docker/scanners/*.txt` (no more co-install into the app venv).
 - Image: `FORWARDED_ALLOW_IPS=127.0.0.1` made explicit, uvicorn started with `--workers 1` (in-memory state; run.sh single-worker enforcement is in PR #42).
 
 ### Fixed — first-login change-password UX (BREAKING for API clients)

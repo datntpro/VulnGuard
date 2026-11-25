@@ -216,19 +216,19 @@ VENV_PIP="$PROJECT_DIR/venv/bin/pip"
 
 "$VENV_PIP" install --no-cache-dir --upgrade pip -q
 
-log "Cài API dependencies..."
-"$VENV_PIP" install --no-cache-dir -r "$PROJECT_DIR/api/requirements.txt" -q
+log "Cài API dependencies (lockfile có hash; gồm detect-secrets)..."
+"$VENV_PIP" install --no-cache-dir --require-hashes -r "$PROJECT_DIR/api/requirements.txt" -q
 
-log "Cài scanner Python packages (Semgrep, Bandit, Checkov, detect-secrets, pip-audit)..."
-"$VENV_PIP" install --no-cache-dir -q \
-    semgrep \
-    "bandit[toml]" \
-    checkov \
-    detect-secrets \
-    pip-audit
-
-# Re-install API packages để tránh version bị scanner tools override
-"$VENV_PIP" install --no-cache-dir -r "$PROJECT_DIR/api/requirements.txt" -q
+# Scanner CLI (Semgrep, Bandit, Checkov, pip-audit): mỗi tool một venv riêng từ lockfile
+# docker/scanners/<tool>.txt, KHÔNG cài chung vào venv của app (xung đột opentelemetry → semgrep
+# im lặng 0 finding, N-4). Symlink vào venv/bin để run.sh/systemd (PATH) tìm thấy.
+log "Cài scanner Python (venv riêng từng tool)..."
+for tool in semgrep bandit checkov pip-audit; do
+    python3 -m venv "$PROJECT_DIR/venv-tools/$tool"
+    "$PROJECT_DIR/venv-tools/$tool/bin/pip" install --no-cache-dir -q --require-hashes \
+        -r "$PROJECT_DIR/docker/scanners/$tool.txt"
+    ln -sf "$PROJECT_DIR/venv-tools/$tool/bin/$tool" "$PROJECT_DIR/venv/bin/$tool"
+done
 
 # Pre-cache Semgrep rules (tránh tải lại mỗi lần scan)
 log "Pre-cache Semgrep rules..."

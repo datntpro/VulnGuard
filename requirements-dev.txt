@@ -436,6 +436,12 @@ cryptography==50.0.2 \
     #   -c api/requirements.txt
     #   -r api/requirements.in
     #   pyjwt
+defusedxml==0.7.1 \
+    --hash=sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69 \
+    --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
+    # via
+    #   -c api/requirements.txt
+    #   -r api/requirements.in
 detect-secrets==1.5.0 \
     --hash=sha256:6bb46dcc553c10df51475641bb30fd69d25645cc12339e46c824c1e0c388898a \
     --hash=sha256:e24e7b9b5a35048c313e983f76c4bd09dad89f045ff059e354f9943bf45aa060

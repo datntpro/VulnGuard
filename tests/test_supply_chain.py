@@ -215,3 +215,45 @@ def test_uvicorn_single_worker_and_forwarded_ips_in_image():
     d = _read("api/Dockerfile")
     assert "FORWARDED_ALLOW_IPS=127.0.0.1" in d
     assert '"--workers", "1"' in d
+
+
+# ── Follow-ups từ verify PR #45 ───────────────────────────────────
+def test_forwarded_allow_ips_reaches_container():  # F-1
+    assert "FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}" in _read("docker-compose.yml")
+
+
+def test_defusedxml_in_lock():  # F-2: PR #43 phải bỏ dòng `defusedxml>=` thô trong requirements.txt
+    assert "defusedxml" in _read("api/requirements.in")
+    assert "defusedxml" in {n for n, _, _ in _lock_entries("api/requirements.txt")}
+    assert "defusedxml" in {n for n, _, _ in _lock_entries("requirements-dev.txt")}
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root bỏ qua quyền ghi")
+def test_entrypoint_detects_root_owned_db_file(tmp_path):  # F-3
+    db = tmp_path / "db"
+    db.mkdir()
+    f = db / "vulnguard.db"
+    f.write_text("x")
+    f.chmod(stat.S_IRUSR)  # như file thuộc root còn lại sau khi nâng cấp
+    try:
+        r = _run_entrypoint(tmp_path)
+    finally:
+        f.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    assert r.returncode == 1 and "chown -R 10001:10001 storage" in r.stderr
+
+
+def test_entrypoint_derives_storage_from_database_url(tmp_path):  # F-3
+    (tmp_path / "db").mkdir()
+    env = dict(os.environ, DATABASE_URL=f"sqlite:///{tmp_path}/db/vulnguard.db")
+    env.pop("VULNGUARD_STORAGE_DIR", None)
+    r = subprocess.run(["sh", str(ROOT / "api/docker-entrypoint.sh"), "echo", "ok"],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and "ok" in r.stdout
+
+
+def test_native_installer_isolates_scanners():  # F-4
+    sh = _read("install/install.sh")
+    assert "--require-hashes -r \"$PROJECT_DIR/api/requirements.txt\"" in sh
+    assert "docker/scanners/$tool.txt" in sh
+    assert not re.search(r"pip\"? install[^\n]*\n?\s*semgrep", sh)
+    assert "Re-install API packages" not in sh

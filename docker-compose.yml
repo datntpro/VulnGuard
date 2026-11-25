@@ -43,6 +43,8 @@ services:
       - VULNGUARD_COWORKER_TOKEN=${VULNGUARD_COWORKER_TOKEN:-}
       - MAX_SCANS_PER_PROJECT=${MAX_SCANS_PER_PROJECT:-5}
       - APP_ENV=${APP_ENV:-production}
+      # Chỉ tin X-Forwarded-For từ các IP này (uvicorn). Đặt IP reverse proxy trong .env nếu có.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
       # SonarQube (tuỳ chọn) — trỏ server sẵn có, hoặc dùng service bundled bên dưới
       - SONARQUBE_URL=${SONARQUBE_URL:-}
       - SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-}

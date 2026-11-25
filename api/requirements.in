@@ -39,3 +39,5 @@ Pillow>=10.0.0
 detect-secrets>=1.5.0
 # Ràng buộc transitive (fpdf2): fonttools 4.69.0 trên PyPI chỉ có wheel cp311 (release lỗi) → không cài được trên Python 3.12/3.13.
 fonttools<4.69
+# defusedxml — parse XML connector (Qualys/OpenVAS) an toàn trước XXE/billion-laughs (L-6)
+defusedxml>=0.7.1
