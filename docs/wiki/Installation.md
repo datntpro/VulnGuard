@@ -6,9 +6,9 @@ VulnGuard có 4 cách chạy. Tất cả đều dùng chung mã trong `api/`, `s
 |---|---|---|---|
 | Installer đa nền tảng (Native) | `bash setup.sh` / `python3 scripts/setup.py` | `.venv/` | xem lưu ý bên dưới |
 | Chạy lại bản Native | `bash run.sh` (Windows: `.\run.ps1`) | `.venv/` | `127.0.0.1` |
-| Docker Compose | `bash setup.sh --docker` hoặc `docker compose up -d --build` | trong image | cổng publish trên mọi interface của host |
-| systemd (Oracle Linux / RHEL / Debian / Ubuntu) | `sudo bash install/install.sh` | `venv/` | `0.0.0.0` (theo `install/vulnguard.service.template`) |
-| Demo có dữ liệu mẫu | `bash run_demo.sh` | `.venv-demo/` | `0.0.0.0` |
+| Docker Compose | `bash setup.sh --docker` hoặc `docker compose up -d --build` | trong image | `127.0.0.1` (publish chỉ trên loopback; mở LAN bằng `VULNGUARD_BIND=0.0.0.0`) |
+| systemd (Oracle Linux / RHEL / Debian / Ubuntu) | `sudo bash install/install.sh` | `venv/` | `127.0.0.1` (theo `install/vulnguard.service.template`) |
+| Demo có dữ liệu mẫu | `bash run_demo.sh` | `.venv-demo/` | `127.0.0.1` (`VULNGUARD_BIND` để đổi) |
 
 ## Yêu cầu
 
@@ -76,14 +76,14 @@ Việc cần làm: mở file, đăng nhập, đổi mật khẩu, rồi **xoá f
 
 Nếu không chạy bootstrap, lần đầu mở app sẽ hiện màn hình tạo ADMIN (`POST /api/auth/setup`, chỉ dùng được khi DB chưa có user nào).
 
-> **Nên dùng `--no-run` rồi `bash run.sh`.** Khi `setup.py` tự chạy server (không có `--no-run`), nó gọi `uvicorn --host 0.0.0.0` và không thêm `.venv/bin` vào `PATH`. Khi đó app nghe trên mọi interface và các tool cài trong `.venv` (semgrep, bandit, pip-audit, detect-secrets, checkov) sẽ bị báo `skipped`. `run.sh` thì nghe `127.0.0.1` và đưa `.venv/bin` lên đầu `PATH`.
+> **Nên dùng `--no-run` rồi `bash run.sh`.** Khi `setup.py` tự chạy server (không có `--no-run`), nó bind `VULNGUARD_BIND` (mặc định `127.0.0.1`) nhưng không thêm `.venv/bin` vào `PATH`. Khi đó các tool cài trong `.venv` (semgrep, bandit, pip-audit, detect-secrets, checkov) sẽ bị báo `skipped`. `run.sh` thì đưa `.venv/bin` lên đầu `PATH`.
 
 ### `run.sh` làm gì
 
 - Nạp `.env` nếu có.
 - Đặt mặc định: `DATABASE_URL=sqlite:///$PWD/storage/db/vulnguard.db`, `AI_CONFIG_FILE`, `SCANNER_CONFIG_FILE` trong `storage/`, `AUTH_ENABLED=true`, `APP_ENV=production`, `DEPLOY_MODE=native`.
 - `PATH="$PWD/.venv/bin:$HOME/.local/bin:$PATH"`.
-- Host: `VULNGUARD_HOST` (mặc định `127.0.0.1`), cổng `VULNGUARD_PORT` (mặc định `8080`), số worker `VULNGUARD_WORKERS` (mặc định `1`).
+- Host: `VULNGUARD_BIND` (mặc định `127.0.0.1`; `VULNGUARD_HOST` là alias deprecated — xem [[LAN Access|LAN-Access]]), cổng `VULNGUARD_PORT` (mặc định `8080`), `VULNGUARD_WORKERS` luôn bị ép về `1`; `AUTH_ENABLED=false` chỉ chạy được với host loopback.
 
 ## 2. Docker Compose
 
@@ -98,9 +98,28 @@ Theo `docker-compose.yml`:
 
 - Service `vulnguard` (container `vulnguard-api`) build từ `api/Dockerfile`, image có sẵn trivy, gitleaks, hadolint, grype, katana, nuclei 3.4.7, ffuf 2.1.0, sonar-scanner và các tool Python.
 - Cổng publish: `${VULNGUARD_PORT:-8080}:8080` và `${PENTEST_PROXY_PORT:-8788}:8788` (MITM proxy).
-- Volume: `./storage:/app/storage`, `${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock`, `${SCAN_WORKSPACE:-/tmp}:/workspace`.
+- Volume: `./storage:/app/storage`, `${SCAN_WORKSPACE:-/tmp}:/workspace`. **Không còn mount `docker.sock`** (mount `:ro` vẫn cho phép tạo container privileged → root trên host).
+- Container chạy non-root (uid 10001). Nếu `./storage` thuộc root (nâng cấp từ bản cũ): `sudo chown -R 10001:10001 storage` (không dùng `chmod 777`); entrypoint sẽ báo lỗi kèm lệnh này nếu thư mục không ghi được.
 - `OLLAMA_URL=http://host.docker.internal:11434` (Ollama chạy trên host), `COWORKER_URL=http://host.docker.internal:8765`.
 - Profile `sonar`: `sonarqube:community` + `postgres:16-alpine`. Host Linux cần `sysctl -w vm.max_map_count=524288`.
+
+### Quét image chỉ có ở máy local (tuỳ chọn)
+
+Image công khai quét được ngay (Trivy tự pull từ registry). Để quét image **chỉ có ở Docker daemon local**, dùng override `docker-compose.local-images.yml`: app nói chuyện với `tecnativa/docker-socket-proxy` (pin digest) chỉ cho phép `GET /_ping`, `/version`, `/images/*`; mọi `POST` (tạo container, exec, build) bị `403`. Cổng proxy không publish ra host.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-images.yml up -d
+# macOS Docker Desktop: đặt DOCKER_SOCK=$HOME/.docker/run/docker.sock trong .env nếu /var/run/docker.sock không tồn tại
+```
+
+### Supply chain: lockfile và binary được pin
+
+- Python: `api/requirements.in` là nguồn; `api/requirements.txt` là lockfile **có hash**, sinh bằng
+  `uv pip compile --universal --python-version 3.11 --generate-hashes api/requirements.in -o api/requirements.txt`. Dockerfile cài một lần với `--require-hashes`.
+- Scanner CLI (semgrep, bandit, checkov, pip-audit) mỗi cái một venv riêng từ `docker/scanners/<tool>.txt` (không chia sẻ dependency với app). `detect-secrets` ở lại env của app vì được import như thư viện.
+- Binary (trivy, gitleaks, grype, hadolint, katana, nuclei, ffuf, sonar-scanner) tải theo phiên bản cố định và kiểm `sha256` theo kiến trúc (`ARG *_SHA256_AMD64/_ARM64` trong `api/Dockerfile`; lấy từ file checksums chính thức của release). Tool lõi lỗi → build fail; tool tuỳ chọn lỗi → bỏ qua kèm cảnh báo. SecLists pin theo tag.
+- `.github/dependabot.yml` mở PR hàng tuần cho pip/docker/actions; sau khi merge PR đổi `.txt`, chạy lại lệnh compile để đồng bộ với `.in`.
+- `FORWARDED_ALLOW_IPS` (mặc định `127.0.0.1`): chỉ tin `X-Forwarded-For` từ các IP này. Đặt IP reverse proxy nếu có.
 
 Khi tạo scan trong Docker, `scan_path` là đường dẫn **trong container** (ví dụ `/workspace/my-app`).
 

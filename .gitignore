@@ -87,3 +87,4 @@ storage/admin_credentials.txt
 # Mã nguồn upload để scan (giải nén tạm, không commit)
 storage/scan_uploads/
 /.coworker_venv/
+*.bak

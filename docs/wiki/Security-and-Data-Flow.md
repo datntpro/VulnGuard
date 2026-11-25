@@ -2,7 +2,7 @@
 
 ## Mô hình bảo mật
 - **Auth**: JWT trong cookie HttpOnly; **RBAC** ADMIN / ANALYST / VIEWER. Mật khẩu hash scrypt.
-- **Mặc định localhost** (`127.0.0.1`) khi chạy bằng `run.sh` / `run.ps1` / `install/run.sh`; mở ra ngoài phải chủ động đặt `VULNGUARD_HOST=0.0.0.0`. Ngoại lệ: `setup.py` khi tự chạy server, `run_demo.sh`, template systemd và Docker publish đều nghe `0.0.0.0` (xem [[Security and Known Limitations|Security-and-Known-Limitations]]).
+- **Mặc định localhost** (`127.0.0.1`) khi chạy bằng `run.sh` / `run.ps1` / `install/run.sh`; mở LAN phải chủ động đặt `VULNGUARD_BIND=0.0.0.0` (Docker và native dùng chung biến; xem [[LAN Access|LAN-Access]]). App từ chối khởi động nếu bind LAN mà `AUTH_ENABLED=false`.
 - **Secret mã hoá tại chỗ** (Fernet): API key cloud AI, token connector/SonarQube, mật khẩu SMTP; chỉ hiện hint, không trả raw.
 - **Mật khẩu ADMIN** không in ra màn hình/log; lưu file `storage/admin_credentials.txt` (chmod 600); **bắt đổi lần đăng nhập đầu**.
 - Quét chủ động (web/crawl/pentest) **bị khoá khi `AUTH_ENABLED=false`**.

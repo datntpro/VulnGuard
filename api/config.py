@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # Máy đã cài tự tải snapshot KB mới nhất từ URL manifest (GitHub Releases).
     # Để trống kb_manifest_url → tắt auto-update (chỉ import offline thủ công).
     kb_manifest_url: str = "https://github.com/datntpro/vulnguard/releases/download/kb-latest/kb-manifest.json"
+    # Chữ ký Ed25519 manifest KB: có .sig thì LUÔN verify. Đặt true để từ chối manifest thiếu .sig
+    # (mặc định false trong 1 release đầu để auto-update không gãy — xem docs/PR rollout).
+    kb_require_signature: bool = False
+    kb_max_manifest_age_days: int = 7      # manifest đã ký cũ hơn → cảnh báo freeze (stale)
     kb_auto_update: bool = True            # kiểm tra + tải bản mới hàng ngày
     kb_update_interval_hours: int = 24     # chu kỳ kiểm tra
 

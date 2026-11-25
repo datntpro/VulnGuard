@@ -1,6 +1,9 @@
 # Build Knowledge Base (DB tri thức lỗ hổng) HÀNG NGÀY từ nguồn mở (OSV) và
 # publish snapshot lên GitHub Releases (tag kb-latest). Máy đã cài tự tải về
-# qua kb-manifest.json (xem scanner/knowledge/updater.py).
+# qua kb-manifest.json (+ .sig Ed25519, xem scanner/knowledge/updater.py).
+#
+# Tách 2 job: `build` (chạy code/dep bên thứ ba, KHÔNG có khóa ký) và `sign`
+# (environment `kb-signing`; chỉ cài wheel đã pin hash, secret chỉ ở lệnh ký).
 name: KB Build
 
 on:
@@ -8,16 +11,19 @@ on:
     - cron: "17 14 * * *"   # 14:17 UTC — sau khi EPSS publish (~13:30 UTC) để lấy bản mới nhất
   workflow_dispatch:        # chạy tay khi cần
 
-permissions:
-  contents: write           # cần để tạo/ghi release
+permissions: {}
 
 jobs:
   build:
-    name: Build & publish KB snapshot
+    name: Build KB snapshot (no signing key)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.pkg.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -51,16 +57,92 @@ jobs:
           EOF
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           cat kb-manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: kb-bundle
+          path: |
+            kb.sqlite.gz
+            kb-manifest.json
+          if-no-files-found: error
+
+  sign:
+    name: Sign manifest + publish release
+    needs: build
+    runs-on: ubuntu-latest
+    environment: kb-signing     # owner: KB_SIGNING_KEY là environment secret, chỉ nhánh main
+    permissions:
+      contents: write           # cần để tạo/ghi release
+    steps:
+      # Mã/requirements lấy TỪ REPO CHECKOUT (đã review), KHÔNG từ artifact của job build.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      # 1) Cài deps TRƯỚC khi có bất kỳ nội dung artifact nào. Không có secret ở bước này.
+      - name: Install signer deps (hash-pinned, wheels only)
+        run: |
+          python -m venv "$RUNNER_TEMP/signer"
+          "$RUNNER_TEMP/signer/bin/pip" install -q --only-binary :all: --require-hashes \
+            -r .github/kb-sign-requirements.txt
+
+      # 2) Artifact vào thư mục cô lập, KHÔNG phải workspace/CWD.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: kb-bundle
+          path: ${{ runner.temp }}/bundle
+
+      # 3) Kiểm tra bundle: đúng 2 file thường, schema, sha, url, version/built_at hợp lý, đơn điệu.
+      - name: Check bundle (no secret)
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${GH_REPO}/releases/download/kb-latest/kb.sqlite.gz"
+          curl -fsSL --max-filesize 65536 -o "$RUNNER_TEMP/prev-manifest.json" \
+            "https://github.com/${GH_REPO}/releases/download/kb-latest/kb-manifest.json" || rm -f "$RUNNER_TEMP/prev-manifest.json"
+          "$RUNNER_TEMP/signer/bin/python" -I .github/scripts/kb_check_manifest.py \
+            "$RUNNER_TEMP/bundle" "$URL" "$RUNNER_TEMP/prev-manifest.json"
+
+      # 4) Ký: python -I (bỏ qua CWD/PYTHON*/site của user), chạy từ thư mục KHÔNG chứa artifact.
+      #    Secret chỉ có ở lệnh này.
+      - name: Sign manifest (Ed25519)
+        working-directory: ${{ runner.temp }}
+        env:
+          KB_SIGNING_KEY: ${{ secrets.KB_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/signer/bin/python" -I - "$RUNNER_TEMP/bundle" <<'PY'
+          import base64, os, sys
+          from cryptography.hazmat.primitives.serialization import load_pem_private_key
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          bundle = sys.argv[1]
+          pem = os.environ.get("KB_SIGNING_KEY", "").encode()
+          if not pem:
+              sys.exit("KB_SIGNING_KEY secret chưa được cấu hình")
+          key = load_pem_private_key(pem, password=None)
+          if not isinstance(key, Ed25519PrivateKey):
+              sys.exit("KB_SIGNING_KEY không phải khóa Ed25519")
+          data = open(os.path.join(bundle, "kb-manifest.json"), "rb").read()
+          open(os.path.join(bundle, "kb-manifest.json.sig"), "wb").write(base64.b64encode(key.sign(data)))
+          PY
+          test -s "$RUNNER_TEMP/bundle/kb-manifest.json.sig"
 
       - name: Publish release (kb-latest)
+        working-directory: ${{ runner.temp }}/bundle
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KB_VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           TAG="kb-latest"
           # xóa release+tag cũ để 'latest/download' luôn trỏ bản mới nhất
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$TAG" \
-            kb.sqlite.gz kb-manifest.json \
-            --title "Knowledge Base ${{ steps.pkg.outputs.version }}" \
-            --notes "Snapshot KB tri thức lỗ hổng (OSV). version=${{ steps.pkg.outputs.version }}. Máy đã cài tự tải qua updater."
+            kb.sqlite.gz kb-manifest.json kb-manifest.json.sig \
+            --title "Knowledge Base ${KB_VERSION}" \
+            --notes "Snapshot KB tri thức lỗ hổng (OSV). version=${KB_VERSION}. Máy đã cài tự tải qua updater."

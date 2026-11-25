@@ -261,6 +261,18 @@ app.include_router(knowledge.router)
 
 
 @app.on_event("startup")
+async def _check_bind():
+    """Từ chối khởi động khi auth tắt mà bind non-loopback (compose/run.sh truyền VULNGUARD_BIND vào env)."""
+    from api import bind_policy
+    _, deprecated = bind_policy.resolve_bind()
+    bind = bind_policy.detect_runtime_bind()
+    if deprecated:
+        import logging
+        logging.getLogger(__name__).warning("[bind] VULNGUARD_HOST đã deprecated — dùng VULNGUARD_BIND.")
+    bind_policy.check_startup(bind, app_settings.auth_enabled, app_settings.allowed_hosts, app_settings.cookie_secure)
+
+
+@app.on_event("startup")
 async def _start_scheduler():
     try:
         from api.services import scheduler

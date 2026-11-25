@@ -74,6 +74,7 @@ Mật khẩu ADMIN nằm trong `storage/admin_credentials.txt` (chmod 600). Đă
 - [[Reports and Exports|Reports-and-Exports]]
 - [[API Reference|API-Reference]]
 - [[Security and Known Limitations|Security-and-Known-Limitations]]: hạn chế đã kiểm chứng trong code
+- [[Truy cập từ máy khác trong LAN|LAN-Access]]
 - [[Troubleshooting]]
 - [[FAQ]]
 

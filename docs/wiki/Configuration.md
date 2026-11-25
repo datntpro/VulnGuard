@@ -49,9 +49,10 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 
 | Biến | Nơi dùng | Ý nghĩa |
 |---|---|---|
-| `VULNGUARD_HOST` | `run.sh`, `run.ps1`, `install/run.sh` | Địa chỉ bind, mặc định `127.0.0.1`. Đặt `0.0.0.0` để mở ra ngoài (script in cảnh báo) |
+| `VULNGUARD_BIND` | compose, `run.sh`, `run.ps1`, `install/run.sh`, `setup.py` | Địa chỉ bind, mặc định `127.0.0.1`. `0.0.0.0` để mở LAN — xem [[LAN Access|LAN-Access]]. Bị từ chối khi `AUTH_ENABLED=false`. `VULNGUARD_HOST` = alias deprecated |
+| `PENTEST_PROXY_BIND` | compose | Bind riêng của proxy MITM (8788), mặc định `127.0.0.1` |
 | `VULNGUARD_PORT` | các script, compose | Cổng, mặc định `8080` |
-| `VULNGUARD_WORKERS` | `run.sh` | Số worker uvicorn, mặc định `1` |
+| `VULNGUARD_WORKERS` | `run.sh` | **Bị bỏ qua** nếu >1: chỉ hỗ trợ 1 worker (state trong bộ nhớ) |
 | `VULNGUARD_VENV` | `run.sh` | Thư mục venv, mặc định `.venv` |
 | `AI_CONFIG_FILE` | `api/services/ai_config.py` | Mặc định `storage/ai_config.json` |
 | `SCANNER_CONFIG_FILE` | orchestrator, settings | Bật/tắt từng tool. Mặc định trong code `/app/storage/scanner_config.json`; `run.sh` đặt về `storage/scanner_config.json` |
@@ -60,7 +61,8 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 | `VULNGUARD_MCP_TOKEN` | `mcp_server/server.py` | Bắt buộc khi chạy MCP ở chế độ HTTP |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | `scripts/bootstrap_admin.py` | Email / mật khẩu ADMIN đầu tiên |
 | `SCAN_WORKSPACE` | compose | Thư mục host mount vào `/workspace` |
-| `DOCKER_SOCK` | compose | Đường dẫn Docker socket mount vào container |
+| `DOCKER_SOCK` | `docker-compose.local-images.yml` | Đường dẫn Docker socket mà **container socket-proxy** (không phải app) mount; chỉ cần khi quét image local |
+| `FORWARDED_ALLOW_IPS` | Dockerfile (uvicorn) | IP được phép đặt `X-Forwarded-For` (mặc định `127.0.0.1`) |
 | `PENTEST_PROXY_PORT` | compose | Cổng host publish cho MITM proxy (mặc định `8788`) |
 | `SEMGREP_HOME` | Dockerfile, `install/run.sh` | Cache rule Semgrep |
 | `COWORKER_HOST_PORT`, `COWORKER_DATA_DIR` | `coworker_host/run.sh` | Cổng (mặc định `8765`) và thư mục dữ liệu của Coworker Host |

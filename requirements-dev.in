@@ -1,0 +1,6 @@
+# Dev/CI — test + security self-scan. Lock: requirements-dev.txt (uv pip compile, xem đầu file)
+-c api/requirements.txt
+-r api/requirements.in
+pytest>=8.0
+bandit>=1.7
+playwright>=1.40
