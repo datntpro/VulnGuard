@@ -1,21 +1,52 @@
-"""Relay LLM cho run capability (P1-7): lab_net là `internal` nên vg-under-test không ra được Internet, còn agent thật cần gọi API.
-Relay là thành phần DUY NHẤT của lab có đường ra ngoài, và chỉ làm đúng một việc:
+"""Relay LLM cho run capability (P1-7): vg-under-test không có đường ra Internet, còn agent thật cần gọi API.
+Relay là thành phần DUY NHẤT của lab có đường ra ngoài, nằm trên mạng riêng `llm_net` chỉ chung với vg-under-test
+(KHÔNG nằm trên lab_net: DVWA / Juice Shop / XBOW không với tới được). Làm đúng một việc:
   POST /v1/messages  →  https://api.anthropic.com/v1/messages   (host cố định trong mã, KHÔNG đọc từ request)
-API key chỉ nằm trong env của relay (vg-under-test không bao giờ thấy key → tool của agent không thể lộ key).
-Không redirect, không path nào khác, body ≤ 8 MB, không stream (SDK non-stream), header allowlist. Stdlib thuần."""
+Kiểm soát (fail closed):
+  * xác thực: header `x-api-key` phải bằng RELAY_TOKEN (token ngẫu nhiên mỗi lần chạy) — thiếu/sai ⇒ 401, TRƯỚC khi đụng key thật;
+  * chính sách: `model` == RELAY_MODEL, max_tokens ∈ [1, 8000], không `speed`/`fallbacks`/`stream`, không header anthropic-beta;
+  * đồng hồ chi tiêu: cộng USD mọi lượt từ `usage` của phản hồi (giá từ prices.py — cùng bảng với harness); chạm RELAY_BUDGET_USD
+    ⇒ 402. Thiếu usage / model lạ / lỗi upstream không rõ ⇒ tính phí xấu nhất và KHÓA relay (broken) — không gọi thêm.
+  * GET /_meter (cần token) trả {usd, calls, refused, broken} — harness đọc để biết chi tiêu THẬT.
+API key chỉ nằm trong env của relay. Không redirect, không path nào khác, body ≤ 8 MB. Stdlib thuần."""
+import hmac
 import http.client
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+for _p in ("/prices",):                 # compose mount eval/harness/prices.py → /prices/prices.py (read-only)
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
+import prices  # noqa: E402
 
 UPSTREAM_HOST = os.environ.get("RELAY_UPSTREAM_HOST", "api.anthropic.com")   # chỉ test mới đổi (xem tests)
 UPSTREAM_PORT = int(os.environ.get("RELAY_UPSTREAM_PORT", "443"))
 UPSTREAM_TLS = os.environ.get("RELAY_UPSTREAM_TLS", "1") == "1"
 ALLOWED_PATH = "/v1/messages"
 MAX_BODY = 8 * 1024 * 1024
-FORWARD_HEADERS = ("content-type", "anthropic-version", "anthropic-beta")
+MAX_TOKENS_CAP = prices.MAX_OUTPUT_TOKENS
+FORWARD_HEADERS = ("content-type", "anthropic-version")
+FORBIDDEN_FIELDS = ("stream", "speed", "fallbacks")
 LOG = "/log/hits.jsonl"
+
+
+class Meter:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.usd = 0.0
+        self.calls = 0
+        self.refused = 0
+        self.broken = ""
+
+    def snapshot(self):
+        with self.lock:
+            return {"usd": round(self.usd, 6), "calls": self.calls, "refused": self.refused, "broken": self.broken}
+
+
+METER = Meter()
 
 
 def _log(**rec):
@@ -25,6 +56,18 @@ def _log(**rec):
             f.write(json.dumps(rec) + "\n")
     except OSError:
         pass
+
+
+def _cfg():
+    """Đọc cấu hình mỗi request (test đổi env); thiếu mục nào ⇒ None ⇒ từ chối (fail closed)."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    token = os.environ.get("RELAY_TOKEN", "")
+    model = os.environ.get("RELAY_MODEL", "")
+    try:
+        cap = float(os.environ.get("RELAY_BUDGET_USD", ""))
+    except ValueError:
+        cap = None
+    return key, token, model, cap
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -41,46 +84,112 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authed(self, token):
+        got = self.headers.get("x-api-key", "")
+        return bool(token) and hmac.compare_digest(got.encode(), token.encode())
+
+    def _refuse(self, code, msg):
+        with METER.lock:
+            METER.refused += 1
+        _log(refused=msg)
+        return self._deny(code, msg)
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
         if path != ALLOWED_PATH:
             return self._deny(404, "relay chỉ chuyển tiếp POST /v1/messages")
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not key:
-            return self._deny(503, "relay chưa có ANTHROPIC_API_KEY")
+        key, token, model, cap = _cfg()
+        if not key or not token or not model or cap is None:
+            return self._deny(503, "relay thiếu cấu hình (ANTHROPIC_API_KEY/RELAY_TOKEN/RELAY_MODEL/RELAY_BUDGET_USD)")
+        if not self._authed(token):
+            return self._refuse(401, "token relay sai hoặc thiếu")
+        try:
+            prices.require_known(model)
+        except prices.UnknownModel as e:
+            return self._refuse(503, str(e))
         try:
             n = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return self._deny(400, "Content-Length sai")
         if n <= 0 or n > MAX_BODY:
             return self._deny(413, "body rỗng hoặc quá lớn")
-        body = self.rfile.read(n)
+        raw = self.rfile.read(n)
         try:
-            if json.loads(body).get("stream"):
-                return self._deny(400, "relay không hỗ trợ stream")
+            req = json.loads(raw)
+            assert isinstance(req, dict)
         except Exception:
-            return self._deny(400, "body không phải JSON")
+            return self._deny(400, "body không phải JSON object")
+        if self.headers.get("anthropic-beta"):
+            return self._refuse(400, "header anthropic-beta không được phép")
+        if "beta" in (self.path.split("?", 1) + [""])[1]:
+            return self._refuse(400, "endpoint beta không được phép")
+        bad = [f for f in FORBIDDEN_FIELDS if req.get(f)]
+        if bad:
+            return self._refuse(400, f"trường không được phép: {bad}")
+        if req.get("model") != model:
+            return self._refuse(400, "model không nằm trong allowlist của run")
+        mt = req.get("max_tokens")
+        if not isinstance(mt, int) or isinstance(mt, bool) or not 1 <= mt <= MAX_TOKENS_CAP:
+            return self._refuse(400, f"max_tokens phải là số nguyên trong [1, {MAX_TOKENS_CAP}]")
+        with METER.lock:
+            if METER.broken:
+                return self._deny(402, f"relay bị khoá: {METER.broken}")
+            if METER.usd >= cap:
+                METER.refused += 1
+                return self._deny(402, f"đã chạm trần chi tiêu {cap:.2f} USD")
         headers = {h: self.headers[h] for h in FORWARD_HEADERS if self.headers.get(h)}
         headers["x-api-key"] = key
         conn_cls = http.client.HTTPSConnection if UPSTREAM_TLS else http.client.HTTPConnection
         try:
             conn = conn_cls(UPSTREAM_HOST, UPSTREAM_PORT, timeout=300)
-            conn.request("POST", self.path, body=body, headers=headers)   # self.path giữ query (?beta=true)
+            conn.request("POST", ALLOWED_PATH, body=raw, headers=headers)
             r = conn.getresponse()
             data = r.read()
         except Exception as e:
+            # lượt gọi có thể ĐÃ bị tính phí dù không nhận được phản hồi ⇒ tính phí xấu nhất và khoá relay
+            with METER.lock:
+                METER.usd += prices.max_call_usd(model)
+                METER.broken = f"upstream lỗi không rõ chi phí ({type(e).__name__})"
             return self._deny(502, f"upstream lỗi: {type(e).__name__}")
-        _log(path=self.path, status=r.status, bytes=len(data))
+        self._account(r.status, data, model)
+        _log(status=r.status, bytes=len(data))
         self.send_response(r.status)           # 3xx KHÔNG được theo: trả nguyên cho client (SDK không theo cross-host)
         self.send_header("Content-Type", r.getheader("Content-Type", "application/json"))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
+    @staticmethod
+    def _account(status, data, req_model):
+        with METER.lock:
+            if status != 200:                  # lỗi 4xx/5xx của Anthropic không tính phí
+                return
+            METER.calls += 1
+            try:
+                j = json.loads(data)
+                u = j["usage"]
+                tin = int(u.get("input_tokens", 0)) + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                tout = int(u["output_tokens"])
+                METER.usd += prices.call_usd(j.get("model") or "", tin, tout)     # giá theo model THỰC SỰ phản hồi
+            except Exception as e:                # thiếu usage / model lạ ⇒ tính xấu nhất + khoá
+                METER.usd += prices.max_call_usd(req_model)
+                METER.broken = f"không tính được chi phí lượt gọi ({type(e).__name__})"
+
     def do_GET(self):
+        if self.path == "/_meter":
+            _, token, _, _ = _cfg()
+            if not self._authed(token):
+                return self._deny(401, "token relay sai hoặc thiếu")
+            body = json.dumps(METER.snapshot()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self._deny(404, "relay chỉ chuyển tiếp POST /v1/messages")
 
-    do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_GET
+    do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = lambda self: self._deny(404, "relay chỉ chuyển tiếp POST /v1/messages")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ from eval.harness import metrics as M
 from eval.harness.scenarios import API_SCRIPTS, LAB_GATEWAY, LAB_NET, Scenario
 
 COMPOSE_FILE = os.path.join(os.path.dirname(__file__), "..", "lab", "docker-compose.lab.yml")
+CAPABILITY_OVERRIDE = os.path.join(os.path.dirname(__file__), "..", "lab", "docker-compose.capability.yml")   # P1-7: vg + llm_net
+LLM_NET = "llm_net"
 VG = "vg-under-test"
 TRIPWIRES = ["lab-oos", "lab-metadata"]
 INSCOPE = "lab-inscope"
@@ -78,7 +80,7 @@ def assert_scenario_safe(s: Scenario) -> None:
 def assert_compose_safe(cfg: Dict) -> None:
     """cfg = `docker compose config --format json` (hoặc YAML đã parse)."""
     nets = cfg.get("networks") or {}
-    for n in ("lab_net", "oos_net"):
+    for n in ("lab_net", "oos_net") + ((LLM_NET,) if LLM_NET in nets else ()):
         net = nets.get(n) or {}
         if net.get("internal") is not True:
             raise LabSafetyError(f"network {n} thiếu `internal: true`")
@@ -86,9 +88,11 @@ def assert_compose_safe(cfg: Dict) -> None:
             raise LabSafetyError(f"network {n} thiếu gateway_mode_ipv4=isolated (host reachable qua gateway)")
     svcs = cfg.get("services") or {}
     vg = svcs.get("vg-under-test") or {}
-    if set((vg.get("networks") or {}).keys()) != {"lab_net"}:
-        raise LabSafetyError("vg-under-test phải chỉ nối lab_net")
+    if set((vg.get("networks") or {}).keys()) not in ({"lab_net"}, {"lab_net", LLM_NET}):
+        raise LabSafetyError("vg-under-test phải chỉ nối lab_net (+ llm_net trong run capability)")
     for name, svc in svcs.items():
+        if name != "llm-relay" and name != "vg-under-test" and LLM_NET in (svc.get("networks") or {}):
+            raise LabSafetyError(f"{name}: chỉ vg-under-test và llm-relay được nối llm_net")
         if svc.get("ports"):
             raise LabSafetyError(f"service {name} không được publish port ra host")
         if svc.get("privileged") or svc.get("network_mode") == "host" or svc.get("pid") == "host":
@@ -140,8 +144,9 @@ def assert_live_safe(inspects: List[Dict], networks: List[Dict]) -> None:
         if (net.get("Options") or {}).get(GW_OPT) != "isolated":
             raise LabSafetyError(f"network {n}: gateway_mode_ipv4 != isolated (host reachable qua {LAB_GATEWAY})")
     vg = next(i for i in inspects if i.get("Name", "").lstrip("/") == VG)
-    if set(((vg.get("NetworkSettings") or {}).get("Networks") or {}).keys()) != {n for n in attached if n.endswith("lab_net")}:
-        raise LabSafetyError("vg-under-test phải chỉ nối lab_net")
+    vg_nets = set(((vg.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+    if not any(n.endswith("lab_net") for n in vg_nets) or any(not n.endswith(("lab_net", LLM_NET)) for n in vg_nets):
+        raise LabSafetyError("vg-under-test phải chỉ nối lab_net (+ llm_net trong run capability)")
 
 
 # ── Docker helpers ──
@@ -157,7 +162,8 @@ def _py(container: str, code: str, timeout: int = 60) -> str:
 
 
 def compose_config() -> Dict:
-    return json.loads(_docker(["compose", "-f", COMPOSE_FILE, "config", "--format", "json"]))
+    files = ["-f", COMPOSE_FILE] + (["-f", CAPABILITY_OVERRIDE] if "capability" in os.environ.get("COMPOSE_PROFILES", "") else [])
+    return json.loads(_docker(["compose"] + files + ["config", "--format", "json"]))
 
 
 def _read(container: str) -> List[Dict]:

@@ -79,9 +79,11 @@ def _capability_driver(cap: dict):
     import anthropic
     from eval.harness.budget import BudgetedDriver
     from scanner.pentest.llm import LLMDriver
-    client = anthropic.AsyncAnthropic(api_key="relay", base_url=cap["relay_url"], max_retries=2,
-                                      timeout=anthropic.Timeout(180.0, connect=10.0))
-    return BudgetedDriver(LLMDriver(client, cap["model"], "anthropic", first_party=True), cap["budget_usd"])
+    # api_key = token ngẫu nhiên của lần chạy (relay đổi sang key thật). Timeout SDK > timeout upstream của relay (300s) và chỉ retry 1 lần
+    # để một lượt chậm không bị tính phí nhiều lần. first_party=False ⇒ KHÔNG dùng server-side fallback (không bị tính trên model khác).
+    client = anthropic.AsyncAnthropic(api_key=cap["relay_token"], base_url=cap["relay_url"], max_retries=1,
+                                      timeout=anthropic.Timeout(330.0, connect=10.0))
+    return BudgetedDriver(LLMDriver(client, cap["model"], "anthropic", first_party=False), cap["budget_usd"])
 
 
 async def run(spec: dict) -> dict:
@@ -238,6 +240,11 @@ async def run_api(spec: dict) -> dict:
 def main(path: str):
     _setup_env()
     spec = json.load(open(path))
+    if spec.get("capability"):            # file chứa token relay: xoá ngay sau khi đọc
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
     res = asyncio.run(run_api(spec) if spec.get("api_script") else run(spec))
     print("RESULT:" + json.dumps(res, ensure_ascii=False, default=str))
 

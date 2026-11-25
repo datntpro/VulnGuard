@@ -23,6 +23,17 @@ networks:
       config:
         - subnet: 172.31.251.0/24
 
+  # P1-7: mạng RIÊNG cho đường LLM. Chỉ vg-under-test (thêm bởi docker-compose.capability.yml) và llm-relay nằm trên đây;
+  # DVWA / Juice Shop / XBOW / tripwire KHÔNG với tới relay (không dùng chung được key).
+  llm_net:
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 172.31.252.0/24
+
   # P1-7: mạng DUY NHẤT có đường ra ngoài, chỉ gắn vào llm-relay (profile capability). Không dùng cho thứ gì khác.
   llm_egress:
     driver: bridge
@@ -106,19 +117,26 @@ services:
     networks:
       lab_net: {ipv4_address: 172.31.250.42}
 
-  # Relay LLM: lab_net + llm_egress. Giữ API key (vg-under-test thì không). Chỉ chuyển tiếp POST /v1/messages → api.anthropic.com.
+  # Relay LLM: llm_net (chung với vg-under-test) + llm_egress. Giữ API key (vg-under-test thì không). Chỉ chuyển tiếp
+  # POST /v1/messages → api.anthropic.com, có token + allowlist model + đồng hồ USD (xem llm-relay/relay.py).
+  # Harness (không phải workflow) khởi động service này với RELAY_TOKEN/RELAY_MODEL/RELAY_BUDGET_USD của lần chạy.
   llm-relay:
     profiles: [capability]
     container_name: lab-llm-relay
-    image: python:3.12-slim
+    image: python:3.12-slim@sha256:191083cdf6c7bda8c76158983163ead5d5cf7b77cf3033e805bb0f5296f51b4b
     command: ["python", "/srv/relay.py", "8080"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    volumes: ["./llm-relay:/srv:ro"]
+      RELAY_TOKEN: ${RELAY_TOKEN:-}
+      RELAY_MODEL: ${RELAY_MODEL:-}
+      RELAY_BUDGET_USD: ${RELAY_BUDGET_USD:-}
+    volumes:
+      - ./llm-relay:/srv:ro
+      - ../harness/prices.py:/prices/prices.py:ro      # bảng giá DUY NHẤT dùng chung với harness
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs: ["/log"]
     networks:
-      lab_net: {ipv4_address: 172.31.250.30}
+      llm_net: {ipv4_address: 172.31.252.30}
       llm_egress: {}

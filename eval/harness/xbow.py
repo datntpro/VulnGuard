@@ -3,6 +3,7 @@ GHIM commit. Mỗi benchmark được dựng với flag NGẪU NHIÊN (model kh�
 
 `transform_compose` / `assert_xbow_compose_safe` là hàm thuần (test offline). Chỉ `prepare()` chạm mạng (tải tarball ở SHA ghim,
 build image) — chạy tay/nightly, KHÔNG nằm trong test hay trong pentest-safety."""
+import json
 import os
 import re
 import secrets
@@ -38,6 +39,51 @@ def _container_port(ports: List) -> Optional[int]:
     return None
 
 
+def _with_flag_env(svc: Dict) -> None:
+    """Cờ ngẫu nhiên PHẢI tới được ứng dụng: biến môi trường runtime (một số benchmark, vd XBEN-007, chỉ đọc os.getenv('FLAG')
+    lúc chạy và Dockerfile đặt ENV trước ARG nên build-arg không đủ) + build arg FLAG nếu chưa có."""
+    env = svc.get("environment")
+    if isinstance(env, list):
+        env = [e for e in env if not str(e).startswith("FLAG=") and str(e) != "FLAG"] + ["FLAG=${FLAG}"]
+    else:
+        env = dict(env or {})
+        env["FLAG"] = "${FLAG}"
+    svc["environment"] = env
+    b = svc.get("build")
+    if b is not None:
+        b = {"context": b} if isinstance(b, str) else dict(b)
+        args = b.get("args")
+        if isinstance(args, list):
+            args = [a for a in args if str(a).split("=")[0] != "FLAG"] + ["FLAG=${FLAG}"]
+        else:
+            args = dict(args or {})
+            args["FLAG"] = "${FLAG}"
+        b["args"] = args
+        svc["build"] = b
+
+
+def _strip_health(svc: Dict) -> None:
+    """Healthcheck của benchmark hay dùng công cụ image không có (XBEN-007: `curl` trên python:slim) ⇒ `up --wait` lỗi ⇒ cả run chết.
+    Bỏ healthcheck; sự sẵn sàng được harness thăm dò bằng HTTP từ vg-under-test (capability.wait_ready)."""
+    svc.pop("healthcheck", None)
+    dep = svc.get("depends_on")
+    if isinstance(dep, dict):
+        svc["depends_on"] = {k: {**(v or {}), "condition": "service_started"} for k, v in dep.items()}
+
+
+def flag_is_injected(rendered: Dict, flag: str) -> bool:
+    """`docker compose config` đã thế biến: mọi service có build phải nhận cờ qua env HOẶC build arg, và service lộ cổng phải có env."""
+    ok = False
+    for svc in (rendered.get("services") or {}).values():
+        env = svc.get("environment") or {}
+        env = env if isinstance(env, dict) else dict(str(e).split("=", 1) for e in env if "=" in str(e))
+        ba = (svc.get("build") or {}).get("args") if isinstance(svc.get("build"), dict) else None
+        ba = ba if isinstance(ba, dict) else dict(str(e).split("=", 1) for e in (ba or []) if "=" in str(e))
+        if env.get("FLAG") == flag or (ba or {}).get("FLAG") == flag:
+            ok = True
+    return ok
+
+
 def transform_compose(cfg: Dict, ip: str) -> Dict:
     """Bỏ mọi `ports` (không publish ra host), đặt service lộ cổng lên lab_net (IP cố định) + mạng nội bộ của benchmark
     (`internal: true`); các service còn lại (DB...) CHỈ ở mạng nội bộ. Trả (compose mới); cổng web ở `x-vg-entry-port`."""
@@ -49,6 +95,8 @@ def transform_compose(cfg: Dict, ip: str) -> Dict:
     out["services"] = {}
     for name, svc in cfg["services"].items():
         s = {k: v for k, v in svc.items() if k not in ("ports", "networks", "container_name", "network_mode", "privileged")}
+        _with_flag_env(s)
+        _strip_health(s)
         if name == entry[0]:
             s["expose"] = [str(_container_port(svc["ports"]))]
             s["networks"] = {"lab_net": {"ipv4_address": ip}, "bench_internal": {}}
@@ -57,6 +105,14 @@ def transform_compose(cfg: Dict, ip: str) -> Dict:
             s["networks"] = {"bench_internal": {}}
         out["services"][name] = s
     return out
+
+
+def _host_source(v) -> bool:
+    """True nếu mục volumes là bind mount từ đường dẫn host (tuyệt đối, ~, .., hoặc long-syntax type=bind)."""
+    if isinstance(v, dict):
+        return v.get("type") == "bind" or _host_source(str(v.get("source") or ""))
+    src = str(v).split(":", 1)[0]
+    return src.startswith(("/", "~", "..", "$")) or (":" in str(v) and src.startswith("."))
 
 
 def assert_xbow_compose_safe(cfg: Dict, ip: str) -> None:
@@ -72,8 +128,11 @@ def assert_xbow_compose_safe(cfg: Dict, ip: str) -> None:
         for bad in ("ports", "privileged", "network_mode", "pid", "cap_add", "devices"):
             if svc.get(bad):
                 raise LabSafetyError(f"xbow service {name}: `{bad}` bị cấm")
-        if any("docker.sock" in str(v) for v in (svc.get("volumes") or [])):
-            raise LabSafetyError(f"xbow service {name}: mount docker.sock bị cấm")
+        for v in svc.get("volumes") or []:
+            if "docker.sock" in str(v):
+                raise LabSafetyError(f"xbow service {name}: mount docker.sock bị cấm")
+            if _host_source(v):
+                raise LabSafetyError(f"xbow service {name}: bind mount từ host bị cấm: {v}")
         if not set(svc.get("networks") or {}) <= {"lab_net", "bench_internal"}:
             raise LabSafetyError(f"xbow service {name}: network lạ")
 
@@ -105,6 +164,10 @@ def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Di
             with open(os.path.join(dst, "flag.txt"), "w") as f:
                 f.write(flag)
             env = dict(os.environ, FLAG=flag)
+            rendered = json.loads(subprocess.run(["docker", "compose", "-f", "docker-compose.vglab.yml", "config", "--format", "json"],  # nosec B603 B607
+                                                 cwd=dst, env=env, check=True, timeout=120, capture_output=True, text=True).stdout)
+            if not flag_is_injected(rendered, flag):       # không có đường đưa cờ vào ⇒ benchmark vô nghĩa ⇒ từ chối
+                raise RuntimeError(f"{bid}: cờ ngẫu nhiên không được đưa vào service nào (env/build arg) — từ chối benchmark")
             subprocess.run(["docker", "compose", "-p", f"vgx-{bid.lower()}", "-f", "docker-compose.vglab.yml", "build"],  # nosec B603 B607
                            cwd=dst, env=env, check=True, timeout=1800)
             res[bid] = {**meta, "port": cfg["x-vg-entry-port"], "dir": dst, "flag": flag}
@@ -112,6 +175,6 @@ def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Di
 
 
 if __name__ == "__main__":
-    import json
     import sys
-    print(json.dumps(prepare(sys.argv[1:] or None), indent=2))
+    # KHÔNG in cờ/đường dẫn vào log (repo public); harness đọc cờ từ flag.txt trên đĩa
+    print(json.dumps({k: {x: v[x] for x in ("ip", "name", "port")} for k, v in prepare(sys.argv[1:] or None).items()}, indent=2))

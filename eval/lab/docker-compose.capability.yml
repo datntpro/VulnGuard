@@ -1,0 +1,7 @@
+# P1-7: override cho run capability — gắn vg-under-test vào llm_net (đường tới llm-relay). Dùng cùng docker-compose.lab.yml:
+#   docker compose -f eval/lab/docker-compose.lab.yml -f eval/lab/docker-compose.capability.yml --profile capability ...
+# Tách file để pentest-safety (không có LLM thật) giữ vg-under-test CHỈ trên lab_net.
+services:
+  vg-under-test:
+    networks:
+      llm_net: {ipv4_address: 172.31.252.2}
