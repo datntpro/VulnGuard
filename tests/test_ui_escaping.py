@@ -129,3 +129,54 @@ def test_kb_status_and_kev_badge_escaped():
                 "${s.update_interval_hours}", "map(([k, v]) => `${k}: ${v}`).join(' · ')", 'title="${t}"'):
         assert raw not in INDEX, raw
     assert 'title="${escHtml(t)}"' in INDEX
+
+
+# ── P1-8: Phase-1 pentest UI sinks ──────────────────────────────────────────
+def _fn(name):
+    m = re.search(r"(?:async )?function %s\b.*?\n\}\n" % re.escape(name), INDEX, re.S)
+    assert m, name
+    return m.group(0)
+
+
+def test_p18_confidence_badge_escaped_and_no_verified_tick():
+    body = _fn("ptConfBadge")
+    assert "escHtml(m[0])" in body
+    assert "✓ Đã xác thực" not in INDEX          # dấu tick "verified" cũ đã bị thay bằng badge confidence
+    assert "${ptConfBadge(f.confidence)}" in INDEX
+    assert "${escHtml(f.validator)}" in INDEX
+
+
+def test_p18_roe_card_escapes_every_dynamic_value():
+    body = _fn("renderRoeCard")
+    for raw in ("${e.emergency_contact", "${e.roe_note", "${w.tz", "${w.start", "${w.end", "${set}", "${real}"):
+        assert raw not in body, raw
+    for esc in ("escHtml(e.emergency_contact", "escHtml(e.roe_note", "escHtml(w.tz", "escHtml(set)", "escHtml(real)"):
+        assert esc in body, esc
+
+
+def test_p18_window_row_escaped():
+    body = _fn("emWindowRowHtml")
+    for raw in ("${w.start", "${w.end", "${w.tz"):
+        assert raw not in body, raw
+    assert "escHtml(w.tz" in body
+
+
+def test_p18_stop_reason_and_outcome_escaped():
+    assert "escHtml(ptStopReason(r))" in INDEX
+    assert "${ptStopReason(r)}" not in INDEX
+    body = _fn("ptOutcomeBadge")
+    assert "ptBadge(label, t)" in body             # ptBadge luôn escHtml
+
+
+def test_p18_proxy_token_and_ca_url_escaped():
+    assert "escHtml(ptState.proxySecret.token)" in INDEX
+    assert "escHtml(ptState.proxySecret.username)" in INDEX
+    assert "${ptState.proxySecret.token}" not in INDEX
+    assert "escHtml(encodeURIComponent(ptState.curEngId))" in INDEX
+    assert "/api/pentest/proxy/ca.crt" not in INDEX   # CA toàn cục đã bị gỡ (410)
+
+
+def test_p18_degraded_and_roe_lock_present():
+    assert "e.degraded_mode" in INDEX
+    assert "Thu hồi uỷ quyền để sửa" in INDEX
+    assert "setRoeLocked(!!(eng && eng.authorized))" in INDEX
