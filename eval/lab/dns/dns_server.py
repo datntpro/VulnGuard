@@ -6,7 +6,10 @@
 import json, os, socket, struct, threading, time
 
 ZONE = {"inscope.lab": ["172.31.250.10"], "oos.lab": ["172.31.250.20"], "metadata.lab": ["172.31.250.254"],
-        "reset.lab": ["172.31.250.10"]}
+        "reset.lab": ["172.31.250.10"],
+        # P1-7 (profile capability): mục tiêu năng lực + relay LLM — cố định theo compose
+        "dvwa.lab": ["172.31.250.41"], "juice.lab": ["172.31.250.42"],
+        "xbow-1.lab": ["172.31.250.61"], "xbow-2.lab": ["172.31.250.62"], "xbow-3.lab": ["172.31.250.63"]}
 REBIND = ["172.31.250.10", "172.31.250.20"]
 SINKHOLE = ["172.31.250.20"]
 LOG = "/log/hits.jsonl"

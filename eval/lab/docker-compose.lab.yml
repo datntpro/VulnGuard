@@ -23,6 +23,10 @@ networks:
       config:
         - subnet: 172.31.251.0/24
 
+  # P1-7: mạng DUY NHẤT có đường ra ngoài, chỉ gắn vào llm-relay (profile capability). Không dùng cho thứ gì khác.
+  llm_egress:
+    driver: bridge
+
 services:
   dns:
     container_name: lab-dns
@@ -85,3 +89,36 @@ services:
     cap_add: [NET_RAW]
     volumes: ["./capture:/srv:ro"]
     depends_on: [vg-under-test]
+
+  # ───────────── P1-7: profile `capability` (chạy tay / nightly, KHÔNG chạy ở pentest-safety) ─────────────
+  # Mục tiêu năng lực nối lab_net với IP cố định; image ghim digest. XBOW do eval/lab/xbow/prepare.py sinh compose riêng.
+  dvwa:
+    profiles: [capability]
+    container_name: lab-dvwa
+    image: vulnerables/web-dvwa@sha256:dae203fe11646a86937bf04db0079adef295f426da68a92b40e3b181f337daa7
+    networks:
+      lab_net: {ipv4_address: 172.31.250.41}
+
+  juice-shop:
+    profiles: [capability]
+    container_name: lab-juice
+    image: bkimminich/juice-shop@sha256:adaf6a6ca50f772dff7d2fe56972c659e81a61e0dbbe607c2b39fefd436e6153
+    networks:
+      lab_net: {ipv4_address: 172.31.250.42}
+
+  # Relay LLM: lab_net + llm_egress. Giữ API key (vg-under-test thì không). Chỉ chuyển tiếp POST /v1/messages → api.anthropic.com.
+  llm-relay:
+    profiles: [capability]
+    container_name: lab-llm-relay
+    image: python:3.12-slim
+    command: ["python", "/srv/relay.py", "8080"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes: ["./llm-relay:/srv:ro"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/log"]
+    networks:
+      lab_net: {ipv4_address: 172.31.250.30}
+      llm_egress: {}
