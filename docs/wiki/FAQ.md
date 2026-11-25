@@ -7,7 +7,7 @@ macOS và Linux (`setup.sh`, `run.sh`), Windows (`setup.ps1`, `run.ps1`), hoặc
 Mặc định AI mode là `local_only` (chỉ Ollama), dữ liệu quét nằm trong SQLite ở `storage/`. Dữ liệu chỉ ra ngoài khi bạn bật `hybrid`/`cloud_only`, dùng Pentest Agent (luôn cần Anthropic hoặc Bedrock), cấu hình connector/SCM/SMTP, hoặc tải EPSS/KEV. Xem [[Security and Data Flow|Security-and-Data-Flow]].
 
 **Tài khoản ADMIN đầu tiên ở đâu?**
-`setup.sh` gọi `scripts/bootstrap_admin.py`: tạo ADMIN (mặc định `admin@vulnguard.local`, đổi bằng `ADMIN_EMAIL`) và ghi mật khẩu vào `storage/admin_credentials.txt` (chmod 600), không in ra màn hình. Đăng nhập, đổi mật khẩu, rồi xoá file. Nếu chưa có user nào (vd chạy Docker), trang đăng nhập cho tạo ADMIN đầu tiên.
+`setup.sh` gọi `scripts/bootstrap_admin.py`: tạo ADMIN (mặc định `admin@vulnguard.local`, đổi bằng `ADMIN_EMAIL`) và ghi mật khẩu vào `storage/admin_credentials.txt` (chmod 600), không in ra màn hình. Đăng nhập, đổi mật khẩu, rồi xoá file. Nếu chưa có user nào (vd chạy Docker), trang đăng nhập cho tạo ADMIN đầu tiên — cần setup token trong `storage/setup_token` (hoặc `VULNGUARD_SETUP_TOKEN`).
 
 **Quên mật khẩu thì sao?**
 Code không có endpoint đặt lại mật khẩu: `PATCH /api/auth/users/{id}` chỉ đổi `name`, `role`, `is_active`; `POST /api/auth/change-password` cần mật khẩu hiện tại. Hãy giữ ít nhất 2 tài khoản ADMIN.

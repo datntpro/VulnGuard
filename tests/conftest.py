@@ -8,6 +8,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{_TMP}/db/test.db")
 os.environ.setdefault("AI_CONFIG_FILE", os.path.join(_TMP, "ai.json"))
 os.environ.setdefault("AUTH_ENABLED", "true")
 os.environ.setdefault("APP_ENV", "development")
+os.environ.setdefault("VULNGUARD_SETUP_TOKEN", "test-setup-token")
 os.environ.setdefault("DEPLOY_MODE", "native")
 
 import pytest

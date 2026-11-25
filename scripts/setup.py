@@ -343,8 +343,8 @@ def run_prod():
     g("  Dùng email/mật khẩu ADMIN ở trên để đăng nhập. (Ctrl+C để dừng)"); hr()
     env = dict(os.environ, PYTHONPATH=str(ROOT))
     os.execve(venv_python(), [venv_python(), "-m", "uvicorn", "api.main:app",
-              "--host", host, "--port", port], env) if not IS_WIN else \
-        subprocess.call([venv_python(), "-m", "uvicorn", "api.main:app", "--host", host, "--port", port], env=env)
+              "--host", host, "--port", port, "--workers", "1"], env) if not IS_WIN else \
+        subprocess.call([venv_python(), "-m", "uvicorn", "api.main:app", "--host", host, "--port", port, "--workers", "1"], env=env)
 
 
 def main():

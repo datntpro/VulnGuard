@@ -15,6 +15,7 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 | `DATABASE_URL` | `sqlite:////app/storage/db/vulnguard.db` (`run.sh` đặt lại thành `storage/db/vulnguard.db` trong thư mục cài) | DB SQLite. Thư mục `storage/` được suy ra từ đường dẫn này |
 | `AUTH_ENABLED` | `true` | Bật đăng nhập. `false` chỉ cho dev 1 người, và khi tắt thì các API quét chủ động bị khoá |
 | `VULNGUARD_SECRET_KEY` | rỗng | Khoá ký JWT và mã hoá Fernet. Rỗng thì tự sinh `storage/secret.key`. Đặt cố định nếu chạy nhiều instance |
+| `VULNGUARD_SETUP_TOKEN` | rỗng | Setup token cho lần tạo ADMIN đầu tiên. Rỗng thì tự sinh `storage/setup_token` (0600) khi chưa có user, xoá sau khi setup. Nếu đặt thì PHẢI ngẫu nhiên, ≥128 bit (`openssl rand -hex 24`): giới hạn thử sai không làm chậm việc đoán, độ an toàn dựa vào entropy của token |
 | `SESSION_TTL_HOURS` | `12` | Thời hạn phiên |
 | `COOKIE_SECURE` | `false` | Bật khi chạy sau HTTPS reverse proxy |
 | `ALLOWED_HOSTS` | rỗng | Host header được chấp nhận (csv). Auth tắt: luôn giới hạn loopback + danh sách này; auth bật: chỉ kiểm tra khi khác rỗng |

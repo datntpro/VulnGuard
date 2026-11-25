@@ -30,6 +30,8 @@ services:
       - ${SCAN_WORKSPACE:-/tmp}:/workspace
     environment:
       - DEPLOY_MODE=docker
+      # Token tạo ADMIN lần đầu (>=16 ký tự). Trống → tự sinh storage/setup_token
+      - VULNGUARD_SETUP_TOKEN=${VULNGUARD_SETUP_TOKEN:-}
       - DATABASE_URL=sqlite:////app/storage/db/vulnguard.db
       # host.docker.internal → trỏ vào máy thật (Ollama đang chạy ở đó)
       - OLLAMA_URL=http://host.docker.internal:11434

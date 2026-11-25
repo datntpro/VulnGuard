@@ -33,6 +33,16 @@
   The "anyone on the LAN can claim ADMIN via `/api/auth/setup`" gap is closed by the setup token in #42 (not duplicated here).
 - Skipped on purpose: L-4 (pentest proxy auth, loopback default, CA lifetime) — already implemented in #37.
 
+### Security — first-run setup token (L-2, BREAKING first-run UX) + single worker (D-14)
+- `POST /api/auth/setup` now requires `setup_token`: `VULNGUARD_SETUP_TOKEN`, or an auto-generated `storage/setup_token`
+  (0600, created only while no user exists, deleted after a successful setup; never logged — only its path). Wrong/missing
+  token → 403, repeated guesses → 429 (shared lockout limiter). `/api/auth/status` adds `setup_token_required`.
+- Hardening after review: the token file is created at startup (stale file removed when users exist); setup is atomic (single winner, others 409); a correct token is never rate-limited and wrong guesses share one global bucket (no per-IP/X-Forwarded-For dependence, so NAT/LAN attackers cannot lock the owner out); env tokens shorter than 16 chars are ignored; `docker-compose.yml` forwards `VULNGUARD_SETUP_TOKEN`.
+- Setup is guarded at DB level (single-row `setup_state` PK in the same transaction as the first ADMIN), so it holds across processes; a laggard request never regenerates the token file (only startup creates it); `--workers 1` is explicit in the Dockerfile CMD, systemd template, `install/run.sh` and `scripts/setup.py`. Custom env tokens must be random >=128-bit (the limiter does not slow guessing).
+- Login page setup form has a "Setup token" field. `scripts/bootstrap_admin.py` (installer) is unchanged.
+- `run.sh` ignores `VULNGUARD_WORKERS>1` with a warning (in-memory state requires a single worker).
+- Tests: `tests/test_setup_token.py`.
+
 ### Fixed — first-login change-password UX (BREAKING for API clients)
 - `POST /api/auth/change-password` now requires `confirm_password` (must equal `new_password`, else 422, nothing written)
   and enforces a password policy (10–200 chars, ≥3 of 4 character classes, not containing the email local part,

@@ -156,6 +156,9 @@
         <p class="sub">Tài khoản này có quyền ADMIN: quản lý người dùng, cấu hình AI provider và toàn bộ dữ liệu scan.</p>
         <div class="alert" id="setup-error" role="alert"></div>
         <form id="setup-form" novalidate>
+          <div class="field"><label for="setup-token">Setup token</label>
+            <div class="input"><input id="setup-token" type="password" autocomplete="off" spellcheck="false" placeholder="Dán setup token" required></div>
+            <div class="hint">Lấy token tại <code>storage/setup_token</code> trên máy chủ (Docker: <code>docker exec vulnguard-api cat /app/storage/setup_token</code>) hoặc giá trị <code>VULNGUARD_SETUP_TOKEN</code>.</div></div>
           <div class="field"><label for="setup-name">Họ tên</label>
             <div class="input"><input id="setup-name" autocomplete="name" placeholder="Nguyễn Văn A" required></div></div>
           <div class="field"><label for="setup-email">Email</label>
@@ -275,10 +278,12 @@ pw.addEventListener('input', () => {
 document.getElementById('setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   clearError('setup-error');
+  const setup_token = document.getElementById('setup-token').value.trim();
   const name = document.getElementById('setup-name').value.trim();
   const email = document.getElementById('setup-email').value.trim();
   const password = pw.value;
   const confirmPw = document.getElementById('setup-confirm').value;
+  if (!setup_token) return showError('setup-error', 'Nhập setup token');
   if (!name || !email) return showError('setup-error', 'Nhập họ tên và email');
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) return showError('setup-error', 'Email không hợp lệ');
   if (password.length < 10 || password.length > 200) return showError('setup-error', PW_RULES_TEXT);
@@ -290,7 +295,7 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
   const btn = document.getElementById('setup-btn');
   setBusy(btn, true);
   try {
-    const r = await fetch('/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, name }) });
+    const r = await fetch('/api/auth/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, name, setup_token }) });
     if (!r.ok) throw new Error(await readError(r));
     location.href = nextUrl();
   } catch (err) {

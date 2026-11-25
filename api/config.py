@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # Secret ký JWT + mã hoá API key cloud AI. Để trống → tự sinh & lưu vào
     # <storage>/secret.key (chmod 600). Đặt cố định nếu chạy nhiều instance.
     vulnguard_secret_key: str = ""
+    # L-2: setup token cho lần thiết lập đầu tiên. Trống → tự sinh vào <storage>/setup_token (0600) khi chưa có user.
+    vulnguard_setup_token: str = ""
     session_ttl_hours: int = 12
     # Cookie Secure flag — bật khi chạy sau HTTPS reverse proxy
     cookie_secure: bool = False

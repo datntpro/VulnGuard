@@ -14,6 +14,8 @@ Phân quyền (enforce ở middleware, theo prefix):
 """
 import hashlib
 import hmac
+import logging
+import os
 import re
 import secrets
 import threading
@@ -25,12 +27,12 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from starlette.requests import HTTPConnection
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
-from api.auth_models import RevokedToken, User, UserRole
+from api.auth_models import RevokedToken, SetupState, User, UserRole
 from api.config import settings
 from api.database import get_db, SessionLocal
 from api.security import (
@@ -109,6 +111,8 @@ class SetupIn(BaseModel):
     email: str
     name: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=10, max_length=200)
+    # L-2: chỉ /setup dùng (UserCreate kế thừa nhưng bỏ qua trường này)
+    setup_token: str = Field(default="", max_length=256)
 
     @field_validator("email")
     @classmethod
@@ -325,24 +329,167 @@ async def auth_middleware(request: Request, call_next):
 # ─────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────
+def _user_count(db: Session) -> int:
+    return db.query(User).count()
+
+
+def _storage_dir() -> str:
+    return settings.storage_dir
+
+
+_SETUP_LOCK = threading.Lock()          # bảo vệ việc tạo file token
+_SETUP_COMMIT_LOCK = threading.Lock()   # M-2: tuần tự hoá "đếm user → INSERT → commit" (D-14: 1 tiến trình)
+_setup_hint_logged = False
+_MIN_ENV_TOKEN = 16
+SETUP_RL_KEY = "setup|global"            # S-1/S-2: một bucket toàn cục, không phụ thuộc IP (NAT/XFF)
+_log = logging.getLogger("vulnguard.auth")
+
+
+def _env_setup_token() -> str:
+    env = (settings.vulnguard_setup_token or "").strip()
+    if env and len(env) < _MIN_ENV_TOKEN:
+        _log.error("VULNGUARD_SETUP_TOKEN quá ngắn (<%d ký tự) → bỏ qua, dùng file storage/setup_token", _MIN_ENV_TOKEN)
+        return ""
+    return env
+
+
+def _read_setup_token() -> Optional[str]:
+    """Chỉ ĐỌC token (env hoặc file) — không bao giờ tạo (R-1)."""
+    env = _env_setup_token()
+    if env:
+        return env
+    try:
+        with open(os.path.join(_storage_dir(), "setup_token"), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _setup_token(user_count: int) -> Optional[str]:
+    """L-2: token thiết lập lần đầu. Env VULNGUARD_SETUP_TOKEN (>=16 ký tự) ưu tiên; nếu không, khi chưa có
+    user thì đọc/tạo <storage>/setup_token (0600). Đã có user → None."""
+    global _setup_hint_logged
+    env = _env_setup_token()
+    if env:
+        return env
+    if user_count > 0:
+        return None
+    path = os.path.join(_storage_dir(), "setup_token")
+    with _SETUP_LOCK:
+        try:
+            with open(path, encoding="utf-8") as f:
+                tok = f.read().strip()
+            if tok:
+                return tok
+        except OSError:
+            pass
+        tok = secrets.token_urlsafe(24)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(tok + "\n")
+            os.chmod(path, 0o600)
+        except OSError as e:
+            _log.error("Không ghi được %s (%s). Docker: chown 10001 storage", path, e)
+            raise HTTPException(status_code=500, detail="Không tạo được setup token — thư mục storage không ghi được")
+        if not _setup_hint_logged:
+            _setup_hint_logged = True
+            _log.warning("Thiết lập lần đầu: lấy setup token tại %s (docker exec vulnguard-api cat /app/storage/setup_token)", path)
+        return tok
+
+
+def _clear_setup_token():
+    try:
+        os.remove(os.path.join(_storage_dir(), "setup_token"))
+    except OSError:
+        pass
+
+
+def init_setup_token():
+    """M-1: gọi lúc khởi động — tạo file token (đã có user thì xoá file cũ) để hướng dẫn đọc token chạy ngay lần đầu."""
+    if not settings.auth_enabled:
+        return
+    db = SessionLocal()
+    try:
+        count = _user_count(db)
+    finally:
+        db.close()
+    if count > 0:
+        _clear_setup_token()
+        return
+    # chưa có user → guard cũ (nếu có, vd user bị xoá hết) không được chặn setup
+    gdb = SessionLocal()
+    try:
+        gdb.query(SetupState).delete()
+        gdb.commit()
+    except Exception:
+        gdb.rollback()
+    finally:
+        gdb.close()
+    try:
+        if _env_setup_token():
+            _log.warning("Thiết lập lần đầu: dùng setup token từ VULNGUARD_SETUP_TOKEN")
+        else:
+            _setup_token(0)
+    except HTTPException:
+        pass
+
+
 @router.get("/status")
 def auth_status(db: Session = Depends(get_db)):
+    required = settings.auth_enabled and _user_count(db) == 0
     return {
         "auth_enabled": settings.auth_enabled,
-        "setup_required": settings.auth_enabled and db.query(User).count() == 0,
+        "setup_required": required,
+        "setup_token_required": required,
     }
 
 
 @router.post("/setup")
 def setup_first_admin(payload: SetupIn, response: Response, db: Session = Depends(get_db)):
-    if db.query(User).count() > 0:
+    count = _user_count(db)
+    if count > 0:
         raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
-    user = User(email=payload.email, name=payload.name.strip(),
-                password_hash=hash_password(payload.password), role=UserRole.ADMIN,
-                last_login_at=datetime.utcnow())
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    expected = _read_setup_token()
+    if expected is None:
+        # R-1: file thiếu — có thể kẻ thắng vừa xoá nó. Đếm lại trong lock; chỉ tạo khi thật sự chưa có user.
+        with _SETUP_COMMIT_LOCK:
+            if _user_count(db) > 0:
+                raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+            expected = _setup_token(0)
+    # S-1: so sánh TRƯỚC; token đúng không bao giờ bị khoá (kẻ tấn công NAT/LAN không DoS được chủ máy).
+    # Chỉ lần sai mới bị đếm, vào 1 bucket toàn cục → xoay IP/X-Forwarded-For không né được.
+    if not expected or not hmac.compare_digest(payload.setup_token.encode(), expected.encode()):
+        with _LOGIN_LOCK:
+            now = _time.time()
+            retry = _locked_retry(SETUP_RL_KEY, now)
+            if not retry:
+                _record_fail_locked(SETUP_RL_KEY, now)
+        if retry:
+            raise HTTPException(status_code=429, detail=f"Quá nhiều lần nhập sai setup token. Thử lại sau {retry // 60 + 1} phút.",
+                                headers={"Retry-After": str(retry)})
+        raise HTTPException(status_code=403, detail="Setup token không đúng")
+    pw_hash = hash_password(payload.password)   # tính ngoài lock (scrypt chậm)
+    with _SETUP_COMMIT_LOCK:                    # M-2: một người thắng, còn lại 409
+        if _user_count(db) > 0:
+            raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+        user = User(email=payload.email, name=payload.name.strip(), password_hash=pw_hash,
+                    role=UserRole.ADMIN, last_login_at=datetime.utcnow())
+        # R-2: guard cấp DB (PK id=1) → chỉ 1 tiến trình tạo được ADMIN đầu tiên; còn lại IntegrityError → 409
+        db.add(SetupState(id=1))
+        db.add(user)
+        try:
+            db.commit()
+        except (IntegrityError, OperationalError):
+            db.rollback()
+            if _user_count(db) > 0 or db.query(SetupState).count() > 0:
+                raise HTTPException(status_code=409, detail="Hệ thống đã có tài khoản — hãy đăng nhập")
+            raise HTTPException(status_code=503, detail="Cơ sở dữ liệu đang bận — thử lại")
+        db.refresh(user)
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(SETUP_RL_KEY, None)
+    _clear_setup_token()
     token = _set_session(response, user)
     return {"user": UserOut.model_validate(user), "token": token}
 
