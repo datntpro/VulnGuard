@@ -14,6 +14,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from api.config import settings
 from api.database import SessionLocal
 from api.models import Project, Scan, ScanStatus
 from api.security import decrypt_secret
@@ -27,17 +28,23 @@ DEFAULT_SCAN_TYPES = ["SAST", "SCA", "SECRETS", "IAC"]
 
 def _clone(conn: ScmConnection, repo: ScmRepo, dest: str) -> None:
     """git clone shallow nhánh mặc định. Token được redact trong mọi log/lỗi."""
+    providers.check_base_url(conn.base_url)   # L-1: kiểm tra lại lúc dùng (thu hẹp DNS rebinding)
     token = decrypt_secret(conn.token_enc) or ""
     url = providers.clone_url(conn.provider.value, conn.base_url, token, repo.repo_full_name)
     branch = (repo.default_branch or "main").strip()
-    cmd = ["git", "clone", "--depth", "1", "--single-branch", "--branch", branch, url, dest]
+    # C2: không theo redirect (SSRF qua 30x từ host SCM), chỉ cho giao thức https (http khi SCM_ALLOW_HTTP)
+    hard = ["git", "-c", "http.followRedirects=false", "-c", "protocol.allow=never",
+            "-c", "protocol.https.allow=always"]
+    if settings.scm_allow_http:
+        hard += ["-c", "protocol.http.allow=always"]
+    cmd = hard + ["clone", "--depth", "1", "--single-branch", "--branch", branch, url, dest]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)  # nosec B603
     except subprocess.CalledProcessError as e:
         # thử lại không chỉ định branch (repo có thể dùng master/khác)
         err = providers.redact((e.stderr or e.stdout or ""), token)
         logger.warning(f"[scm] clone branch '{branch}' lỗi, thử nhánh mặc định: {err[-200:]}")
-        cmd2 = ["git", "clone", "--depth", "1", url, dest]
+        cmd2 = hard + ["clone", "--depth", "1", url, dest]
         try:
             subprocess.run(cmd2, check=True, capture_output=True, text=True, timeout=600)  # nosec B603
         except subprocess.CalledProcessError as e2:

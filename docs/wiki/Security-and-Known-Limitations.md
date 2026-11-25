@@ -23,8 +23,8 @@ Trang này liệt kê các điểm cần biết khi triển khai, đã đối ch
 | Docker publish `8080`, `8788` (và `9000` của SonarQube) trên mọi interface của host | `docker-compose.yml` | Đổi thành `127.0.0.1:8080:8080` hoặc đặt firewall/reverse proxy |
 | Container mount `/var/run/docker.sock` và chạy root (Dockerfile không có `USER`) | `docker-compose.yml`, `api/Dockerfile` | Bỏ mount nếu không quét image; coi container như có quyền root trên host |
 | Proxy MITM pentest `bind_host` mặc định `0.0.0.0` | `api/routes/pentest.py` | Truyền `bind_host: "127.0.0.1"` khi start |
-| CORS `allow_origins=["*"]` (không kèm credentials) | `api/main.py` | Cookie vẫn an toàn nhờ `SameSite=Strict`; token Bearer thì cẩn thận |
-| `/docs`, `/openapi.json` công khai | `api/main.py` | Chặn ở reverse proxy nếu không muốn lộ danh sách endpoint |
+| CSP nền cho phép `'unsafe-inline'` script | `api/main.py` | Hạn chế rò rỉ/nhúng khung nhưng không chặn XSS inline; CSP nghiêm ngặt cần refactor `onclick` inline (đã hoãn) |
+| SCM `base_url`: chỉ kiểm tra IP lúc dùng, chưa pin IP | `scanner/scm/providers.py` | DNS rebinding hẹp nhưng chưa loại trừ; dải private mặc định cho phép (`SCM_ALLOW_PRIVATE_HOSTS=false` để cấm) |
 
 ## Xác thực và phân quyền
 

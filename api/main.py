@@ -179,23 +179,46 @@ app = FastAPI(
     title="VulnGuard API",
     description="Local DevSecOps Security Scanner với AI Analysis",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if app_settings.expose_api_docs else None,
+    redoc_url="/redoc" if app_settings.expose_api_docs else None,
+    openapi_url="/openapi.json" if app_settings.expose_api_docs else None,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    # Không dùng allow_credentials=True cùng allow_origins=["*"] — tổ hợp này bị
-    # browser từ chối với credentialed requests, và app không dùng cookie nên
-    # không cần credentials xuyên origin.
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# M-2/D-5: mặc định SAME-ORIGIN (không CORS). Chỉ bật khi liệt kê origin trong CORS_ALLOW_ORIGINS.
+_cors_origins = [o.strip() for o in app_settings.cors_allow_origins.split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 # Auth: gắn user vào request.state + chặn /api/* chưa đăng nhập (xem api/routes/auth.py)
 app.middleware("http")(auth.auth_middleware)
+
+# Baseline CSP (D-12: CSP nghiêm ngặt không inline hoãn lại). Font Google được brand.css @import.
+_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; "
+        "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+
+
+async def _security_headers(request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Frame-Options"] = "DENY"
+    # Swagger (/docs, /redoc) tải JS từ cdn.jsdelivr.net → bỏ qua CSP cho 2 trang đó
+    if (resp.headers.get("content-type", "").startswith("text/html")
+            and request.url.path not in ("/docs", "/redoc")):
+        resp.headers["Content-Security-Policy"] = _CSP
+    return resp
+
+
+# Đăng ký SAU auth_middleware → ngoài cùng, bọc cả response 401/403/421 của auth
+app.middleware("http")(_security_headers)
 
 # API Routes
 app.include_router(auth.router)

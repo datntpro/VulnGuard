@@ -36,6 +36,27 @@
   `objects/info/alternates` point outside the granted root are refused. Linked `git worktree` checkouts with the gitdir
   outside the root remain unsupported (fail-closed).
 
+### Security — auth-off, CORS/CSRF, RBAC, docs, headers (fix/authoff-cors-rbac)
+- **M-2** `AUTH_ENABLED=false` no longer exposes admin power: admin-only routes, `/api/coworker` and `/api/file-assistant` return 403 (`auth_required`); the dev pseudo-user is ANALYST; Host must be loopback (or `ALLOWED_HOSTS`) → 421 (DNS rebinding); the File Assistant WebSocket refuses when auth is off. CORS `*` removed (same-origin only unless `CORS_ALLOW_ORIGINS`). New Origin/`Sec-Fetch-Site` guard rejects cross-site writes (`bad_origin`) with auth on or off.
+- **L-1** `ADMIN_ONLY` now covers `POST/DELETE /api/settings/*` (logo, SonarQube/SMTP test), `POST/DELETE /api/scm/connections`, `GET /api/scm/connections/{id}/…`, `POST /api/ai/test`. SCM `base_url` is SSRF-checked (https only, no loopback/link-local/metadata; private ranges allowed by default) at create, validate, list and clone time.
+- **L-3 / D-11** `must_change_password` is enforced by the API (403 `must_change_password`), not only the UI; users created by an admin and admin password resets set the flag. Fixed a latent bug where `POST /api/auth/change-password` modified a detached user object and never persisted.
+- **I-1** `/docs`, `/redoc`, `/openapi.json` require login; `EXPOSE_API_DOCS=false` disables them. `mask_secret` shows only `…` + last 4 chars.
+- **E.5** Security headers on every response (`nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`) and a baseline CSP on HTML pages (Google Fonts allowed for `brand.css`).
+
+#### Review follow-ups (PR-E)
+- VIEWER accounts forced to change their password can now call `change-password`, `logout` and `logout-all` (previously permanently locked out).
+- `must_change_password` is also enforced on the File Assistant WebSocket.
+- `POST /api/auth/setup` returns 403 when `AUTH_ENABLED=false` (cannot plant the first ADMIN).
+- SCM `git clone` no longer follows HTTP redirects and only allows https (http with `SCM_ALLOW_HTTP`).
+- `check_base_url`: blocks `100.100.100.200`, `192.0.0.192`, IPv6-embedded IPv4 (6to4/NAT64/Teredo); with `SCM_ALLOW_PRIVATE_HOSTS=false` requires a globally routable address.
+
+#### Breaking changes (PR-E)
+- Third-party browser clients of the API break unless listed in `CORS_ALLOW_ORIGINS`. The bundled UI is unaffected.
+- With `AUTH_ENABLED=false`, Co-work, File Assistant and all admin routes are unavailable; requests with a non-loopback `Host` get 421.
+- Newly created users and admin-reset passwords must change the password before using the API.
+- `/docs`, `/redoc`, `/openapi.json` need a session; masked key hints now show only the last 4 characters.
+- ANALYST/VIEWER can no longer call the SCM connection management, settings sub-endpoints or `/api/ai/test`.
+
 ### Security — session revocation (fix/session-revocation)
 - **N-1** `POST /api/auth/logout` now actually revokes the JWT (per-token `jti` denylist, table `revoked_tokens`, created automatically). Previously the endpoint was public, the revoke branch never ran and the token stayed valid for `SESSION_TTL_HOURS`.
 - **N-2/M-4** File Assistant WebSocket validates the real session (revocation, `token_version`, `is_active`, current role) before `accept()` and on every message; rejects cross-origin handshakes and honours `FEATURE_FILE_ASSISTANT`.

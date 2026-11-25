@@ -2071,7 +2071,12 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   check401(r);
-  if (!r.ok) { const t = await r.text(); throw new Error(errText(t)); }
+  if (!r.ok) {
+    const t = await r.text();
+    // L-3: server ép đổi mật khẩu (API cũng enforce, không chỉ UI)
+    try { if (r.status === 403 && JSON.parse(t).code === 'must_change_password') forceChangePassword(); } catch {}
+    throw new Error(errText(t));
+  }
   if (r.status === 204) return null;
   return r.json();
 }
@@ -5003,7 +5008,9 @@ async function initAuth() {
 }
 
 function forceChangePassword() {
+  if (document.getElementById('force-cp-overlay')) return;   // api() có thể gọi nhiều lần song song
   const ov = document.createElement('div');
+  ov.id = 'force-cp-overlay';
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:420px;width:92%;">
     <h2 style="margin:0 0 8px;">🔐 Đổi mật khẩu lần đầu</h2>

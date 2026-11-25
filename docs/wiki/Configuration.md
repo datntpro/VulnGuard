@@ -17,6 +17,11 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 | `VULNGUARD_SECRET_KEY` | rỗng | Khoá ký JWT và mã hoá Fernet. Rỗng thì tự sinh `storage/secret.key`. Đặt cố định nếu chạy nhiều instance |
 | `SESSION_TTL_HOURS` | `12` | Thời hạn phiên |
 | `COOKIE_SECURE` | `false` | Bật khi chạy sau HTTPS reverse proxy |
+| `ALLOWED_HOSTS` | rỗng | Host header được chấp nhận (csv). Auth tắt: luôn giới hạn loopback + danh sách này; auth bật: chỉ kiểm tra khi khác rỗng |
+| `CORS_ALLOW_ORIGINS` | rỗng | Origin được CORS (csv). Rỗng = same-origin, không CORS |
+| `EXPOSE_API_DOCS` | `true` | `false` tắt `/docs`, `/redoc`, `/openapi.json` (khi bật vẫn cần đăng nhập) |
+| `SCM_ALLOW_HTTP` | `false` | Cho phép `http://` cho `base_url` GitHub Enterprise/GitLab |
+| `SCM_ALLOW_PRIVATE_HOSTS` | `true` | Cho phép `base_url` trỏ dải private (on-prem). Loopback/link-local luôn bị chặn |
 | `APP_ENV` | `production` | Ảnh hưởng scheduler (xem `VULNGUARD_SCHEDULER`) |
 | `DEPLOY_MODE` | `docker` (`run.sh` đặt `native`) | UI dùng để gợi ý đường dẫn scan đúng |
 | `OLLAMA_URL` | `http://host.docker.internal:11434` | Endpoint Ollama. Bản native nên đặt `http://localhost:11434` |
