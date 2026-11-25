@@ -27,3 +27,12 @@ class User(Base):
     token_version = Column(Integer, nullable=False, default=0)
     last_login_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class RevokedToken(Base):
+    """Denylist jti của JWT đã logout (xoá khi hết hạn)."""
+    __tablename__ = "revoked_tokens"
+
+    jti = Column(String(64), primary_key=True)
+    user_id = Column(String, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)

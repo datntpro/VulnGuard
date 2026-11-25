@@ -83,6 +83,7 @@ def create_token(user_id: str, role: str, token_version: int = 0, ttl_hours: Opt
         "sub": user_id,
         "role": role,
         "tv": token_version,   # tăng khi đổi mật khẩu / vô hiệu hoá → token cũ mất hiệu lực
+        "jti": secrets.token_hex(16),   # id phiên — logout thu hồi từng token (bảng revoked_tokens)
         "iat": now,
         "exp": now + timedelta(hours=ttl_hours or settings.session_ttl_hours),
     }
