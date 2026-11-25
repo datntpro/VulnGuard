@@ -356,6 +356,10 @@
   .pt-run-stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .pt-run-stat .l { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
   .pt-eng-card { cursor: pointer; }
+  .pt-win-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .pt-win-row input[type=time], .pt-win-row input[type=text] { width: auto; }
+  .pt-win-row .pt-check { margin: 0; }
+  .pt-secret { font-family: var(--font-mono); word-break: break-all; padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg3); }
 
   /* ══ Risk Dashboard ══════════════════════════════════════════
      Màu biểu đồ lấy từ dataviz skill (status palette, cố định giữa 2 theme;
@@ -669,7 +673,7 @@
   <div class="page" id="page-pentest">
     <div class="flex-between mb-16">
       <h1>🎯 Pentest Agent</h1>
-      <button class="btn btn-primary" onclick="openEngagementModal()">+ Tạo Engagement</button>
+      <button class="btn btn-primary" id="pt-create-btn" onclick="openEngagementModal()">+ Tạo Engagement</button>
     </div>
     <div class="notice" style="margin-bottom:16px;">
       <strong>Engagement</strong> = hợp đồng pentest: khai báo <strong>scope</strong> (phạm vi tài sản được phép)
@@ -1896,6 +1900,23 @@
         <div class="form-group"><label>Số bước tối đa (max_steps)</label><input id="em-max-steps" type="number" min="1" max="200" value="40"></div>
         <div class="form-group"><label>Token tối đa (max_tokens)</label><input id="em-max-tokens" type="number" min="20000" max="5000000" step="10000" value="400000"></div>
       </div>
+      <div class="separator"></div>
+      <div class="form-group" id="em-roe">
+        <label>Rules of Engagement (RoE)</label>
+        <div id="em-roe-locked" class="notice warn" style="display:none;">🔒 Engagement đã uỷ quyền — RoE chỉ đọc. <strong>Thu hồi uỷ quyền để sửa</strong> (bỏ tick "Tôi xác nhận…", lưu, sửa, rồi ADMIN uỷ quyền lại).</div>
+        <div class="grid2">
+          <div><label>Rate limit (req/s)</label><input id="em-rps" type="number" min="1" value="20"></div>
+          <div><label>Timeout công cụ (giây)</label><input id="em-timeout" type="number" min="1" value="600"></div>
+          <div><label>Số cổng top tối đa</label><input id="em-top-ports" type="number" min="10" max="65535" value="1000"></div>
+          <div><label>Liên hệ khẩn cấp</label><input id="em-emergency" maxlength="255" placeholder="VD: SOC on-call +84..., soc@company.com"></div>
+        </div>
+        <div class="field-hint">Giá trị thực tế còn bị kẹp bởi trần hệ thống (PENTEST_MAX_*_CEILING).</div>
+        <label style="margin-top:10px;">Khung giờ được phép kiểm thử <span class="text-sm" style="color:var(--text3)">(để trống = luôn được phép)</span></label>
+        <div id="em-windows"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="em-add-window" onclick="addWindowRow()">+ Thêm khung giờ</button>
+        <label style="margin-top:10px;">Ghi chú RoE</label>
+        <textarea id="em-roe-note" rows="2" placeholder="Hạn chế bổ sung, hệ thống cần tránh, ..."></textarea>
+      </div>
       <div id="em-error" class="text-sm" style="color:var(--critical);"></div>
     </div>
     <div class="modal-footer">
@@ -2024,6 +2045,7 @@ let docTypesCache = null;
 
 // ─── Navigation ───────────────────────────────────────────────
 function navigate(page) {
+  if (page !== 'pentest-engagement' && typeof ptState !== 'undefined') ptState.proxySecret = null;   // token proxy chỉ hiện một lần
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active', 'vg-enter'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const pageEl = document.getElementById('page-' + page);
@@ -5071,6 +5093,7 @@ function forceChangePassword() {
     } catch (e) { btn.disabled = false; fail(String(e.message || e).replace(/^Value error, /, '')); }
   });
 }
+function canWrite() { return !currentUser || currentUser.role !== 'VIEWER'; }   // VIEWER chỉ xem — ẩn nút ghi (server vẫn là nơi cưỡng chế)
 function canAdmin() { return !currentUser || currentUser.role === 'ADMIN'; }
 function initials(name) {
   const parts = String(name || '?').trim().split(/\s+/);
@@ -5760,12 +5783,18 @@ async function triggerWebScan() {
 const PT_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
 const PT_ACTIVE_STATUS = ['PENDING', 'RUNNING', 'WAITING_APPROVAL', 'PAUSED'];
 const ptActive = s => PT_ACTIVE_STATUS.includes(s);
-const ptState = { engagements: [], curEng: null, curEngId: null, runs: [], curRunId: null, run: null, steps: [], findings: [], approvals: [], runTraffic: [], engTraffic: [], proxy: null, engTab: 'runs', bindFindings: [] };
+const ptState = { engagements: [], curEng: null, curEngId: null, runs: [], curRunId: null, run: null, steps: [], findings: [], approvals: [], runTraffic: [], engTraffic: [], proxy: null, engTab: 'runs', bindFindings: [], proxySecret: null };
 let ptPollTimer = null;
 function stopPentestPoll() { clearInterval(ptPollTimer); ptPollTimer = null; }
 
 function psevBadge(s) { return sevBadge(String(s || 'info').toUpperCase()); }
 function ptBadge(text, tokenVar) { return `<span class="badge" style="--b:${tokenVar}">${escHtml(text)}</span>`; }
+// P1-2: confidence thay cho dấu ✓ "verified" (finding tự khai không còn được tick xanh)
+const PT_CONF = {
+  suspected: ['? Nghi ngờ', 'var(--text3)'], likely: ['≈ Có khả năng', 'var(--medium)'],
+  confirmed: ['✓ Đã xác nhận', 'var(--low)'], refuted: ['✗ Bác bỏ', 'var(--critical)'],
+};
+function ptConfBadge(c) { const m = Object.prototype.hasOwnProperty.call(PT_CONF, c) ? PT_CONF[c] : PT_CONF.suspected; return `<span class="badge" style="--b:${m[1]}">${escHtml(m[0])}</span>`; }
 function ptRiskBadge(r) {
   const t = { RECON: 'var(--low)', ACTIVE_SAFE: 'var(--info)', INTRUSIVE: 'var(--high)', DESTRUCTIVE: 'var(--critical)' }[r] || 'var(--text3)';
   return ptBadge(r || '—', t);
@@ -5780,8 +5809,9 @@ function ptOutcomeBadge(o) {
   let t = 'var(--text3)';
   if (o === 'executed') t = 'var(--low)';
   else if (o === 'awaiting_approval') t = 'var(--medium)';
-  else if (['blocked_scope', 'blocked_unavail', 'denied', 'error'].includes(o)) t = 'var(--critical)';
-  return ptBadge(o, t);
+  else if (['blocked_scope', 'blocked_unavail', 'blocked_policy', 'denied', 'error', 'refused'].includes(o)) t = 'var(--critical)';
+  const label = { blocked_policy: '🛡 blocked_policy (RoE)', refused: '🚫 refused (model)' }[o] || o;
+  return ptBadge(label, t);
 }
 const PT_RUN_STATUS = {
   PENDING: ['⏳ Chờ', 'var(--text2)'], RUNNING: ['⚡ Đang chạy', 'var(--medium)'],
@@ -5815,6 +5845,7 @@ function ptCode(v, label) {
 
 // ─── Engagement list ──────────────────────────────────────────
 async function loadPentest() {
+  const cb = document.getElementById('pt-create-btn'); if (cb) cb.style.display = canWrite() ? '' : 'none';
   const el = document.getElementById('pentest-list');
   if (!ptState.engagements.length) el.innerHTML = SKELETON_HTML;
   try {
@@ -5836,7 +5867,7 @@ function renderEngagementCards(counts) {
   if (!list.length) {
     el.innerHTML = `<div class="card"><div class="empty-state"><div class="icon">🎯</div><p>Chưa có engagement nào</p>
       <p class="text-sm" style="margin-top:6px;">Tạo engagement đầu tiên — khai báo scope &amp; uỷ quyền trước khi chạy pentest agent.</p>
-      <button class="btn btn-primary mt-16" onclick="openEngagementModal()">+ Tạo Engagement</button></div></div>`;
+      ${canWrite() ? `<button class="btn btn-primary mt-16" onclick="openEngagementModal()">+ Tạo Engagement</button>` : ''}</div></div>`;
     return;
   }
   el.innerHTML = `<div class="vg-stagger" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;">
@@ -5883,6 +5914,29 @@ function onScopeTypeChange(sel) {
 function addScopeRow(r) {
   document.getElementById('em-scope-rows').insertAdjacentHTML('beforeend', emScopeRowHtml(r));
 }
+function emWindowRowHtml(w) {
+  w = w || { days: [0, 1, 2, 3, 4], start: '09:00', end: '18:00', tz: 'Asia/Ho_Chi_Minh' };
+  const days = (w.days || []).map(Number);
+  return `<div class="pt-win-row">
+    ${PT_DAYS.map((d, i) => `<label class="pt-check"><input type="checkbox" class="em-win-day" value="${i}" ${days.includes(i) ? 'checked' : ''}>${d}</label>`).join('')}
+    <input type="time" class="em-win-start" value="${escHtml(w.start || '09:00')}">–<input type="time" class="em-win-end" value="${escHtml(w.end || '18:00')}">
+    <input type="text" class="em-win-tz" value="${escHtml(w.tz || 'Asia/Ho_Chi_Minh')}" style="max-width:170px;">
+    <button type="button" class="btn btn-ghost btn-sm em-win-del" onclick="this.closest('.pt-win-row').remove()" title="Xoá khung giờ">✕</button>
+  </div>`;
+}
+function addWindowRow(w) { document.getElementById('em-windows').insertAdjacentHTML('beforeend', emWindowRowHtml(w)); }
+function readWindows() {
+  return [...document.querySelectorAll('#em-windows .pt-win-row')].map(row => ({
+    days: [...row.querySelectorAll('.em-win-day:checked')].map(c => parseInt(c.value, 10)),
+    start: row.querySelector('.em-win-start').value, end: row.querySelector('.em-win-end').value,
+    tz: row.querySelector('.em-win-tz').value.trim() || 'Asia/Ho_Chi_Minh',
+  }));
+}
+// Engagement đã uỷ quyền: RoE chỉ đọc (API trả 409 nếu đổi) — khoá input + gợi ý "Thu hồi để sửa"
+function setRoeLocked(locked) {
+  document.querySelectorAll('#em-roe input, #em-roe textarea, #em-roe button').forEach(el => { el.disabled = locked; });
+  document.getElementById('em-roe-locked').style.display = locked ? '' : 'none';
+}
 function openEngagementModal(eng) {
   emEditId = eng ? eng.id : null;
   document.getElementById('em-title').textContent = eng ? 'Sửa Engagement' : 'Tạo Engagement';
@@ -5901,6 +5955,14 @@ function openEngagementModal(eng) {
   rows.innerHTML = '';
   const srcRules = (eng && eng.scope_rules && eng.scope_rules.length) ? eng.scope_rules : [{ type: 'domain', value: '', include_subdomains: true, mode: 'allow' }];
   srcRules.forEach(r => addScopeRow(r));
+  document.getElementById('em-rps').value = eng && eng.rate_limit_rps != null ? eng.rate_limit_rps : 20;
+  document.getElementById('em-timeout').value = eng && eng.max_tool_timeout_s != null ? eng.max_tool_timeout_s : 600;
+  document.getElementById('em-top-ports').value = eng && eng.max_top_ports != null ? eng.max_top_ports : 1000;
+  document.getElementById('em-emergency').value = eng ? (eng.emergency_contact || '') : '';
+  document.getElementById('em-roe-note').value = eng ? (eng.roe_note || '') : '';
+  document.getElementById('em-windows').innerHTML = '';
+  ((eng && eng.testing_windows) || []).forEach(w => addWindowRow(w));
+  setRoeLocked(!!(eng && eng.authorized));
   document.getElementById('em-error').textContent = '';
   document.getElementById('engagement-modal').classList.add('open');
 }
@@ -5938,6 +6000,20 @@ async function saveEngagement() {
     max_steps: Math.min(200, Math.max(1, parseInt(document.getElementById('em-max-steps').value, 10) || 40)),
     max_tokens: Math.min(5000000, Math.max(20000, parseInt(document.getElementById('em-max-tokens').value, 10) || 400000)),
   };
+  // Engagement đã uỷ quyền → RoE khoá, không gửi (tránh 409); còn lại gửi đủ bộ RoE
+  const roeLocked = document.getElementById('em-rps').disabled;
+  if (!roeLocked) {
+    const wins = readWindows();
+    if (wins.some(w => !w.days.length || !w.start || !w.end)) { err.textContent = 'Mỗi khung giờ cần ≥1 ngày và giờ bắt đầu/kết thúc'; return; }
+    Object.assign(payload, {
+      rate_limit_rps: Math.max(1, parseInt(document.getElementById('em-rps').value, 10) || 20),
+      max_tool_timeout_s: Math.max(1, parseInt(document.getElementById('em-timeout').value, 10) || 600),
+      max_top_ports: Math.min(65535, Math.max(10, parseInt(document.getElementById('em-top-ports').value, 10) || 1000)),
+      testing_windows: wins,
+      emergency_contact: document.getElementById('em-emergency').value.trim() || null,
+      roe_note: document.getElementById('em-roe-note').value.trim() || null,
+    });
+  }
   const btn = document.getElementById('em-save-btn');
   btn.disabled = true;
   try {
@@ -5958,6 +6034,7 @@ async function saveEngagement() {
 
 // ─── Engagement detail ────────────────────────────────────────
 function openEngagement(id) {
+  ptState.proxySecret = null;   // token chỉ hiện một lần
   ptState.curEngId = id;
   navigate('pentest-engagement');
   loadEngagementDetail();
@@ -5982,7 +6059,7 @@ async function loadEngagementDetail() {
 function renderEngagementDetail() {
   const e = ptState.curEng;
   const expired = e.expiry_date && new Date(e.expiry_date) < new Date();
-  const authOk = e.authorized && !expired;
+  const authOk = e.authorized && !expired && canWrite();
   const authBadge = authOk ? ptBadge('✓ Đã uỷ quyền', 'var(--low)')
     : (expired ? ptBadge('⌛ Hết hạn uỷ quyền', 'var(--critical)') : ptBadge('✗ Chưa uỷ quyền', 'var(--critical)'));
   const el = document.getElementById('pentest-engagement-content');
@@ -5993,10 +6070,10 @@ function renderEngagementDetail() {
         <div class="pt-chips" style="margin-top:8px;">${authBadge}${ptBadge(e.default_mode === 'GUIDED' ? 'GUIDED' : 'AUTONOMOUS_IN_SCOPE', 'var(--info)')}
           <span class="tag">max ${escHtml(e.max_steps)} bước</span><span class="tag">max ${Number(e.max_tokens).toLocaleString('vi-VN')} token</span></div>
       </div>
-      <div class="flex">
+      ${canWrite() ? `<div class="flex">
         <button class="btn btn-ghost btn-sm" onclick="openEngagementModal(ptState.curEng)">✎ Sửa</button>
         <button class="btn btn-danger btn-sm" onclick="deleteEngagement()">🗑 Xoá</button>
-      </div>
+      </div>` : ''}
     </div>
     ${e.description ? `<div class="text-sm" style="color:var(--text2);margin-bottom:12px;line-height:1.6;">${escHtml(e.description)}</div>` : ''}
     <div class="card">
@@ -6013,6 +6090,9 @@ function renderEngagementDetail() {
       ${e.authorization_note ? `<div class="text-sm" style="margin-top:10px;color:var(--text2);">📝 ${escHtml(e.authorization_note)}</div>` : ''}
       ${e.expiry_date ? `<div class="text-sm" style="margin-top:4px;color:${expired ? 'var(--critical)' : 'var(--text2)'};">⌛ Hết hạn: ${fmtDate(e.expiry_date)}</div>` : ''}
     </div>
+
+    ${e.degraded_mode ? `<div class="notice warn">⚠️ <strong>Chế độ suy giảm (degraded mode):</strong> không có sandbox cách ly — agent bị giới hạn ở RECON + ACTIVE_SAFE; công cụ INTRUSIVE/DESTRUCTIVE bị chặn.</div>` : ''}
+    ${renderRoeCard(e)}
 
     <div class="card">
       <label style="margin:0 0 8px;">▶ Chạy phiên mới</label>
@@ -6040,6 +6120,26 @@ function renderEngagementDetail() {
     <div class="tab-content ${ptState.engTab === 'traffic' ? 'active' : ''}" id="pt-eng-traffic"><div id="pt-eng-traffic-body">${SKELETON_HTML}</div></div>
   `;
   if (ptState.engTab === 'traffic') loadEngagementTraffic();
+}
+const PT_DAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+function renderRoeCard(e) {
+  const eff = e.effective_roe || {};
+  const clamped = (set, real) => (set != null && real != null && Number(set) !== Number(real))
+    ? ` <span class="text-sm" style="color:var(--high)" title="Đã bị kẹp bởi trần hệ thống">(đặt ${escHtml(set)} → áp ${escHtml(real)})</span>` : '';
+  const wins = (e.testing_windows || []).map(w =>
+    `<span class="tag">${escHtml((w.days || []).map(d => PT_DAYS[d] || d).join(','))} ${escHtml(w.start)}–${escHtml(w.end)} ${escHtml(w.tz || '')}</span>`).join(' ');
+  return `<div class="card">
+    <label style="margin:0 0 8px;">📜 Rules of Engagement ${e.authorized ? ptBadge('🔒 chỉ đọc', 'var(--text3)') : ''}</label>
+    ${e.authorized ? `<div class="field-hint" style="margin-bottom:8px;">Engagement đã uỷ quyền nên RoE bất biến — <strong>Thu hồi uỷ quyền để sửa</strong>.</div>` : ''}
+    <dl class="kv">
+      <dt>Rate limit</dt><dd>${escHtml(eff.rate_limit_rps ?? e.rate_limit_rps ?? '—')} req/s${clamped(e.rate_limit_rps, eff.rate_limit_rps)}</dd>
+      <dt>Timeout công cụ</dt><dd>${escHtml(eff.max_tool_timeout_s ?? e.max_tool_timeout_s ?? '—')} s${clamped(e.max_tool_timeout_s, eff.max_tool_timeout_s)}</dd>
+      <dt>Top ports</dt><dd>${escHtml(eff.max_top_ports ?? e.max_top_ports ?? '—')}${clamped(e.max_top_ports, eff.max_top_ports)}</dd>
+      <dt>Khung giờ</dt><dd>${wins || '<span style="color:var(--text3)">Luôn được phép</span>'}</dd>
+      <dt>Liên hệ khẩn cấp</dt><dd>${escHtml(e.emergency_contact || '—')}</dd>
+      ${e.roe_note ? `<dt>Ghi chú</dt><dd style="white-space:pre-wrap;">${escHtml(e.roe_note)}</dd>` : ''}
+    </dl>
+  </div>`;
 }
 function renderRunsList() {
   const runs = ptState.runs;
@@ -6110,6 +6210,13 @@ async function loadRunDetail(showSkeleton) {
     document.getElementById('pentest-run-content').innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
+// Lý do dừng: backend ghi vào run.error_message (agent._trigger_stop) — rỗng nghĩa là kill switch thủ công.
+// Không đoán từ trạng thái engagement hiện tại (có thể đã đổi sau khi run dừng).
+function ptStopReason(r) {
+  const why = String((r.summary || {}).stop_reason || r.error_message || '').trim();
+  if (!why) return 'STOPPED (kill switch)';
+  return 'STOPPED (' + (/revoked\/expired/.test(why) ? 'authorization revoked/expired' : why) + ')';
+}
 function renderRunDetail() {
   const r = ptState.run;
   const el = document.getElementById('pentest-run-content');
@@ -6126,13 +6233,14 @@ function renderRunDetail() {
         <h1 style="margin:8px 0 0;font-size:19px;word-break:break-word;">${escHtml(r.goal)}</h1>
         <div class="text-mono text-sm" style="color:var(--text3);margin-top:4px;word-break:break-all;">🎯 ${escHtml((r.targets || []).join(', ') || 'tự tìm trong scope')}</div>
       </div>
-      ${active ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}
+      ${active && canWrite() ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}
     </div>
     ${active && (prog.phase || prog.message || prog.current_tool) ? `<div class="card" style="margin-bottom:12px;">
       <div class="flex" style="flex-wrap:wrap;"><span class="vg-live-dot"></span><strong>${escHtml(prog.phase || 'đang chạy')}</strong>${prog.message ? ' — ' + escHtml(prog.message) : ''}</div>
       ${prog.current_tool ? `<div class="text-mono text-sm" style="margin-top:4px;color:var(--text2)">🔧 ${escHtml(prog.current_tool)}</div>` : ''}
       <div class="progress-bar"><div class="progress-fill indeterminate"></div></div>
     </div>` : ''}
+    ${r.status === 'STOPPED' ? `<div class="notice" style="border-color:color-mix(in srgb,var(--critical) 40%,transparent);background:color-mix(in srgb,var(--critical) 8%,transparent);">⛔ <strong>${escHtml(ptStopReason(r))}</strong></div>` : ''}
     ${r.status === 'FAILED' && r.error_message ? `<div class="notice" style="border-color:color-mix(in srgb,var(--critical) 40%,transparent);background:color-mix(in srgb,var(--critical) 8%,transparent);">❌ <strong>Lỗi:</strong> ${escHtml(r.error_message)}</div>` : ''}
     ${sum.conclusion ? `<div class="notice">🧾 <strong>Kết luận:</strong> ${escHtml(sum.conclusion)}</div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px;">
@@ -6148,7 +6256,7 @@ function renderRunDetail() {
         <div class="pt-chips" style="margin-bottom:8px;"><strong class="text-mono">${escHtml(a.tool_name)}</strong>${ptRiskBadge(a.risk_tier)}<span class="tag">bước #${escHtml(a.step_number)}</span></div>
         ${a.rationale ? `<div class="text-sm" style="margin-bottom:8px;color:var(--text2)">💭 ${escHtml(a.rationale)}</div>` : ''}
         ${ptCode(a.tool_input, 'Tham số (tool_input)')}
-        <div class="flex mt-8">
+        <div class="flex mt-8" ${canWrite() ? '' : 'hidden'}>
           <button class="btn btn-sm" style="background:var(--low);color:#05210f;border:none;" onclick="decideApproval('${jsStr(a.id)}',true)">✓ Duyệt</button>
           <button class="btn btn-danger btn-sm" onclick="decideApproval('${jsStr(a.id)}',false)">✗ Từ chối</button>
         </div>
@@ -6163,12 +6271,12 @@ function renderRunDetail() {
 
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="padding:14px 16px;border-bottom:1px solid var(--border);"><label style="margin:0;">🔎 Findings (${ptState.findings.length})</label></div>
-      <div class="table-wrap"><table><thead><tr><th width="100">Severity</th><th>Tiêu đề</th><th>Target</th><th width="90">Verified</th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th width="100">Severity</th><th>Tiêu đề</th><th>Target</th><th width="130">Độ tin cậy</th></tr></thead><tbody>
         ${ptState.findings.length ? ptState.findings.map(f => `<tr class="vuln-row" onclick="openPentestFindingDrawer('${jsStr(f.id)}')">
           <td>${psevBadge(f.severity)}</td>
           <td style="word-break:break-word;">${escHtml(f.title)}${f.cve ? ` <span class="text-mono text-sm" style="color:var(--info)">${escHtml(f.cve)}</span>` : ''}</td>
           <td class="text-mono text-sm" style="word-break:break-all;">${escHtml(f.target || '—')}</td>
-          <td>${f.verified ? '<span style="color:var(--low)">✓ Đã xác thực</span>' : '<span style="color:var(--text3)">—</span>'}</td>
+          <td>${ptConfBadge(f.confidence)}${f.validator ? `<div class="text-sm text-mono" style="color:var(--text3)">${escHtml(f.validator)}</div>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state" style="padding:24px;"><p>Chưa có finding</p></div></td></tr>`}
       </tbody></table></div>
     </div>
@@ -6228,7 +6336,7 @@ async function openPentestFindingDrawer(id) {
       <dt>Severity</dt><dd>${psevBadge(f.severity)}</dd>
       <dt>Target</dt><dd class="text-mono">${escHtml(f.target || '—')}</dd>
       <dt>Trạng thái</dt><dd>${escHtml(f.status || '—')}</dd>
-      <dt>Xác thực</dt><dd>${f.verified ? '<span style="color:var(--low)">✓ Đã xác thực</span>' : 'Chưa'}</dd>
+      <dt>Độ tin cậy</dt><dd>${ptConfBadge(f.confidence)}${f.validator ? ` <span class="text-mono text-sm">${escHtml(f.validator)}</span>` : ''}</dd>
       ${f.cwe ? `<dt>CWE</dt><dd class="text-mono">${escHtml(f.cwe)}</dd>` : ''}
       ${f.cve ? `<dt>CVE</dt><dd class="text-mono" style="color:var(--info)">${escHtml(f.cve)}</dd>` : ''}
     </dl>
@@ -6292,13 +6400,21 @@ function renderEngagementTraffic() {
           <div class="pt-chips" style="margin-top:6px;">${p.running ? ptBadge('● Đang chạy', 'var(--low)') : ptBadge('○ Đã tắt', 'var(--text3)')}${p.running && p.port ? `<span class="tag text-mono">cổng ${escHtml(p.port)}</span>` : ''}</div>
         </div>
         <div class="flex">
-          ${p.running ? `<button class="btn btn-danger btn-sm" onclick="stopProxy()">Dừng proxy</button>`
+          ${!canWrite() ? '' : p.running ? `<button class="btn btn-danger btn-sm" onclick="stopProxy()">Dừng proxy</button>`
       : `<button class="btn btn-primary btn-sm" onclick="startProxy()">Khởi động proxy</button>`}
         </div>
       </div>
+      ${ptState.proxySecret && ptState.proxySecret.eng === ptState.curEngId ? `<div class="notice warn" style="margin:12px 0 0;">
+        🔑 <strong>Token proxy — chỉ hiển thị MỘT lần.</strong> Sao chép ngay; sẽ mất khi đóng/tải lại trang.
+        <div class="pt-secret" style="margin:8px 0;">${escHtml(ptState.proxySecret.username)} : ${escHtml(ptState.proxySecret.token)}</div>
+        <div class="flex" style="flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="copyProxyToken()">📋 Sao chép token</button>
+          <button class="btn btn-ghost btn-sm" onclick="dismissProxyToken()">Ẩn token</button>
+        </div>
+      </div>` : ''}
       ${p.running ? `<div class="notice" style="margin:12px 0 0;">
-        Trỏ <span class="text-mono">HTTP(S)_PROXY</span> hoặc proxy trình duyệt tới <strong class="text-mono">host:${escHtml(p.port || 8788)}</strong>, rồi
-        <a href="/api/pentest/proxy/ca.crt" download>Tải CA</a> và import vào trình duyệt/hệ điều hành để bắt được HTTPS.
+        Trỏ <span class="text-mono">HTTP(S)_PROXY</span> (user <span class="text-mono">vg</span> + token) hoặc proxy trình duyệt tới <strong class="text-mono">host:${escHtml(p.port || 8788)}</strong>, rồi
+        <a href="/api/pentest/engagements/${escHtml(encodeURIComponent(ptState.curEngId))}/proxy/ca.crt" download>Tải CA của engagement</a> và import vào trình duyệt/hệ điều hành để bắt được HTTPS.
         Sau đó thao tác trên ứng dụng — mọi request/response trong scope sẽ được ghi lại làm bằng chứng.
       </div>` : `<div class="field-hint" style="margin-top:10px;">Cổng mặc định <span class="text-mono">8788</span>. Proxy chỉ ghi traffic trong scope của engagement.</div>`}
     </div>
@@ -6326,11 +6442,19 @@ function trafficRow(t, runCtx) {
 async function startProxy() {
   try {
     const r = await api(`/api/pentest/engagements/${ptState.curEngId}/proxy/start`, { method: 'POST', body: { port: 8788 } });
+    ptState.proxySecret = r.proxy_token ? { eng: ptState.curEngId, username: r.proxy_username || 'vg', token: r.proxy_token } : null;
     toast('Đã khởi động proxy ở cổng ' + r.port, 'success');
     loadEngagementTraffic();
   } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
 }
+async function copyProxyToken() {
+  const sec = ptState.proxySecret; if (!sec) return;
+  try { await navigator.clipboard.writeText(sec.token); toast('Đã sao chép token — token đã được xoá khỏi trang', 'success'); ptState.proxySecret = null; renderEngagementTraffic(); }
+  catch { toast('Không sao chép được — hãy chọn và copy thủ công', 'error'); }
+}
+function dismissProxyToken() { ptState.proxySecret = null; renderEngagementTraffic(); }
 async function stopProxy() {
+  ptState.proxySecret = null;
   try {
     await api(`/api/pentest/engagements/${ptState.curEngId}/proxy/stop`, { method: 'POST' });
     toast('Đã dừng proxy', 'success');
