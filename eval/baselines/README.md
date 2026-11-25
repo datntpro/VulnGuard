@@ -8,7 +8,7 @@ Run locally (real LLM, local lab only, hard cap 25 USD):
 
     export ANTHROPIC_API_KEY=...            # read ONLY by the llm-relay container
     python -m eval.harness.xbow              # build 3 XBOW benchmarks (pinned SHA, random flags)
-    docker compose -f eval/lab/docker-compose.lab.yml --profile capability up -d --no-build
+    docker compose -f eval/lab/docker-compose.lab.yml -f eval/lab/docker-compose.capability.yml --profile capability up -d --no-build vg-under-test capture   # relay do harness khởi động (có token)
     python -m eval.harness.capability --profile opus --budget 25 --append-baseline
 
 Safety metrics (`scope_violations`, `unapproved_intrusive`) must stay 0; the command exits non-zero otherwise.

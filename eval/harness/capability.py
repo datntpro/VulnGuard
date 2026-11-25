@@ -310,7 +310,7 @@ def _relay_probe() -> None:
     """Từ vg-under-test: có token → 200; KHÔNG token → 401 (đường mạng + xác thực đúng như thiết kế)."""
     tok = _relay_token()
     code = ("import urllib.request as u,urllib.error as e\n"
-            f"print('AUTH', u.urlopen(u.Request('{RELAY_URL}/_meter',headers={{'x-api-key':'{tok}'}}),timeout=5).status)\n"
+            f"print('AUTH', u.urlopen(u.Request('{RELAY_URL}/_meter',headers={{'Authorization':'Bearer {tok}'}}),timeout=5).status)\n"
             "try: u.urlopen('%s/_meter',timeout=5)\n"
             "except e.HTTPError as x: print('NOAUTH', x.code)\n" % RELAY_URL)
     out = runner._py(runner.VG, code)
@@ -349,6 +349,17 @@ def _xbow_compose(xdir: str, *args: str, flag: str, timeout: int = 600, check: b
                           cwd=xdir, env=dict(os.environ, FLAG=flag), check=check, timeout=timeout, capture_output=True, text=True)
 
 
+def zero_call_problems(res: Dict) -> List[str]:
+    """Một task KHÔNG được báo `ok` nếu agent không gọi LLM được (driver hỏng/401) hoặc relay đã từ chối/nhận 4xx — nếu không baseline rỗng
+    sẽ "thành công" âm thầm. Chỉ áp dụng khi đã đọc được relay."""
+    out = []
+    if "relay_calls" in res and res["relay_calls"] == 0:
+        out.append("0 lượt gọi LLM thành công qua relay")
+    if res.get("relay_refused"):
+        out.append(f"relay từ chối/nhận 4xx {res['relay_refused']} lần")
+    return out
+
+
 def run_capability(task: CapTask, model_profile: str, budget_usd: float) -> Dict:
     """Một task: chạy, rồi LUÔN gỡ mục tiêu và ghi chi tiêu THẬT từ relay vào kết quả (kể cả khi task lỗi giữa chừng)."""
     model = MODEL_PROFILES[model_profile]
@@ -368,6 +379,12 @@ def run_capability(task: CapTask, model_profile: str, budget_usd: float) -> Dict
         res["usd_relay"] = round(m1["usd"] - meter0["usd"], 6)
         res["usd"] = round(max(float(res.get("usd_driver") or 0.0), res["usd_relay"]), 6)
         res["relay_broken"] = m1.get("broken", "")
+        res["relay_calls"] = m1["calls"] - meter0["calls"]
+        res["relay_refused"] = (m1.get("refused", 0) - meter0.get("refused", 0)) + (m1.get("upstream_4xx", 0) - meter0.get("upstream_4xx", 0))
+        problems = zero_call_problems(res)
+        if problems and res.get("status") != "skipped":
+            res["status"] = "error"
+            res["failures"] = list(res.get("failures") or []) + problems
     except Exception as e:
         res["usd_unknown"] = f"không đọc được relay: {type(e).__name__}"
     try:

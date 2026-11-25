@@ -39,11 +39,12 @@ class Meter:
         self.usd = 0.0
         self.calls = 0
         self.refused = 0
+        self.upstream_4xx = 0
         self.broken = ""
 
     def snapshot(self):
         with self.lock:
-            return {"usd": round(self.usd, 6), "calls": self.calls, "refused": self.refused, "broken": self.broken}
+            return {"usd": round(self.usd, 6), "calls": self.calls, "refused": self.refused, "upstream_4xx": self.upstream_4xx, "broken": self.broken}
 
 
 METER = Meter()
@@ -85,8 +86,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authed(self, token):
-        got = self.headers.get("x-api-key", "")
-        return bool(token) and hmac.compare_digest(got.encode(), token.encode())
+        # SDK anthropic gửi api_key dạng `Authorization: Bearer <key>` (không phải x-api-key) — chấp nhận CẢ HAI, so sánh hằng thời gian
+        auth = self.headers.get("Authorization", "")
+        bearer = auth[7:] if auth[:7].lower() == "bearer " else ""
+        got = (self.headers.get("x-api-key", ""), bearer)
+        ok = [hmac.compare_digest(g.encode(), token.encode()) for g in got]
+        return bool(token) and any(ok)
 
     def _refuse(self, code, msg):
         with METER.lock:
@@ -163,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
     def _account(status, data, req_model):
         with METER.lock:
             if status != 200:                  # lỗi 4xx/5xx của Anthropic không tính phí
+                if 400 <= status < 500:
+                    METER.upstream_4xx += 1
                 return
             METER.calls += 1
             try:
