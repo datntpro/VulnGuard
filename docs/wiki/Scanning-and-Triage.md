@@ -9,6 +9,7 @@ Mã nguồn: `api/routes/scans.py`, `scanner/orchestrator.py`, `scanner/scanners
    ```json
    {"scan_path": "/duong/dan/ma-nguon", "scan_types": ["SAST","SCA","SECRETS","IAC"], "run_ai_analysis": true}
    ```
+   - `scan_path` phải nằm trong `SCAN_ALLOWED_ROOTS` (mặc định `/workspace` ở Docker, thư mục home ở native), nếu không API trả 400.
    - `scan_path` là đường dẫn trên máy chạy VulnGuard (Native) hoặc trong container (Docker, ví dụ `/workspace/my-app`).
    - `scan_types` mặc định `SAST`, `SCA`, `SECRETS`, `IAC`. `CONTAINER` phải chọn thêm.
    - Hoặc quét repo GitHub/GitLab qua [[SCM Integration|SCM-Integration]].

@@ -1640,7 +1640,7 @@
         </div>
       </div>
       <div id="scan-src-path">
-        <div class="notice" id="scan-path-notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env).</div>
+        <div class="notice" id="scan-path-notice">Path phải là đường dẫn <strong>bên trong container</strong>. Thư mục của bạn được mount vào <code>/workspace</code> (xem SCAN_WORKSPACE trong .env). Path phải nằm trong <code>SCAN_ALLOWED_ROOTS</code>.</div>
         <div class="form-group mt-16"><label>Scan path *</label><input id="scan-path" value="/workspace" placeholder="/workspace/my-app"></div>
       </div>
       <div id="scan-src-upload" style="display:none;">

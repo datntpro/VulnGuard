@@ -12,6 +12,18 @@
   stale "must change password" errors disappear.
 - Tests: `tests/test_change_password.py` (API) and `tests/test_ui_change_password.py` (headless Chromium, runs in CI).
 
+
+### Security — path allow-lists, zip bomb, File Assistant (fix/path-policy)
+- **M-3** `scan_path` must resolve (realpath, so symlinks and `..` cannot escape) under an allowed root for every role. New `api/services/path_policy.py`; roots from `SCAN_ALLOWED_ROOTS`, default `/workspace` (Docker) or the user's home (native), plus `storage/scan_uploads`. The app storage directory (DB, `secret.key`) is always refused. Violations return 400.
+- **H-1** File Assistant file paths are validated against `FILE_ASSISTANT_ALLOWED_ROOTS` (default: scan roots) at session creation (client `size_bytes` is ignored, max 20 MiB) and re-validated before every read, so legacy sessions or swapped symlinks are rejected.
+- **M-5** Zip uploads are streamed to a temp file (413 above `UPLOAD_MAX_BYTES`) and extracted with limits on file count, total uncompressed size, compression ratio and actual bytes written per member (lying headers abort), plus a free-disk check. Failed extractions are removed; rotating out an old upload scan deletes its directory.
+- **B-4** File Assistant health uses `text("SELECT 1")` (database check was always false) and really probes the Coworker Host.
+
+### Breaking changes (path-policy)
+- **D-7** Scans of paths outside the allowed roots are now refused (400), for all roles. Set `SCAN_ALLOWED_ROOTS` to widen. Existing scans are unaffected.
+- **D-8** `FEATURE_FILE_ASSISTANT` now defaults to `false` (module returns 404) until its UI exists; set it to `true` to use the API.
+- Known residual: a directory swapped for a symlink between validation and scan (TOCTOU) is not prevented.
+
 ### Security — Coworker Host exec policy (BREAKING)
 - `COWORKER_EXEC_MODE` (`safe` default / `trusted` / `off`). In `safe`, Co-work can no longer run
   `python3`, `pytest`, `npm`, `make`, `go`, `cargo`... Set `COWORKER_EXEC_MODE=trusted` on the host to opt in

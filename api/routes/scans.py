@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import os
+import shutil
 from datetime import datetime
 from typing import List
 
@@ -406,8 +407,16 @@ async def trigger_scan(
     if not project:
         raise HTTPException(status_code=404, detail="Project không tồn tại")
 
+    from api.services.path_policy import PathNotAllowed, allowed_scan_roots, resolve_under_roots
+    roots = allowed_scan_roots()
+    try:
+        real = resolve_under_roots(payload.scan_path, roots, "dir")
+    except PathNotAllowed:
+        raise HTTPException(status_code=400,
+                            detail=f"scan_path phải nằm trong: {', '.join(roots)}")
+
     scan = await _create_and_run_scan(
-        db, project_id, payload.scan_path,
+        db, project_id, real,
         [t.value for t in payload.scan_types], payload.run_ai_analysis, background_tasks)
     return scan
 
@@ -417,6 +426,7 @@ async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, ba
     async with _get_project_lock(project_id):
         scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.scan_number).all()
         if len(scans) >= settings.max_scans_per_project:
+            _remove_upload_dir(scans[0].scan_path)
             db.delete(scans[0]); db.commit(); scans = scans[1:]
         next_number = (scans[-1].scan_number + 1) if scans else 1
         scan = Scan(project_id=project_id, scan_number=next_number, scan_path=scan_path,
@@ -426,24 +436,65 @@ async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, ba
     return scan
 
 
-def _safe_extract_zip(zip_bytes: bytes, dest_dir: str) -> int:
-    """Giải nén zip vào dest_dir, CHỐNG zip-slip (bỏ member có path tuyệt đối/.. thoát ra ngoài).
-    Trả số file đã giải nén."""
+def _remove_upload_dir(scan_path: str) -> None:
+    """Xóa thư mục upload của scan bị xoay vòng (tránh đầy đĩa theo thời gian)."""
+    try:
+        uploads = os.path.realpath(os.path.join(settings.storage_dir, "scan_uploads"))
+        real = os.path.realpath(scan_path or "")
+        if real != uploads and real.startswith(uploads + os.sep):
+            shutil.rmtree(real, ignore_errors=True)
+    except Exception:
+        pass
+
+
+class ZipLimitExceeded(ValueError):
+    """Zip vượt giới hạn (số file, dung lượng giải nén, tỉ lệ nén)."""
+
+
+def _safe_extract_zip(src, dest_dir: str) -> int:
+    """Giải nén zip vào dest_dir, CHỐNG zip-slip và zip bomb.
+    `src`: bytes, đường dẫn hoặc file object. Trả số file đã giải nén.
+    Vượt giới hạn → ZipLimitExceeded (caller xóa dest_dir)."""
     import zipfile
+    max_files = settings.upload_max_files
+    max_total = settings.upload_max_uncompressed_bytes
+    max_ratio = settings.upload_max_ratio
+    if isinstance(src, (bytes, bytearray)):
+        src = io.BytesIO(src)
     os.makedirs(dest_dir, exist_ok=True)
     root = os.path.realpath(dest_dir)
     n = 0
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        for info in zf.infolist():
-            name = info.filename
-            if name.endswith("/"):
-                continue
-            target = os.path.realpath(os.path.join(dest_dir, name))
+    total = 0
+    with zipfile.ZipFile(src) as zf:
+        members = [i for i in zf.infolist() if not i.filename.endswith("/")]
+        if len(members) > max_files:
+            raise ZipLimitExceeded(f"Zip có quá nhiều file (tối đa {max_files})")
+        declared = sum(i.file_size for i in members)
+        if declared > max_total:
+            raise ZipLimitExceeded("Dung lượng sau giải nén vượt giới hạn")
+        for i in members:
+            if i.file_size > (1 << 20) and i.compress_size > 0 \
+                    and i.file_size / i.compress_size > max_ratio:
+                raise ZipLimitExceeded("Tỉ lệ nén bất thường (nghi zip bomb)")
+        os.makedirs(settings.storage_dir, exist_ok=True)
+        if declared * 1.1 > shutil.disk_usage(settings.storage_dir).free:
+            raise ZipLimitExceeded("Không đủ dung lượng đĩa để giải nén")
+        for info in members:
+            target = os.path.realpath(os.path.join(dest_dir, info.filename))
             if not (target == root or target.startswith(root + os.sep)):
                 continue   # zip-slip: bỏ qua
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            with zf.open(info) as src, open(target, "wb") as out:
-                out.write(src.read())
+            written = 0
+            with zf.open(info) as s, open(target, "wb") as out:
+                while True:
+                    chunk = s.read(1 << 20)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    total += len(chunk)
+                    if written > info.file_size or total > max_total:
+                        raise ZipLimitExceeded("Dữ liệu giải nén vượt khai báo/giới hạn")
+                    out.write(chunk)
             n += 1
     return n
 
@@ -464,20 +515,44 @@ async def scan_upload(
         raise HTTPException(status_code=404, detail="Project không tồn tại")
     if not (file.filename or "").lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Chỉ chấp nhận file .zip")
-    raw = await file.read()
-    if len(raw) > 300 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File quá lớn (tối đa 300MB)")
     # validate scan_types
     valid = {t.value for t in ScanType}
     types = [t.strip().upper() for t in scan_types.split(",") if t.strip().upper() in valid] or ["SAST"]
 
+    import tempfile
     import uuid as _uuid
+    tmp_root = os.path.join(settings.storage_dir, "tmp")
+    os.makedirs(tmp_root, exist_ok=True)
     dest = os.path.join(settings.storage_dir, "scan_uploads", project_id, _uuid.uuid4().hex)
+    fd, tmp_path = tempfile.mkstemp(prefix="upload_", suffix=".zip", dir=tmp_root)
     try:
-        count = _safe_extract_zip(raw, dest)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Không giải nén được zip: {str(e)[:200]}")
+        size = 0
+        with os.fdopen(fd, "wb") as tmp:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > settings.upload_max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File quá lớn (tối đa {settings.upload_max_bytes // (1024 * 1024)}MB)")
+                tmp.write(chunk)
+        try:
+            count = _safe_extract_zip(tmp_path, dest)
+        except ZipLimitExceeded as e:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise HTTPException(status_code=413, detail=f"Zip vượt giới hạn: {e}")
+        except Exception as e:
+            shutil.rmtree(dest, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=f"Không giải nén được zip: {str(e)[:200]}")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
     if count == 0:
+        shutil.rmtree(dest, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Zip rỗng hoặc mọi file bị chặn (zip-slip)")
 
     scan = await _create_and_run_scan(db, project_id, dest, types, run_ai_analysis, background_tasks)

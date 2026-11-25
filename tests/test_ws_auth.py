@@ -9,6 +9,12 @@ from tests._authutil import bearer, login, make_user, new_client
 URL = "/api/file-assistant/sessions/nope/chat/stream"
 
 
+@pytest.fixture(autouse=True)
+def _fa_enabled(monkeypatch):
+    # File Assistant mặc định tắt (D-8); các test WS cần module bật.
+    monkeypatch.setattr(settings, "feature_file_assistant", True)
+
+
 def _connect(c, token=None, origin=None):
     h = {}
     if token:
