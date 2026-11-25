@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Security — Docker hardening, supply chain, lockfiles (PR-H; N-5, N-9, L-5, B-6) (BREAKING for local-image scans / dependency workflow)
+- **N-5 / D-4:** `docker.sock` is no longer mounted into the app (a `:ro` socket mount still accepts `POST /containers/create` with `Privileged`).
+  New `docker-compose.local-images.yml` routes `DOCKER_HOST` through a pinned, read-only `docker-socket-proxy` (`POST=0`, images/ping/version only; port not published).
+  **Breaking:** scanning images that exist only in the local daemon now requires `-f docker-compose.local-images.yml`; public images are unaffected.
+- **N-9:** compose hint is now `sudo chown -R 10001:10001 storage` (no `chmod 777`); new `api/docker-entrypoint.sh` fails fast with that hint when `/app/storage/db` is not writable.
+- **L-5:** every downloaded binary (trivy, gitleaks, grype, hadolint, katana, nuclei, ffuf, sonar-scanner) is version-pinned and verified with per-arch `sha256`;
+  no more `curl | sh` for grype; trivy comes from the release tarball (not the unpinned apt repo); SecLists pinned to a tag.
+  Core scanners (trivy, gitleaks, grype, hadolint) now fail the image build on any error; only optional tools may be skipped.
+- **B-6:** `api/requirements.in` → hash-locked `api/requirements.txt` (`uv pip compile --universal --generate-hashes`), installed once with `--require-hashes`.
+  semgrep, bandit, checkov, pip-audit each get their own venv from `docker/scanners/<tool>.txt`; `detect-secrets` stays in the app env. `requirements-dev.txt` and `coworker_host/requirements.txt` are locked too.
+  CI installs from the lock and runs `pip-audit` on it; `.github/dependabot.yml` added. Image smoke test now also runs `grype`, `hadolint` and `pip check`.
+- Image: `FORWARDED_ALLOW_IPS=127.0.0.1` made explicit, uvicorn started with `--workers 1` (in-memory state; run.sh single-worker enforcement is in PR #42).
+
 ### Fixed — first-login change-password UX (BREAKING for API clients)
 - `POST /api/auth/change-password` now requires `confirm_password` (must equal `new_password`, else 422, nothing written)
   and enforces a password policy (10–200 chars, ≥3 of 4 character classes, not containing the email local part,

@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────
+# OVERRIDE tuỳ chọn: quét image CHỈ có ở Docker daemon local (trivy/grype image <local-tag>).
+#   docker compose -f docker-compose.yml -f docker-compose.local-images.yml up -d
+#
+# Thay vì mount docker.sock vào app (":ro" KHÔNG ngăn tạo container privileged → root host),
+# app nói chuyện với một socket-proxy CHỈ-ĐỌC: chỉ cho phép GET /_ping, /version, /images/*;
+# mọi POST (tạo container, exec, build…) bị 403. Cổng 2375 KHÔNG publish ra host.
+# Lưu ý: bản thân container proxy vẫn giữ docker.sock — nó là thành phần được tin cậy, tối thiểu hoá.
+# ─────────────────────────────────────────────
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    container_name: vulnguard-docker-proxy
+    environment:
+      # Socket mount ở /docker.sock (không phải /var/run) để tmpfs /run (pidfile haproxy) không che nó.
+      - SOCKET_PATH=/docker.sock
+      - IMAGES=1
+      - PING=1
+      - VERSION=1
+      - POST=0
+      - CONTAINERS=0
+      - EXEC=0
+      - VOLUMES=0
+      - NETWORKS=0
+      - BUILD=0
+      - SWARM=0
+      - SYSTEM=0
+      - AUTH=0
+      - SECRETS=0
+      - INFO=0
+      - EVENTS=0
+    volumes:
+      # Đổi nguồn nếu socket ở chỗ khác (vd macOS: ~/.docker/run/docker.sock)
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  vulnguard:
+    environment:
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    depends_on:
+      - docker-socket-proxy

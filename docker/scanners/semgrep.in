@@ -1,0 +1,3 @@
+semgrep==1.136.0
+# opentelemetry-instrumentation (dep của semgrep) import pkg_resources — bị gỡ từ setuptools 81
+setuptools<81

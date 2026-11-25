@@ -1,0 +1,23 @@
+# B-6/L-5: cập nhật dependency có kiểm soát (PR hàng tuần) thay vì ">=" tự trôi phiên bản.
+# Lưu ý: api/requirements.txt là lockfile sinh từ requirements.in (uv pip compile) — khi merge PR
+# dependabot cho .txt, chạy lại lệnh compile ở đầu file để giữ nhất quán với .in.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/api"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/docker/scanners"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/coworker_host"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/api"
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }

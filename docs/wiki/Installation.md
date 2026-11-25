@@ -98,9 +98,28 @@ Theo `docker-compose.yml`:
 
 - Service `vulnguard` (container `vulnguard-api`) build từ `api/Dockerfile`, image có sẵn trivy, gitleaks, hadolint, grype, katana, nuclei 3.4.7, ffuf 2.1.0, sonar-scanner và các tool Python.
 - Cổng publish: `${VULNGUARD_PORT:-8080}:8080` và `${PENTEST_PROXY_PORT:-8788}:8788` (MITM proxy).
-- Volume: `./storage:/app/storage`, `${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock`, `${SCAN_WORKSPACE:-/tmp}:/workspace`.
+- Volume: `./storage:/app/storage`, `${SCAN_WORKSPACE:-/tmp}:/workspace`. **Không còn mount `docker.sock`** (mount `:ro` vẫn cho phép tạo container privileged → root trên host).
+- Container chạy non-root (uid 10001). Nếu `./storage` thuộc root (nâng cấp từ bản cũ): `sudo chown -R 10001:10001 storage` (không dùng `chmod 777`); entrypoint sẽ báo lỗi kèm lệnh này nếu thư mục không ghi được.
 - `OLLAMA_URL=http://host.docker.internal:11434` (Ollama chạy trên host), `COWORKER_URL=http://host.docker.internal:8765`.
 - Profile `sonar`: `sonarqube:community` + `postgres:16-alpine`. Host Linux cần `sysctl -w vm.max_map_count=524288`.
+
+### Quét image chỉ có ở máy local (tuỳ chọn)
+
+Image công khai quét được ngay (Trivy tự pull từ registry). Để quét image **chỉ có ở Docker daemon local**, dùng override `docker-compose.local-images.yml`: app nói chuyện với `tecnativa/docker-socket-proxy` (pin digest) chỉ cho phép `GET /_ping`, `/version`, `/images/*`; mọi `POST` (tạo container, exec, build) bị `403`. Cổng proxy không publish ra host.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local-images.yml up -d
+# macOS Docker Desktop: đặt DOCKER_SOCK=$HOME/.docker/run/docker.sock trong .env nếu /var/run/docker.sock không tồn tại
+```
+
+### Supply chain: lockfile và binary được pin
+
+- Python: `api/requirements.in` là nguồn; `api/requirements.txt` là lockfile **có hash**, sinh bằng
+  `uv pip compile --universal --python-version 3.11 --generate-hashes api/requirements.in -o api/requirements.txt`. Dockerfile cài một lần với `--require-hashes`.
+- Scanner CLI (semgrep, bandit, checkov, pip-audit) mỗi cái một venv riêng từ `docker/scanners/<tool>.txt` (không chia sẻ dependency với app). `detect-secrets` ở lại env của app vì được import như thư viện.
+- Binary (trivy, gitleaks, grype, hadolint, katana, nuclei, ffuf, sonar-scanner) tải theo phiên bản cố định và kiểm `sha256` theo kiến trúc (`ARG *_SHA256_AMD64/_ARM64` trong `api/Dockerfile`; lấy từ file checksums chính thức của release). Tool lõi lỗi → build fail; tool tuỳ chọn lỗi → bỏ qua kèm cảnh báo. SecLists pin theo tag.
+- `.github/dependabot.yml` mở PR hàng tuần cho pip/docker/actions; sau khi merge PR đổi `.txt`, chạy lại lệnh compile để đồng bộ với `.in`.
+- `FORWARDED_ALLOW_IPS` (mặc định `127.0.0.1`): chỉ tin `X-Forwarded-For` từ các IP này. Đặt IP reverse proxy nếu có.
 
 Khi tạo scan trong Docker, `scan_path` là đường dẫn **trong container** (ví dụ `/workspace/my-app`).
 

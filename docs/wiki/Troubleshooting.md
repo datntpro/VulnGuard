@@ -22,6 +22,19 @@ bash run.sh                  # banner in "VulnGuard PRODUCTION:  http://127.0.0.
 
 Nếu báo `address already in use` thì cổng vẫn bị chiếm. Cuối cùng hard refresh trình duyệt (`Cmd/Ctrl + Shift + R`).
 
+## DB không ghi được sau khi nâng cấp lên image non-root
+
+Triệu chứng: container thoát ngay với `❌ /app/storage/db không ghi được...` (hoặc `attempt to write a readonly database`). Nguyên nhân: `./storage` do bản cũ (chạy root) tạo, thuộc `root`. Sửa trên máy host (không dùng `chmod 777`):
+
+```bash
+sudo chown -R 10001:10001 storage
+docker compose up -d
+```
+
+## Quét image local báo không thấy image
+
+Mặc định app không mount `docker.sock`. Image công khai vẫn quét được; image chỉ có ở máy local cần override socket-proxy chỉ-đọc: `docker compose -f docker-compose.yml -f docker-compose.local-images.yml up -d`.
+
 ## Docker đã down nhưng vẫn đăng nhập được
 
 Còn server khác trên 8080 (container khác hoặc tiến trình native). Dùng `docker ps` và `lsof -i :8080`.
