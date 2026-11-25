@@ -29,5 +29,12 @@ export PATH="$PROJECT_DIR/venv/bin:$PATH"   # scanner trong venv luôn tìm th�
 mkdir -p storage/db storage/reports
 
 HOST="${VULNGUARD_HOST:-127.0.0.1}"         # mặc định localhost (P0.2)
+case "$(printf '%s' "${AUTH_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+  false|0|no|off)
+    case "$HOST" in
+      127.0.0.1|localhost|::1) ;;
+      *) echo "❌ AUTH_ENABLED=false không được phép khi VULNGUARD_HOST=$HOST"; exit 1 ;;
+    esac ;;
+esac
 echo "▶ VulnGuard chạy tại http://$HOST:${VULNGUARD_PORT:-8080}  (Ctrl+C để dừng)"
-exec "$PROJECT_DIR/venv/bin/uvicorn" api.main:app --host "$HOST" --port "${VULNGUARD_PORT:-8080}"
+exec "$PROJECT_DIR/venv/bin/uvicorn" api.main:app --host "$HOST" --port "${VULNGUARD_PORT:-8080}" --workers 1

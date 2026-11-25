@@ -83,7 +83,7 @@ Nếu không chạy bootstrap, lần đầu mở app sẽ hiện màn hình tạ
 - Nạp `.env` nếu có.
 - Đặt mặc định: `DATABASE_URL=sqlite:///$PWD/storage/db/vulnguard.db`, `AI_CONFIG_FILE`, `SCANNER_CONFIG_FILE` trong `storage/`, `AUTH_ENABLED=true`, `APP_ENV=production`, `DEPLOY_MODE=native`.
 - `PATH="$PWD/.venv/bin:$HOME/.local/bin:$PATH"`.
-- Host: `VULNGUARD_HOST` (mặc định `127.0.0.1`), cổng `VULNGUARD_PORT` (mặc định `8080`), số worker `VULNGUARD_WORKERS` (mặc định `1`).
+- Host: `VULNGUARD_HOST` (mặc định `127.0.0.1`), cổng `VULNGUARD_PORT` (mặc định `8080`), `VULNGUARD_WORKERS` luôn bị ép về `1`; `AUTH_ENABLED=false` chỉ chạy được với host loopback.
 
 ## 2. Docker Compose
 

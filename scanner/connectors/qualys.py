@@ -7,7 +7,8 @@ base_url theo platform của bạn, vd https://qualysapi.qg2.apps.qualys.com
   - Alert ← GET /api/2.0/fo/asset/host/vm/detection/?action=list  (QID + severity 1..5)
 Severity Qualys 1..5 → info..critical.
 """
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
+from defusedxml import DefusedXmlException
 from typing import Any, Dict, List
 
 import httpx
@@ -27,7 +28,7 @@ def parse_hosts_xml(xml_text: str) -> List[NormAsset]:
     out = []
     try:
         root = ET.fromstring(xml_text)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return out
     for h in root.iter("HOST"):
         out.append(NormAsset(
@@ -45,7 +46,7 @@ def parse_detections_xml(xml_text: str) -> List[NormAlert]:
     out = []
     try:
         root = ET.fromstring(xml_text)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return out
     for host in root.iter("HOST"):
         ip = _txt(host, "IP")

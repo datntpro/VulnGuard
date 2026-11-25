@@ -17,15 +17,23 @@ Trang này liệt kê các điểm cần biết khi triển khai, đã đối ch
 
 | Vấn đề | Nơi | Khuyến nghị |
 |---|---|---|
-| `scripts/setup.py` (gọi từ `setup.sh` khi không có `--no-run`) chạy uvicorn trên `0.0.0.0` và không thêm `.venv/bin` vào `PATH` | `scripts/setup.py` | Dùng `bash setup.sh --no-run` rồi `bash run.sh` |
+| `scripts/setup.py` (gọi từ `setup.sh` khi không có `--no-run`) không thêm `.venv/bin` vào `PATH` (đã bind `127.0.0.1` mặc định theo `VULNGUARD_HOST`; từ chối `AUTH_ENABLED=false` + host không phải loopback) | `scripts/setup.py` | Dùng `bash setup.sh --no-run` rồi `bash run.sh` |
 | `run_demo.sh` bind `0.0.0.0` | `run_demo.sh` | Chỉ chạy demo trên máy cá nhân / mạng tin cậy |
-| Unit systemd mẫu bind `0.0.0.0` và dùng `venv/` (không phải `.venv/`) | `install/vulnguard.service.template`, `install/run.sh` | Sửa `--host` và đường dẫn venv trước khi cài |
+| Unit systemd mẫu dùng `venv/` (không phải `.venv/`); đã đổi sang `--host 127.0.0.1 --workers 1` | `install/vulnguard.service.template`, `install/run.sh` | Sửa đường dẫn venv trước khi cài; muốn mở ra ngoài thì đặt reverse proxy TLS phía trước |
 | Docker publish `8080`, `8788` (và `9000` của SonarQube) trên mọi interface của host | `docker-compose.yml` | Đổi thành `127.0.0.1:8080:8080` hoặc đặt firewall/reverse proxy |
 | Quét image local cần `docker-compose.local-images.yml`: container `docker-socket-proxy` vẫn giữ `docker.sock` (chỉ cho GET image/ping/version, POST = 403) | `docker-compose.local-images.yml` | Chỉ bật khi cần; không publish cổng 2375. Mặc định app không mount socket |
 | Base image (`python:3.11-slim`) và gói apt (nmap, sqlmap, chromium) chưa pin theo digest/phiên bản | `api/Dockerfile` | Dependabot theo dõi tag; pin digest khi phát hành |
 | Proxy MITM pentest `bind_host` mặc định `0.0.0.0` | `api/routes/pentest.py` | Truyền `bind_host: "127.0.0.1"` khi start |
 | CSP nền cho phép `'unsafe-inline'` script | `api/main.py` | Hạn chế rò rỉ/nhúng khung nhưng không chặn XSS inline; CSP nghiêm ngặt cần refactor `onclick` inline (đã hoãn) |
 | SCM `base_url`: chỉ kiểm tra IP lúc dùng, chưa pin IP | `scanner/scm/providers.py` | DNS rebinding hẹp nhưng chưa loại trừ; dải private mặc định cho phép (`SCM_ALLOW_PRIVATE_HOSTS=false` để cấm) |
+
+### Chỉ 1 worker / 1 instance
+
+VulnGuard giữ trạng thái trong bộ nhớ tiến trình: khoá scan đang chạy, registry proxy pentest, scheduler,
+bộ đếm khoá đăng nhập (lockout), nonce xác nhận của Co-work. Chạy nhiều worker hoặc nhiều instance trỏ vào cùng
+DB sẽ làm các cơ chế này sai lệch (lockout bị vòng qua, scan chạy trùng, proxy "không tìm thấy").
+`run.sh`/`install/run.sh`/unit systemd ép `--workers 1` và `VULNGUARD_WORKERS>1` bị bỏ qua kèm cảnh báo.
+Không đặt nhiều instance sau load balancer.
 
 ## Xác thực và phân quyền
 

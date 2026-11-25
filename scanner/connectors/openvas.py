@@ -8,7 +8,8 @@ base_url: host[:port] của Greenbone (vd gvm.corp.vn:9390). Secret: username/pa
   - Alert ← get_results  (mỗi result = 1 phát hiện lỗ hổng, severity CVSS)
 Hàm parse XML là pure (test được không cần GVM).
 """
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
+from defusedxml import DefusedXmlException
 from typing import Any, Dict, List, Tuple
 
 from scanner.connectors.base import BaseConnector, ConnectorError, NormAlert, NormAsset
@@ -36,7 +37,7 @@ def parse_results_xml(xml_text: str) -> List[NormAlert]:
     out = []
     try:
         root = ET.fromstring(xml_text)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return out
     for r in root.iter("result"):
         host_el = r.find("host")
@@ -68,7 +69,7 @@ def parse_assets_xml(xml_text: str) -> List[NormAsset]:
     out = []
     try:
         root = ET.fromstring(xml_text)
-    except ET.ParseError:
+    except (ET.ParseError, DefusedXmlException):
         return out
     for a in root.iter("asset"):
         name = _txt(a, "name")                 # thường là IP

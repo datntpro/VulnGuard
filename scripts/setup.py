@@ -321,14 +321,30 @@ def bootstrap_admin(email, skip):
     subprocess.run([venv_python(), "-m", "scripts.bootstrap_admin", email], env=env)
 
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def resolve_bind_host(environ=None):
+    """Host uvicorn sẽ bind (B-5/M-2). Mặc định loopback; từ chối mở ra ngoài khi AUTH_ENABLED=false."""
+    env = os.environ if environ is None else environ
+    host = (env.get("VULNGUARD_HOST") or "127.0.0.1").strip()
+    auth_on = (env.get("AUTH_ENABLED") or "true").strip().lower() not in ("false", "0", "no", "off")
+    if not auth_on and host not in _LOOPBACK_HOSTS:
+        raise SystemExit(
+            f"❌ AUTH_ENABLED=false không được phép khi VULNGUARD_HOST={host} (mở ra mạng không xác thực). "
+            "Bật AUTH_ENABLED=true hoặc dùng VULNGUARD_HOST=127.0.0.1.")
+    return host
+
+
 def run_prod():
     port = os.environ.get("VULNGUARD_PORT", "8080")
-    hr(); g(f"  VulnGuard PRODUCTION: http://localhost:{port}")
+    host = resolve_bind_host()
+    hr(); g(f"  VulnGuard PRODUCTION: http://{host}:{port}")
     g("  Dùng email/mật khẩu ADMIN ở trên để đăng nhập. (Ctrl+C để dừng)"); hr()
     env = dict(os.environ, PYTHONPATH=str(ROOT))
     os.execve(venv_python(), [venv_python(), "-m", "uvicorn", "api.main:app",
-              "--host", "0.0.0.0", "--port", port], env) if not IS_WIN else \
-        subprocess.call([venv_python(), "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", port], env=env)
+              "--host", host, "--port", port], env) if not IS_WIN else \
+        subprocess.call([venv_python(), "-m", "uvicorn", "api.main:app", "--host", host, "--port", port], env=env)
 
 
 def main():

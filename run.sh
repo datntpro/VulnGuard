@@ -26,11 +26,24 @@ mkdir -p "$PWD/storage/db" "$PWD/storage/documents"
 export PATH="$PWD/$VENV/bin:$HOME/.local/bin:$PATH"
 # Mặc định CHỈ nghe localhost (an toàn). Mở ra ngoài bằng VULNGUARD_HOST=0.0.0.0 (P0.2).
 HOST="${VULNGUARD_HOST:-127.0.0.1}"
+# Chặn mở ra ngoài khi tắt xác thực (M-2): AUTH_ENABLED=false chỉ chạy được trên loopback.
+case "$(printf '%s' "$AUTH_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+  false|0|no|off)
+    case "$HOST" in
+      127.0.0.1|localhost|::1) ;;
+      *) echo "❌ AUTH_ENABLED=false không được phép khi VULNGUARD_HOST=$HOST (mở ra mạng không xác thực)."
+         echo "   Bật AUTH_ENABLED=true hoặc dùng VULNGUARD_HOST=127.0.0.1."; exit 1 ;;
+    esac ;;
+esac
 echo "─────────────────────────────────────────────"
 echo "  VulnGuard PRODUCTION:  http://$HOST:$PORT"
 [ "$HOST" = "0.0.0.0" ] && echo "  ⚠️  Đang mở ra TẤT CẢ network interface (VULNGUARD_HOST=0.0.0.0). Hãy đảm bảo có auth + firewall."
 echo "  Lần đầu: tạo tài khoản ADMIN ngay trên trang đăng nhập."
 echo "  (Ctrl+C để dừng)"
 echo "─────────────────────────────────────────────"
-WORKERS="${VULNGUARD_WORKERS:-1}"
-exec "$VENV/bin/uvicorn" api.main:app --host "$HOST" --port "$PORT" --workers "$WORKERS"
+# Trạng thái nằm trong bộ nhớ tiến trình (khoá scan, proxy pentest, scheduler, lockout đăng nhập,
+# nonce Co-work) → CHỈ hỗ trợ 1 worker / 1 instance (B-5, D-14).
+if [ "${VULNGUARD_WORKERS:-1}" != "1" ]; then
+  echo "⚠️  VULNGUARD_WORKERS=${VULNGUARD_WORKERS} bị bỏ qua: VulnGuard chỉ hỗ trợ 1 worker (state trong bộ nhớ)." >&2
+fi
+exec "$VENV/bin/uvicorn" api.main:app --host "$HOST" --port "$PORT" --workers 1

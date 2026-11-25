@@ -51,7 +51,7 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 |---|---|---|
 | `VULNGUARD_HOST` | `run.sh`, `run.ps1`, `install/run.sh` | Địa chỉ bind, mặc định `127.0.0.1`. Đặt `0.0.0.0` để mở ra ngoài (script in cảnh báo) |
 | `VULNGUARD_PORT` | các script, compose | Cổng, mặc định `8080` |
-| `VULNGUARD_WORKERS` | `run.sh` | Số worker uvicorn, mặc định `1` |
+| `VULNGUARD_WORKERS` | `run.sh` | **Bị bỏ qua** nếu >1: chỉ hỗ trợ 1 worker (state trong bộ nhớ) |
 | `VULNGUARD_VENV` | `run.sh` | Thư mục venv, mặc định `.venv` |
 | `AI_CONFIG_FILE` | `api/services/ai_config.py` | Mặc định `storage/ai_config.json` |
 | `SCANNER_CONFIG_FILE` | orchestrator, settings | Bật/tắt từng tool. Mặc định trong code `/app/storage/scanner_config.json`; `run.sh` đặt về `storage/scanner_config.json` |

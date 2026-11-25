@@ -10,7 +10,8 @@ User=__SERVICE_USER__
 Group=__SERVICE_GROUP__
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
-ExecStart=__PROJECT_DIR__/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port __VULNGUARD_PORT__
+# Chỉ localhost (đặt reverse proxy TLS phía trước nếu cần mở ra ngoài); chỉ hỗ trợ 1 worker (B-5).
+ExecStart=__PROJECT_DIR__/venv/bin/uvicorn api.main:app --host 127.0.0.1 --workers 1 --port __VULNGUARD_PORT__
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:__PROJECT_DIR__/storage/vulnguard.log

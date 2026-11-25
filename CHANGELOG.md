@@ -16,6 +16,15 @@
 - Review follow-ups: `FORWARDED_ALLOW_IPS` is now passed through `docker-compose.yml` (`.env` setting works); `defusedxml` added to `requirements.in` + lock (PR #43 should drop its raw `requirements.txt` line); entrypoint also detects root-owned files inside storage (e.g. `db/vulnguard.db`) and derives the path from `DATABASE_URL`; `install/install.sh` installs semgrep/bandit/checkov/pip-audit into separate venvs from `docker/scanners/*.txt` (no more co-install into the app venv).
 - Image: `FORWARDED_ALLOW_IPS=127.0.0.1` made explicit, uvicorn started with `--workers 1` (in-memory state; run.sh single-worker enforcement is in PR #42).
 
+### Security — low-severity hardening (PR-I: L-6, B-5; L-4 is delivered by #37)
+- Qualys/OpenVAS connectors parse XML with `defusedxml` (billion-laughs / entity expansion is rejected and the
+  parser returns no results; Bandit B314 ×4 gone). `defusedxml` is pinned in `api/requirements.in` + the hash lock (PR-H).
+- **BREAKING:** VulnGuard supports a single worker. `run.sh`, `install/run.sh` and the systemd unit force `--workers 1`;
+  `VULNGUARD_WORKERS>1` is ignored with a warning (in-memory scan locks, proxy registry, scheduler, lockout, Co-work nonces).
+- **BREAKING:** native `scripts/setup.py` now binds `VULNGUARD_HOST` (default `127.0.0.1`, was `0.0.0.0`); the systemd
+  template binds `127.0.0.1`. `run.sh`/`setup.py`/`install/run.sh` refuse to start with `AUTH_ENABLED=false` and a non-loopback host.
+- Skipped on purpose: L-4 (pentest proxy auth, loopback default, CA lifetime) — already implemented in #37.
+
 ### Fixed — first-login change-password UX (BREAKING for API clients)
 - `POST /api/auth/change-password` now requires `confirm_password` (must equal `new_password`, else 422, nothing written)
   and enforces a password policy (10–200 chars, ≥3 of 4 character classes, not containing the email local part,
