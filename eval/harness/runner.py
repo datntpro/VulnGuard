@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 
 from eval.harness import metrics as M
-from eval.harness.scenarios import LAB_GATEWAY, LAB_NET, Scenario
+from eval.harness.scenarios import API_SCRIPTS, LAB_GATEWAY, LAB_NET, Scenario
 
 COMPOSE_FILE = os.path.join(os.path.dirname(__file__), "..", "lab", "docker-compose.lab.yml")
 VG = "vg-under-test"
@@ -245,13 +245,23 @@ def canary() -> List[str]:
     return fails
 
 
+def scenario_lint(s: Scenario) -> Optional[str]:
+    """Hợp đồng kind/turns: không cho 'đổi nhãn' để lọt qua cổng mà không chạy gì."""
+    if s.kind == "agent":
+        return None if s.turns else "kind=agent mà turns rỗng: không kiểm gì — KHÔNG được coi là pass"
+    if s.kind == "api":
+        if s.turns:
+            return "kind=api mà có turns: kịch bản agent bị đổi nhãn để né cổng"
+        if s.api_script not in API_SCRIPTS:
+            return f"kind=api cần api_script ∈ {sorted(API_SCRIPTS)} (có {s.api_script!r})"
+        return None
+    return f"kind không hợp lệ: {s.kind}"
+
+
 def run_scenario(s: Scenario) -> Dict:
     res = {"id": s.id, "requires": s.requires, "description": s.description}
-    if s.requires and s.kind == "api":
-        return {**res, "status": "pending", "skip_reason": f"chờ {s.requires} (kind=api, chưa có API driver)"}
-    if s.kind == "api" or not s.turns:
-        return {**res, "status": "error", "failures": [
-            "kịch bản kind=api / turns rỗng chưa có driver: không kiểm gì — KHÔNG được coi là pass"]}
+    if err := scenario_lint(s):
+        return {**res, "status": "error", "failures": [err]}
     assert_scenario_safe(s)
     preflight()
     kill_stray()
@@ -270,14 +280,20 @@ def run_scenario(s: Scenario) -> Dict:
                                 capture=_read(CAPTURE), dns_log=_read(DNS),
                                 allowed_ips=s.allowed_ips, allowed_ports=s.allowed_ports, allowed_dns=s.allowed_dns)
     metrics["procs_alive_at_stop"] = data.get("procs_alive_at_stop")
+    for k, v in (data.get("api") or {}).items():
+        metrics["api_" + k] = v
     metrics["run_stopped"] = 1 if data.get("run_status") == "STOPPED" else 0
     errors = []
     post = canary()
     if post:
         errors.append("canary SAU kịch bản (hạ tầng chết giữa chừng): " + "; ".join(post))
-    if not s.stop_after_s and len(data["steps"]) < s.scripted_calls():
+    if s.kind == "api" and not data.get("api"):
+        errors.append("api script không trả kết quả nào")
+    if metrics.get("capture_drops"):
+        errors.append(f"sniffer làm rơi {metrics['capture_drops']} gói — có thể bỏ sót kết nối")
+    if s.kind == "agent" and not s.stop_after_s and len(data["steps"]) < s.scripted_calls():
         errors.append(f"chỉ có {len(data['steps'])} step cho {s.scripted_calls()} tool call trong kịch bản")
-    if not s.stop_after_s and data.get("turns_consumed", 0) < len(s.turns):
+    if s.kind == "agent" and not s.stop_after_s and data.get("turns_consumed", 0) < len(s.turns):
         errors.append(f"kịch bản chưa chạy hết ({data.get('turns_consumed')}/{len(s.turns)} lượt)")
     errors += M.tool_did_not_run(data["steps"], "output_regex" in s.expect or bool(s.stop_after_s))
     if data.get("run_status") == "FAILED":

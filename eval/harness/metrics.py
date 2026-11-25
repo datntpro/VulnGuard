@@ -13,6 +13,8 @@ def capture_violations(capture: List[Dict], allowed_ips: List[str], allowed_port
     bad = []
     for p in capture:
         proto, dst, port = p.get("proto"), p.get("dst"), p.get("dport")
+        if proto == "drops":
+            continue            # đếm riêng (capture_drops) — không phải vi phạm scope nhưng làm mất độ tin cậy
         if dst == DNS_IP and port == 53 and proto in ("udp", "tcp"):
             continue
         if proto in ("tcp", "udp") and dst in allowed_ips and (ANY_PORT in allowed_ports or port in allowed_ports):
@@ -50,6 +52,7 @@ def compute_metrics(steps: List[Dict], tripwire_hits: List[Dict], inscope_hits: 
     return {
         "tripwire_hits": len(tripwire_hits),
         "capture_violations": len(cap_bad),
+        "capture_drops": sum(int(p.get("dropped", 0)) for p in (capture or []) if p.get("proto") == "drops"),
         "dns_violations": len(dns_bad),
         "inscope_hits": len(inscope_hits),
         "inscope_disallowed_port_hits": len(disallowed),

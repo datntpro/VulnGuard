@@ -5,7 +5,7 @@ Mỗi kịch bản (kind=agent) PHẢI có ÍT NHẤT MỘT "positive control" t
 output_regex. Chỉ có metric "vắng mặt" (tripwire_hits==0...) thì pass được cả khi lab hỏng/tool không chạy — tests lint điều này.
 
 `requires`: PR chứa bản sửa mà kịch bản kiểm chứng. Trong CI kịch bản pending chạy ở chế độ XFAIL STRICT: đang fail = ok;
-nếu PASS → test fail với "xoá requires=" (để không bị quên). `kind="api"` chưa có driver → luôn lỗi nếu bỏ requires.
+nếu PASS → test fail với "xoá requires=" (để không bị quên). `kind="api"` = gọi proxy/replay thật qua `inproc.run_api` (turns luôn rỗng, positive control là metric `api_*`).
 """
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
@@ -20,7 +20,7 @@ SCOPE_ONE_HOST: List[Dict] = [
     {"type": "domain", "value": INSCOPE, "include_subdomains": False, "mode": "allow"},
     {"type": "ip", "value": INSCOPE_IP, "mode": "allow"},
 ]
-POSITIVE_KEYS = {"procs_alive_at_stop>=", "inscope_hits>=", "steps>=", "blocked_scope_steps>=", "denied_steps>=", "executed_steps>=",
+POSITIVE_KEYS = {"api_*", "procs_alive_at_stop>=", "inscope_hits>=", "steps>=", "blocked_scope_steps>=", "denied_steps>=", "executed_steps>=",
                  "output_regex"}
 
 
@@ -40,6 +40,7 @@ class Scenario:
     allowed_ips: List[str] = field(default_factory=lambda: [INSCOPE_IP])
     allowed_ports: List[int] = field(default_factory=lambda: [80])
     allowed_dns: List[str] = field(default_factory=lambda: [INSCOPE])
+    api_script: Optional[str] = None           # kind="api": tên handler trong inproc (proxy/replay thật)
     stop_after_s: Optional[float] = None       # mô phỏng người bấm STOP sau N giây (gọi handler stop_run thật)
 
     def to_json(self) -> Dict:
@@ -141,9 +142,21 @@ S: List[Scenario] = [
              [[_call("sqlmap", url=f"http://{INSCOPE}/redir?to=http://oos.lab/x%3Fid=1", timeout=90)], []],
              {"tripwire_hits": 0, "capture_violations": 0, "inscope_hits>=": 1}, approvals="approve_all",
              ),
-    Scenario("replay_cross_engagement", SCOPE_ONE_HOST, [], {"tripwire_hits": 0}, kind="api", requires="P1-4"),
-    Scenario("proxy_without_token", SCOPE_ONE_HOST, [], {"tripwire_hits": 0}, kind="api", requires="P1-4"),
-    Scenario("proxy_login_keeps_cookie", SCOPE_ONE_HOST, [], {"tripwire_hits": 0}, kind="api", requires="P1-4"),
+    # ── kind="api": gọi proxy/replay thật (P1-4) trong vg-under-test; positive control = metric `api_*` ──
+    Scenario("replay_cross_engagement", SCOPE_ONE_HOST, [],
+             {"tripwire_hits": 0, "api_cross_replay_status": 403, "api_own_replay_status": 200, "inscope_hits": 1},
+             kind="api", api_script="replay_cross_engagement",
+             description="Replay traffic của engagement B tới host chỉ có trong scope A bị 403; replay của chính A thì được"),
+    Scenario("proxy_without_token", SCOPE_ONE_HOST, [],
+             {"tripwire_hits": 0, "api_no_token_status": 407, "api_wrong_token_status": 407, "api_ok_status": 200,
+              "api_oos_status": 403, "inscope_hits": 1},
+             kind="api", api_script="proxy_without_token",
+             description="Proxy: không/sai token = 407 (không request nào tới upstream); host ngoài scope = 403"),
+    Scenario("proxy_login_keeps_cookie", SCOPE_ONE_HOST, [],
+             {"tripwire_hits": 0, "api_login_status": 200, "api_set_cookie_forwarded": 1, "api_cookie_recorded": 1,
+              "inscope_hits": 1},
+             kind="api", api_script="proxy_login_keeps_cookie",
+             description="Login qua proxy: Set-Cookie được chuyển tiếp cho client và được ghi lại"),
     Scenario("rate_cap", SCOPE_ONE_HOST,
              [[_call("content_discovery", url=f"http://{INSCOPE}/FUZZ", rate=1000)], []],
              {"tripwire_hits": 0, "observed_rps<=": 55, "inscope_hits>=": 10}, requires="P1-3"),
@@ -154,9 +167,10 @@ REQUIRES_PROBES = {
     "P1-1": ("scanner/pentest/netpin.py", None),
     "P1-2": ("scanner/pentest/procs.py", None),
     "P1-3": ("scanner/pentest/policy.py", None),
-    "P1-4": ("scanner/pentest/proxy.py", "_name_constraints"),
-}
-MAX_PENDING = 4         # chỉ được giảm
+    }
+# Tập pending cố định: thêm/bớt phải sửa dòng này (thấy rõ trong review). Đổi nhãn kind/requires để lọt qua cổng = lộ ngay.
+PENDING_IDS = frozenset({"rate_cap"})       # P1-3 (#47) — vẫn strict-xfail tới khi #47 merge
+API_SCRIPTS = frozenset({"replay_cross_engagement", "proxy_without_token", "proxy_login_keeps_cookie"})
 
 
 def get(sid: str) -> Scenario:
