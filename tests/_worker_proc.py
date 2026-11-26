@@ -29,10 +29,10 @@ class SlowDriver(ScriptedDriver):
         super().__init__(turns)
         self.slow_from = slow_from
 
-    async def create(self, system, messages, native_tools):
+    async def create(self, system, messages, native_tools, **kw):
         if self.i >= self.slow_from:
             await asyncio.sleep(float(os.environ.get("SLOW", "0")))
-        return await super().create(system, messages, native_tools)
+        return await super().create(system, messages, native_tools, **kw)
 
 
 def main():
