@@ -356,6 +356,10 @@
   .pt-run-stat .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .pt-run-stat .l { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-top: 2px; }
   .pt-eng-card { cursor: pointer; }
+  .pt-ptg, .pt-ptg ul { list-style: none; margin: 0; padding-left: 0; }
+  .pt-ptg ul { padding-left: 20px; border-left: 1px dashed var(--border); margin-left: 6px; }
+  .pt-ptg li { margin: 6px 0; }
+  .pt-ptg-node { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .pt-win-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .pt-win-row input[type=time], .pt-win-row input[type=text] { width: auto; }
   .pt-win-row .pt-check { margin: 0; }
@@ -1899,6 +1903,15 @@
       <div class="grid2">
         <div class="form-group"><label>Số bước tối đa (max_steps)</label><input id="em-max-steps" type="number" min="1" max="200" value="40"></div>
         <div class="form-group"><label>Token tối đa (max_tokens)</label><input id="em-max-tokens" type="number" min="20000" max="5000000" step="10000" value="400000"></div>
+      </div>
+      <div class="form-group" id="em-arch-wrap">
+        <label>Kiến trúc agent (chỉ ADMIN)</label>
+        <select id="em-arch">
+          <option value="">— Mặc định hệ thống (PENTEST_DEFAULT_ARCH) —</option>
+          <option value="legacy">legacy — single-agent</option>
+          <option value="graph">graph — planner/executor + attack graph</option>
+        </select>
+        <div class="field-hint">Engagement đã uỷ quyền thì khoá — thu hồi uỷ quyền để đổi.</div>
       </div>
       <div class="separator"></div>
       <div class="form-group" id="em-roe">
@@ -5783,9 +5796,14 @@ async function triggerWebScan() {
 const PT_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
 const PT_ACTIVE_STATUS = ['PENDING', 'RUNNING', 'WAITING_APPROVAL', 'PAUSED'];
 const ptActive = s => PT_ACTIVE_STATUS.includes(s);
-const ptState = { engagements: [], curEng: null, curEngId: null, runs: [], curRunId: null, run: null, steps: [], findings: [], approvals: [], runTraffic: [], engTraffic: [], proxy: null, engTab: 'runs', bindFindings: [], proxySecret: null };
+const ptState = { engagements: [], curEng: null, curEngId: null, runs: [], curRunId: null, run: null, steps: [], findings: [], approvals: [], runTraffic: [], engTraffic: [], proxy: null, engTab: 'runs', bindFindings: [], proxySecret: null, tasks: [], runtime: null, graph: null, graphKind: '' };
 let ptPollTimer = null;
-function stopPentestPoll() { clearInterval(ptPollTimer); ptPollTimer = null; }
+let ptEs = null, ptRefreshTimer = null, ptAuxTimer = null;
+function stopPentestPoll() {
+  clearInterval(ptPollTimer); ptPollTimer = null;
+  if (ptEs) { ptEs.close(); ptEs = null; }
+  clearTimeout(ptRefreshTimer); ptRefreshTimer = null; clearTimeout(ptAuxTimer); ptAuxTimer = null;
+}
 
 function psevBadge(s) { return sevBadge(String(s || 'info').toUpperCase()); }
 function ptBadge(text, tokenVar) { return `<span class="badge" style="--b:${tokenVar}">${escHtml(text)}</span>`; }
@@ -5963,6 +5981,10 @@ function openEngagementModal(eng) {
   document.getElementById('em-windows').innerHTML = '';
   ((eng && eng.testing_windows) || []).forEach(w => addWindowRow(w));
   setRoeLocked(!!(eng && eng.authorized));
+  const archSel = document.getElementById('em-arch');
+  archSel.value = eng && eng.agent_arch ? eng.agent_arch : '';
+  document.getElementById('em-arch-wrap').style.display = canAdmin() ? '' : 'none';   // server vẫn là nơi cưỡng chế
+  archSel.disabled = !!(eng && eng.authorized);
   document.getElementById('em-error').textContent = '';
   document.getElementById('engagement-modal').classList.add('open');
 }
@@ -6014,6 +6036,8 @@ async function saveEngagement() {
       roe_note: document.getElementById('em-roe-note').value.trim() || null,
     });
   }
+  const archSel = document.getElementById('em-arch');
+  if (canAdmin() && !archSel.disabled) payload.agent_arch = archSel.value || null;
   const btn = document.getElementById('em-save-btn');
   btn.disabled = true;
   try {
@@ -6068,7 +6092,7 @@ function renderEngagementDetail() {
       <div style="min-width:0;">
         <h1 style="margin:0;word-break:break-word;">${escHtml(e.name)}</h1>
         <div class="pt-chips" style="margin-top:8px;">${authBadge}${ptBadge(e.default_mode === 'GUIDED' ? 'GUIDED' : 'AUTONOMOUS_IN_SCOPE', 'var(--info)')}
-          <span class="tag">max ${escHtml(e.max_steps)} bước</span><span class="tag">max ${Number(e.max_tokens).toLocaleString('vi-VN')} token</span></div>
+          ${ptBadge('arch: ' + (e.agent_arch || 'mặc định'), e.agent_arch === 'graph' ? 'var(--brand-500)' : 'var(--text3)')}<span class="tag">max ${escHtml(e.max_steps)} bước</span><span class="tag">max ${Number(e.max_tokens).toLocaleString('vi-VN')} token</span></div>
       </div>
       ${canWrite() ? `<div class="flex">
         <button class="btn btn-ghost btn-sm" onclick="openEngagementModal(ptState.curEng)">✎ Sửa</button>
@@ -6115,11 +6139,14 @@ function renderEngagementDetail() {
     <div class="tabs">
       <div class="tab ${ptState.engTab === 'runs' ? 'active' : ''}" onclick="switchTab(this,'pt-eng-runs');ptState.engTab='runs'">⚡ Phiên chạy</div>
       <div class="tab ${ptState.engTab === 'traffic' ? 'active' : ''}" onclick="switchTab(this,'pt-eng-traffic');ptState.engTab='traffic';loadEngagementTraffic()">🌐 Traffic &amp; Bằng chứng</div>
+      <div class="tab ${ptState.engTab === 'graph' ? 'active' : ''}" onclick="switchTab(this,'pt-eng-graph');ptState.engTab='graph';loadEngagementGraph()">🕸 Attack graph</div>
     </div>
     <div class="tab-content ${ptState.engTab === 'runs' ? 'active' : ''}" id="pt-eng-runs">${renderRunsList()}</div>
     <div class="tab-content ${ptState.engTab === 'traffic' ? 'active' : ''}" id="pt-eng-traffic"><div id="pt-eng-traffic-body">${SKELETON_HTML}</div></div>
+    <div class="tab-content ${ptState.engTab === 'graph' ? 'active' : ''}" id="pt-eng-graph"><div id="pt-eng-graph-body">${SKELETON_HTML}</div></div>
   `;
   if (ptState.engTab === 'traffic') loadEngagementTraffic();
+  if (ptState.engTab === 'graph') loadEngagementGraph();
 }
 const PT_DAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 function renderRoeCard(e) {
@@ -6183,7 +6210,8 @@ async function startRun() {
 // ─── Run detail ───────────────────────────────────────────────
 function openRun(id) {
   ptState.curRunId = id;
-  ptState.run = null; ptState.steps = []; ptState.findings = []; ptState.approvals = []; ptState.runTraffic = [];
+  stopPentestPoll();
+  ptState.run = null; ptState.steps = []; ptState.findings = []; ptState.approvals = []; ptState.runTraffic = []; ptState.tasks = []; ptState.runtime = null;
   navigate('pentest-run');
   const back = document.getElementById('pentest-run-back');
   if (back && ptState.curEngId) back.setAttribute('onclick', `openEngagement('${ptState.curEngId}')`);
@@ -6193,23 +6221,246 @@ async function loadRunDetail(showSkeleton) {
   const id = ptState.curRunId;
   if (showSkeleton) document.getElementById('pentest-run-content').innerHTML = SKELETON_HTML;
   try {
-    const [run, steps, findings, approvals] = await Promise.all([
+    const [run, steps, findings, approvals, tasks, runtime] = await Promise.all([
       api(`/api/pentest/runs/${id}`),
       api(`/api/pentest/runs/${id}/steps`).catch(() => []),
       api(`/api/pentest/runs/${id}/findings`).catch(() => []),
       api(`/api/pentest/runs/${id}/approvals`).catch(() => []),
+      api(`/api/pentest/runs/${id}/tasks`).catch(() => []),
+      api(`/api/pentest/runs/${id}/runtime`).catch(() => null),
     ]);
     if (ptState.curRunId !== id) return;
     ptState.run = run; ptState.steps = steps || []; ptState.findings = findings || []; ptState.approvals = approvals || [];
+    ptState.tasks = tasks || []; ptState.runtime = runtime;
     renderRunDetail();
-    // poll khi còn active
-    if (ptActive(run.status)) { if (!ptPollTimer) ptPollTimer = setInterval(() => loadRunDetail(false), 2000); }
+    // P2-17: SSE khi còn active (polling chỉ là dự phòng khi EventSource lỗi/không có)
+    if (ptActive(run.status)) ptStartStream(id);
     else stopPentestPoll();
   } catch (e) {
     stopPentestPoll();
     document.getElementById('pentest-run-content').innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`;
   }
 }
+// ─── P2-17: SSE (thay polling). Sự kiện → cập nhật state cục bộ; dữ liệu server luôn đi qua escHtml khi render ───
+function ptUpsert(arr, item, key) {
+  const i = arr.findIndex(x => x[key || 'id'] === item[key || 'id']);
+  if (i >= 0) arr[i] = item; else arr.push(item);
+}
+function ptScheduleRender(refreshAux) {
+  if (!ptRefreshTimer) ptRefreshTimer = setTimeout(() => { ptRefreshTimer = null; if (ptState.run && ptState.curRunId) renderRunDetail(); }, 150);
+  if (refreshAux && !ptAuxTimer) ptAuxTimer = setTimeout(async () => {   // tasks/runtime/findings không có event riêng
+    ptAuxTimer = null;
+    const id = ptState.curRunId;
+    const [tasks, runtime] = await Promise.all([api(`/api/pentest/runs/${id}/tasks`).catch(() => null), api(`/api/pentest/runs/${id}/runtime`).catch(() => null)]);
+    if (ptState.curRunId !== id) return;
+    if (tasks) ptState.tasks = tasks;
+    if (runtime) ptState.runtime = runtime;
+    ptScheduleRender(false);
+  }, 1500);
+}
+function ptStartStream(id) {
+  if (ptEs || ptPollTimer) return;
+  if (typeof EventSource === 'undefined') { ptPollTimer = setInterval(() => loadRunDetail(false), 2000); return; }
+  const es = new EventSource(`/api/pentest/runs/${encodeURIComponent(id)}/events`);
+  ptEs = es;
+  const on = (name, fn) => es.addEventListener(name, ev => {
+    if (ptEs !== es || ptState.curRunId !== id) return;
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    fn(d); ptScheduleRender(true);
+  });
+  on('step', d => { ptUpsert(ptState.steps, d); ptState.steps.sort((a, b) => a.step_number - b.step_number); });
+  on('finding', d => { ptUpsert(ptState.findings, d); });
+  on('approval_requested', d => { ptUpsert(ptState.approvals, d); });
+  on('approval_decided', d => { ptUpsert(ptState.approvals, d); });
+  es.addEventListener('status', ev => {
+    if (ptEs !== es || ptState.curRunId !== id) return;
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    if (ptState.run) Object.assign(ptState.run, { status: d.status, progress: d.progress || ptState.run.progress,
+      steps_used: d.steps_used ?? ptState.run.steps_used, tokens_used: d.tokens_used ?? ptState.run.tokens_used, error_message: d.error_message ?? ptState.run.error_message });
+    if (!ptActive(d.status)) { es.close(); ptEs = null; loadRunDetail(false); return; }   // kết thúc → nạp lại đầy đủ (summary…)
+    ptScheduleRender(true);
+  });
+  es.onerror = () => {   // EventSource tự nối lại; chỉ rơi về polling nếu bị đóng hẳn
+    if (ptEs !== es) return;
+    if (es.readyState === 2) { es.close(); ptEs = null; if (!ptPollTimer) ptPollTimer = setInterval(() => loadRunDetail(false), 2000); }
+  };
+}
+
+// ─── P2-17: báo cáo (JSON / Markdown / PDF / SARIF) ───────────
+async function ptDownloadReport(fmt) {
+  const inc = (document.getElementById('pt-rep-include') || {}).value || 'confirmed';
+  try {
+    const r = await fetch(`/api/pentest/runs/${encodeURIComponent(ptState.curRunId)}/report?format=${encodeURIComponent(fmt)}&include=${encodeURIComponent(inc)}`);
+    check401(r);
+    if (!r.ok) throw new Error(errText(await r.text()));
+    const blob = await r.blob();
+    const m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = m ? m[1] : `pentest-report.${fmt}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e) { toast('Lỗi xuất báo cáo: ' + e.message, 'error'); }
+}
+function renderReportMenu() {
+  return `<details class="pt-report-menu"><summary class="btn btn-ghost btn-sm" style="list-style:none;cursor:pointer;display:inline-block;">⬇ Xuất báo cáo</summary>
+    <div class="card" style="max-width:360px;padding:12px;margin:8px 0 0;">
+      <label style="margin:0 0 6px;">Finding gồm</label>
+      <select id="pt-rep-include"><option value="confirmed">Đã xác nhận (mặc định)</option><option value="likely">Đã xác nhận + có khả năng</option><option value="all">Tất cả</option></select>
+      <div class="flex" style="flex-wrap:wrap;margin-top:10px;">
+        ${[['json', 'JSON'], ['md', 'Markdown'], ['pdf', 'PDF'], ['sarif', 'SARIF']].map(([f, l]) => `<button class="btn btn-ghost btn-sm" onclick="ptDownloadReport('${jsStr(f)}')">${escHtml(l)}</button>`).join('')}
+      </div>
+    </div></details>`;
+}
+
+// ─── P2-17: trạng thái chạy (backend / sandbox / worker / validators) ───
+function renderRuntimeCard(rt) {
+  if (!rt) return '';
+  const j = rt.job, cp = rt.checkpoint;
+  const chips = [
+    ptBadge('arch: ' + (rt.agent_arch || '—'), rt.agent_arch === 'graph' ? 'var(--brand-500)' : 'var(--text3)'),
+    rt.exec_backend === 'sandbox' ? ptBadge('🔒 sandbox', 'var(--low)') : ptBadge('💻 local', rt.degraded ? 'var(--high)' : 'var(--text3)'),
+    rt.egress_gateway === 'enforced' ? ptBadge('🛡 egress gateway', 'var(--low)') : ptBadge('egress: không có gateway', 'var(--text3)'),
+    ptBadge('validators: ' + (rt.validators || 'off'), rt.validators === 'enforce' ? 'var(--low)' : 'var(--text3)'),
+    ptBadge('worker: ' + (rt.worker_mode || 'inprocess'), 'var(--info)'),
+  ];
+  if (j) chips.push(ptBadge('job: ' + j.status + (j.attempts > 1 ? ' ×' + j.attempts : ''), j.status === 'failed' ? 'var(--critical)' : 'var(--info)'));
+  if (j && j.lease_expired) chips.push(ptBadge('⚠ lease hết hạn — chờ worker khác nhận', 'var(--high)'));
+  if (cp) chips.push(`<span class="tag" title="Checkpoint gần nhất — run có thể resume">💾 checkpoint #${escHtml(cp.seq)} · ${fmtDate(cp.created_at)}</span>`);
+  return `<div class="card" style="margin-bottom:12px;">
+    <label style="margin:0 0 8px;">⚙ Môi trường chạy</label>
+    <div class="pt-chips">${chips.join('')}</div>
+    ${rt.degraded ? `<div class="notice warn" style="margin:10px 0 0;">⚠️ <strong>Chế độ suy giảm:</strong> không có sandbox cách ly — INTRUSIVE/DESTRUCTIVE bị khoá.</div>` : ''}
+    ${rt.exec_backend === 'sandbox' && !rt.sandbox_configured ? `<div class="notice warn" style="margin:10px 0 0;">⚠️ Sandbox được bật nhưng runner chưa cấu hình token.</div>` : ''}
+    ${j && j.last_error ? `<div class="text-sm" style="margin-top:8px;color:var(--critical);">Job lỗi gần nhất: ${escHtml(j.last_error)}</div>` : ''}
+  </div>`;
+}
+
+// ─── P2-17: PTG (cây task) ────────────────────────────────────
+const PT_TASK_STATUS = {
+  pending: ['⏳ pending', 'var(--text3)'], ready: ['▶ ready', 'var(--info)'], running: ['⚡ running', 'var(--medium)'],
+  done: ['✅ done', 'var(--low)'], failed: ['❌ failed', 'var(--critical)'], blocked: ['⛔ blocked', 'var(--high)'], cancelled: ['✕ cancelled', 'var(--text3)'],
+};
+function ptTaskNode(t, kids, seen, depth) {
+  if (seen.has(t.id) || depth > 12) return '';
+  seen.add(t.id);
+  const st = Object.prototype.hasOwnProperty.call(PT_TASK_STATUS, t.status) ? PT_TASK_STATUS[t.status] : [t.status, 'var(--text3)'];
+  const res = t.result == null ? '' : ptPretty(t.result);
+  const children = (kids[t.id] || []).map(c => ptTaskNode(c, kids, seen, depth + 1)).join('');
+  return `<li><div class="pt-ptg-node">${ptBadge(st[0], st[1])}<span class="tag">${escHtml(t.kind)}</span><strong style="word-break:break-word;">${escHtml(t.title)}</strong>
+    ${t.depends_on && t.depends_on.length ? `<span class="text-sm" style="color:var(--text3)">phụ thuộc ${escHtml(t.depends_on.length)}</span>` : ''}
+    ${t.attempts > 1 ? `<span class="text-sm" style="color:var(--text3)">thử ${escHtml(t.attempts)} lần</span>` : ''}</div>
+    ${res && ['failed', 'blocked', 'cancelled'].includes(t.status) ? `<div class="text-sm text-mono" style="color:var(--text2);margin-left:4px;word-break:break-word;">${escHtml(res.slice(0, 240))}${res.length > 240 ? '…' : ''}</div>` : ''}
+    ${children ? `<ul>${children}</ul>` : ''}</li>`;
+}
+function renderPtg(tasks) {
+  if (!tasks || !tasks.length) return '';
+  const byId = {}; tasks.forEach(t => { byId[t.id] = t; });
+  const kids = {}; const roots = [];
+  tasks.forEach(t => { if (t.parent_id && byId[t.parent_id]) (kids[t.parent_id] = kids[t.parent_id] || []).push(t); else roots.push(t); });
+  const seen = new Set();
+  const done = tasks.filter(t => t.status === 'done').length;
+  return `<div class="card"><label style="margin:0 0 10px;">🌳 Kế hoạch (PTG) — ${escHtml(done)}/${escHtml(tasks.length)} task xong</label>
+    <ul class="pt-ptg">${roots.map(t => ptTaskNode(t, kids, seen, 0)).join('')}</ul></div>`;
+}
+
+// ─── P2-17: validator / CVSS v4 / PoC ─────────────────────────
+const PT_VAL = { confirmed: ['✓ validator: confirmed', 'var(--low)'], refuted: ['✗ validator: refuted', 'var(--critical)'], inconclusive: ['? validator: inconclusive', 'var(--medium)'] };
+function ptValBadge(v) {
+  if (!v || typeof v !== 'object') return '';
+  const m = Object.prototype.hasOwnProperty.call(PT_VAL, v.status) ? PT_VAL[v.status] : [String(v.status || '—'), 'var(--text3)'];
+  return ptBadge(m[0] + (v.mode === 'shadow' ? ' (shadow)' : ''), m[1]);
+}
+function ptCvssBadge(f) {
+  if (f.cvss_v4_score == null) return '';
+  return ptBadge('CVSS v4 ' + Number(f.cvss_v4_score).toFixed(1) + (f.cvss_v4_severity ? ' ' + f.cvss_v4_severity : ''), 'var(--info)');
+}
+function renderValidation(f) {
+  const v = f.validation;
+  if (!v || typeof v !== 'object') return '';
+  const poc = f.poc && typeof f.poc === 'object' ? f.poc : null;
+  const canReplay = poc && poc.replay_traffic_id && canWrite();
+  return `<div class="separator"></div><label>Validator</label>
+    <div class="pt-chips">${ptValBadge(v)}${v.validator ? `<span class="tag text-mono">${escHtml(v.validator)}</span>` : ''}${v.repeats ? `<span class="tag">${escHtml(v.repeats)}× lặp lại</span>` : ''}${v.mode ? `<span class="tag">mode ${escHtml(v.mode)}</span>` : ''}</div>
+    ${v.details ? `<div class="text-sm" style="margin-top:6px;color:var(--text2);white-space:pre-wrap;">${escHtml(v.details)}</div>` : ''}
+    ${v.severity_cap ? `<div class="text-sm" style="margin-top:6px;color:var(--high);">Severity bị giới hạn ở <strong>${escHtml(v.severity_cap)}</strong> (khai báo ${escHtml(v.severity_claimed || '—')}).</div>` : ''}
+    ${poc ? `${poc.curl ? ptCode(poc.curl, 'PoC (curl)') : ''}${poc.steps ? ptCode(poc.steps, 'Các bước tái hiện') : ''}` : ''}
+    ${canReplay ? `<div class="mt-8"><button class="btn btn-ghost btn-sm" onclick="ptReplayPoc('${jsStr(poc.replay_traffic_id)}')">↻ Replay PoC</button></div><div id="pf-replay-result"></div>` : ''}`;
+}
+async function ptReplayPoc(tid) {
+  const box = document.getElementById('pf-replay-result');
+  if (box) box.innerHTML = '<div class="text-sm">Đang replay...</div>';
+  try {
+    const r = await api(`/api/pentest/traffic/${encodeURIComponent(tid)}/replay`, { method: 'POST' });
+    if (box) box.innerHTML = `<div class="notice" style="margin-top:8px;">✅ Replay — status <strong>${escHtml(r.status_code)}</strong></div>${r.response_preview ? ptCode(r.response_preview, 'Response preview') : ''}`;
+  } catch (e) { if (box) box.innerHTML = `<div class="notice warn" style="margin-top:8px;">Lỗi replay: ${escHtml(e.message)}</div>`; }
+}
+// Egress bị chặn: dữ liệu thật từ TrafficEntry(source="egress_denied") qua /runtime (gateway KHÔNG tạo AgentStep).
+function ptEgressForStep(s) {
+  const d = (ptState.runtime && ptState.runtime.egress_denied) || null;
+  if (!d || !s || !s.id) return [];
+  return (d.recent || []).filter(x => x.step && x.step === s.id);
+}
+function renderEgressDenied(rt) {
+  const d = rt && rt.egress_denied;
+  if (!d || !d.count) return '';
+  return `<div class="card" style="border-color:color-mix(in srgb,var(--critical) 40%,var(--border));">
+    <label style="margin:0 0 8px;color:var(--critical);">🚧 Egress bị chặn (${escHtml(d.count)})</label>
+    <div class="table-wrap"><table><thead><tr><th>Đích</th><th width="130">Loại</th><th>Lý do</th><th width="160">Thời gian</th></tr></thead><tbody>
+    ${(d.recent || []).map(x => `<tr><td class="text-mono text-sm" style="word-break:break-all;">${escHtml(x.target || x.host || '—')}</td><td>${ptBadge(x.kind || 'denied', 'var(--critical)')}</td><td class="text-sm" style="word-break:break-word;">${escHtml(x.reason || '—')}</td><td class="text-sm">${fmtDate(x.created_at)}</td></tr>`).join('')}
+    </tbody></table></div>${d.count > (d.recent || []).length ? `<div class="field-hint">Hiển thị ${escHtml((d.recent || []).length)}/${escHtml(d.count)} sự kiện gần nhất.</div>` : ''}</div>`;
+}
+
+// ─── P2-17: attack graph (tab của engagement) ─────────────────
+async function loadEngagementGraph() {
+  const el = document.getElementById('pt-eng-graph-body');
+  if (!el) return;
+  const id = ptState.curEngId;
+  el.innerHTML = SKELETON_HTML;
+  try {
+    const q = ptState.graphKind ? `?kind=${encodeURIComponent(ptState.graphKind)}&limit=500` : '?limit=500';
+    const g = await api(`/api/pentest/engagements/${id}/graph${q}`);
+    if (ptState.curEngId !== id) return;
+    ptState.graph = g;
+    renderEngagementGraph();
+  } catch (e) { el.innerHTML = `<div class="empty-state"><p style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p></div>`; }
+}
+function ptGraphKind(sel) { ptState.graphKind = sel.value; loadEngagementGraph(); }
+function renderEngagementGraph() {
+  const el = document.getElementById('pt-eng-graph-body');
+  const g = ptState.graph || { nodes: [], edges: [] };
+  const KINDS = ['host', 'service', 'endpoint', 'param', 'technology', 'credential', 'finding', 'vuln_hypothesis'];
+  const byId = {}; g.nodes.forEach(n => { byId[n.id] = n; });
+  const counts = {}; g.nodes.forEach(n => { counts[n.kind] = (counts[n.kind] || 0) + 1; });
+  const LIM = 300;
+  const label = id => byId[id] ? `${byId[id].kind}:${byId[id].key}` : String(id).slice(0, 8);
+  el.innerHTML = `
+    <div class="card">
+      <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+        <div><label style="margin:0;">🕸 Attack graph (${escHtml(g.nodes.length)} node, ${escHtml(g.edges.length)} cạnh)</label>
+          <div class="pt-chips" style="margin-top:6px;">${Object.keys(counts).sort().map(k => `<span class="tag">${escHtml(k)} ${escHtml(counts[k])}</span>`).join('') || ''}</div></div>
+        <select style="width:auto;" onchange="ptGraphKind(this)"><option value="">Mọi loại node</option>
+          ${KINDS.map(k => `<option value="${escHtml(k)}" ${ptState.graphKind === k ? 'selected' : ''}>${escHtml(k)}</option>`).join('')}</select>
+      </div>
+      ${g.nodes.length >= 500 ? `<div class="field-hint" style="margin-top:8px;">Chỉ hiển thị tối đa 500 node — lọc theo loại để xem thêm.</div>` : ''}
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div class="table-wrap" style="max-height:420px;overflow:auto;"><table><thead><tr><th width="120">Loại</th><th>Key</th><th width="90">Tin cậy</th><th width="110">Scope</th></tr></thead><tbody>
+        ${g.nodes.length ? g.nodes.slice(0, LIM).map(n => `<tr>
+          <td><span class="tag">${escHtml(n.kind)}</span></td>
+          <td class="text-mono text-sm" style="word-break:break-all;">${escHtml(n.key)}</td>
+          <td class="text-mono">${n.confidence != null ? escHtml(Number(n.confidence).toFixed(2)) : '—'}</td>
+          <td>${n.in_scope ? ptBadge('in scope', 'var(--low)') : ptBadge('ngoài scope', 'var(--critical)')}</td>
+        </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state" style="padding:24px;"><p>Chưa có node — graph được dựng khi agent chạy công cụ (arch graph hoặc shadow mode).</p></div></td></tr>`}
+      </tbody></table></div>
+      ${g.nodes.length > LIM ? `<div class="field-hint" style="padding:8px 16px;">Hiển thị ${LIM}/${escHtml(g.nodes.length)} node đầu.</div>` : ''}
+    </div>
+    ${g.edges.length ? `<div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);"><label style="margin:0;">Cạnh (${escHtml(g.edges.length)})</label></div>
+      <div class="table-wrap" style="max-height:360px;overflow:auto;"><table><thead><tr><th>Từ</th><th width="150">Quan hệ</th><th>Đến</th></tr></thead><tbody>
+        ${g.edges.slice(0, LIM).map(e => `<tr><td class="text-mono text-sm" style="word-break:break-all;">${escHtml(label(e.src))}</td><td>${ptBadge(e.rel, 'var(--info)')}</td><td class="text-mono text-sm" style="word-break:break-all;">${escHtml(label(e.dst))}</td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}`;
+}
+
 // Lý do dừng: backend ghi vào run.error_message (agent._trigger_stop) — rỗng nghĩa là kill switch thủ công.
 // Không đoán từ trạng thái engagement hiện tại (có thể đã đổi sau khi run dừng).
 function ptStopReason(r) {
@@ -6226,15 +6477,25 @@ function renderRunDetail() {
   const engTok = ptState.curEng ? ptState.curEng.max_tokens : null;
   const pending = ptState.approvals.filter(a => a.status === 'PENDING');
   const active = ptActive(r.status);
-  el.innerHTML = `
+  // F3: thanh công cụ (menu báo cáo + bộ lọc include) dựng MỘT lần mỗi run; SSE chỉ vẽ lại vùng #pt-run-dyn
+  let dyn = document.getElementById('pt-run-dyn');
+  if (!dyn || el.dataset.run !== String(r.id)) {
+    el.innerHTML = `<div id="pt-run-toolbar" class="mb-16">${renderReportMenu()}</div><div id="pt-run-dyn"></div>`;
+    el.dataset.run = String(r.id);
+    dyn = document.getElementById('pt-run-dyn');
+  }
+  const openSteps = new Set([...dyn.querySelectorAll('details.pt-step[open]')].map(d => d.dataset.step));
+  const scrollY = window.scrollY;
+  dyn.innerHTML = `
     <div class="flex-between mb-16" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">
       <div style="min-width:0;">
         <div class="pt-chips">${ptRunStatusBadge(r.status)}${active ? '<span class="vg-live-dot"></span>' : ''}<span class="tag">run #${escHtml(r.run_number)}</span>${ptBadge(r.mode || '—', 'var(--info)')}</div>
         <h1 style="margin:8px 0 0;font-size:19px;word-break:break-word;">${escHtml(r.goal)}</h1>
         <div class="text-mono text-sm" style="color:var(--text3);margin-top:4px;word-break:break-all;">🎯 ${escHtml((r.targets || []).join(', ') || 'tự tìm trong scope')}</div>
       </div>
-      ${active && canWrite() ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}
+      <div class="flex" style="flex-wrap:wrap;align-items:flex-start;">${active && canWrite() ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}</div>
     </div>
+    ${renderRuntimeCard(ptState.runtime)}
     ${active && (prog.phase || prog.message || prog.current_tool) ? `<div class="card" style="margin-bottom:12px;">
       <div class="flex" style="flex-wrap:wrap;"><span class="vg-live-dot"></span><strong>${escHtml(prog.phase || 'đang chạy')}</strong>${prog.message ? ' — ' + escHtml(prog.message) : ''}</div>
       ${prog.current_tool ? `<div class="text-mono text-sm" style="margin-top:4px;color:var(--text2)">🔧 ${escHtml(prog.current_tool)}</div>` : ''}
@@ -6255,6 +6516,7 @@ function renderRunDetail() {
       ${pending.map(a => `<div class="pt-approval">
         <div class="pt-chips" style="margin-bottom:8px;"><strong class="text-mono">${escHtml(a.tool_name)}</strong>${ptRiskBadge(a.risk_tier)}<span class="tag">bước #${escHtml(a.step_number)}</span></div>
         ${a.rationale ? `<div class="text-sm" style="margin-bottom:8px;color:var(--text2)">💭 ${escHtml(a.rationale)}</div>` : ''}
+        ${renderApprovalContext(a.context)}
         ${ptCode(a.tool_input, 'Tham số (tool_input)')}
         <div class="flex mt-8" ${canWrite() ? '' : 'hidden'}>
           <button class="btn btn-sm" style="background:var(--low);color:#05210f;border:none;" onclick="decideApproval('${jsStr(a.id)}',true)">✓ Duyệt</button>
@@ -6263,32 +6525,45 @@ function renderRunDetail() {
       </div>`).join('')}
     </div>` : ''}
 
+    ${renderEgressDenied(ptState.runtime)}
+    ${renderPtg(ptState.tasks)}
+
     <div class="card">
       <label style="margin:0 0 10px;">🧭 Dòng thời gian (${ptState.steps.length} bước)</label>
-      ${ptState.steps.length ? `<div class="pt-timeline">${ptState.steps.map(renderStep).join('')}</div>`
+      ${ptState.steps.length ? `<div class="pt-timeline">${ptState.steps.map(st => renderStep(st)).join('')}</div>`
       : `<div class="empty-state" style="padding:24px;"><p>${active ? 'Agent đang khởi động — các bước sẽ xuất hiện ở đây...' : 'Chưa có bước nào'}</p></div>`}
     </div>
 
     <div class="card" style="padding:0;overflow:hidden;">
       <div style="padding:14px 16px;border-bottom:1px solid var(--border);"><label style="margin:0;">🔎 Findings (${ptState.findings.length})</label></div>
-      <div class="table-wrap"><table><thead><tr><th width="100">Severity</th><th>Tiêu đề</th><th>Target</th><th width="130">Độ tin cậy</th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th width="100">Severity</th><th>Tiêu đề</th><th>Target</th><th width="170">Độ tin cậy</th></tr></thead><tbody>
         ${ptState.findings.length ? ptState.findings.map(f => `<tr class="vuln-row" onclick="openPentestFindingDrawer('${jsStr(f.id)}')">
           <td>${psevBadge(f.severity)}</td>
           <td style="word-break:break-word;">${escHtml(f.title)}${f.cve ? ` <span class="text-mono text-sm" style="color:var(--info)">${escHtml(f.cve)}</span>` : ''}</td>
           <td class="text-mono text-sm" style="word-break:break-all;">${escHtml(f.target || '—')}</td>
-          <td>${ptConfBadge(f.confidence)}${f.validator ? `<div class="text-sm text-mono" style="color:var(--text3)">${escHtml(f.validator)}</div>` : ''}</td>
+          <td>${ptConfBadge(f.confidence)}${ptValBadge(f.validation)}${ptCvssBadge(f)}${f.validator ? `<div class="text-sm text-mono" style="color:var(--text3)">${escHtml(f.validator)}</div>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="4"><div class="empty-state" style="padding:24px;"><p>Chưa có finding</p></div></td></tr>`}
       </tbody></table></div>
     </div>
   `;
+  dyn.querySelectorAll('details.pt-step').forEach(d => { if (openSteps.has(d.dataset.step)) { d.open = true; d.classList.remove('vg-enter'); } });
+  if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
+}
+// P2-14 sẽ điền ApprovalRequest.context {source_excerpt, injection_signals}; thiếu thì không hiện gì. Mọi giá trị là dữ liệu do target tác động → escape.
+function renderApprovalContext(c) {
+  if (!c || typeof c !== 'object') return '';
+  const sigs = Array.isArray(c.injection_signals) ? c.injection_signals : [];
+  return `${sigs.length ? `<div class="notice warn" style="margin:0 0 8px;">⚠️ <strong>Tín hiệu prompt-injection (${escHtml(sigs.length)})</strong>
+      <ul style="margin:6px 0 0 18px;">${sigs.slice(0, 10).map(x => `<li class="text-sm text-mono" style="word-break:break-word;">${escHtml(typeof x === 'string' ? x : ptPretty(x))}</li>`).join('')}</ul></div>` : ''}
+    ${c.source_excerpt ? ptCode(c.source_excerpt, 'Trích đoạn nguồn (đầu ra không tin cậy)') : ''}`;
 }
 function renderStep(s) {
-  return `<details class="pt-step vg-enter">
+  return `<details class="pt-step vg-enter" data-step="${escHtml(s.step_number)}">
     <summary>
       <div class="pt-step-head">
         <span class="text-mono" style="color:var(--text3);">#${escHtml(s.step_number)}</span>
         <strong class="text-mono">${escHtml(s.tool_name || '—')}</strong>
-        <span class="pt-chips">${ptRiskBadge(s.risk_tier)}${ptDecidedBadge(s.decided_by)}${ptOutcomeBadge(s.outcome)}</span>
+        <span class="pt-chips">${ptRiskBadge(s.risk_tier)}${ptDecidedBadge(s.decided_by)}${ptOutcomeBadge(s.outcome)}${ptEgressForStep(s).length ? ptBadge('🚧 egress denied ×' + ptEgressForStep(s).length, 'var(--critical)') : ''}</span>
       </div>
       ${s.thought ? `<div class="text-sm" style="margin-top:6px;color:var(--text2);line-height:1.5;">💭 ${escHtml(String(s.thought).slice(0, 180))}${String(s.thought).length > 180 ? '…' : ''}</div>` : ''}
     </summary>
@@ -6337,6 +6612,10 @@ async function openPentestFindingDrawer(id) {
       <dt>Target</dt><dd class="text-mono">${escHtml(f.target || '—')}</dd>
       <dt>Trạng thái</dt><dd>${escHtml(f.status || '—')}</dd>
       <dt>Độ tin cậy</dt><dd>${ptConfBadge(f.confidence)}${f.validator ? ` <span class="text-mono text-sm">${escHtml(f.validator)}</span>` : ''}</dd>
+      ${f.cvss_v4_score != null ? `<dt>CVSS v4</dt><dd>${ptCvssBadge(f)}${f.cvss_v4_vector ? `<div class="text-mono text-sm" style="word-break:break-all;color:var(--text2);">${escHtml(f.cvss_v4_vector)}</div>` : ''}</dd>` : ''}
+      ${f.wstg_id ? `<dt>WSTG</dt><dd class="text-mono">${escHtml(f.wstg_id)}</dd>` : ''}
+      ${f.attack_technique ? `<dt>ATT&amp;CK</dt><dd class="text-mono">${escHtml(f.attack_technique)}</dd>` : ''}
+      ${f.vuln_class ? `<dt>Lớp lỗi</dt><dd class="text-mono">${escHtml(f.vuln_class)}${f.param ? ' · ' + escHtml(f.param) : ''}</dd>` : ''}
       ${f.cwe ? `<dt>CWE</dt><dd class="text-mono">${escHtml(f.cwe)}</dd>` : ''}
       ${f.cve ? `<dt>CVE</dt><dd class="text-mono" style="color:var(--info)">${escHtml(f.cve)}</dd>` : ''}
     </dl>
@@ -6344,6 +6623,7 @@ async function openPentestFindingDrawer(id) {
     ${f.reproduction ? `<div class="separator"></div><label>Tái hiện</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.reproduction)}</div>` : ''}
     ${f.remediation ? `<div class="separator"></div><label>Khắc phục</label><div class="text-sm" style="white-space:pre-wrap;line-height:1.7;">${escHtml(f.remediation)}</div>` : ''}
     ${f.evidence ? `<div class="separator"></div><label>Bằng chứng</label>${ptCode(f.evidence)}` : ''}
+    ${renderValidation(f)}
     ${f.evidence_traffic_id ? `<div class="mt-8"><button class="btn btn-ghost btn-sm" onclick="closePentestFindingDrawer();openTrafficDrawer('${jsStr(f.evidence_traffic_id)}',{run:true})">🌐 Xem traffic bằng chứng</button></div>` : ''}
     <div class="separator"></div>
     <label>Gắn bằng chứng (traffic của run)</label>
