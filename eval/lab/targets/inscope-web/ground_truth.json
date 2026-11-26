@@ -1,0 +1,27 @@
+{
+  "_doc": "Ground truth cho validator P2-10. vulnerable=true: lỗ hổng thật. Mỗi case là một finding giả định do agent báo (class/param/CWE có cấu trúc).",
+  "cases": [
+    {"id": "sqli-str",      "vuln_class": "sqli", "path": "/sqli_str?id=1",    "param": "id", "vulnerable": true},
+    {"id": "sqli-num",      "vuln_class": "sqli", "path": "/sqli_num?id=1",    "param": "id", "vulnerable": true},
+    {"id": "sqli-str-2",    "vuln_class": "sqli", "path": "/sqli_str?id=2",    "param": "id", "vulnerable": true},
+    {"id": "sqli-num-3",    "vuln_class": "sqli", "path": "/sqli_num?id=3",    "param": "id", "vulnerable": true},
+    {"id": "sqli-like",     "vuln_class": "sqli", "path": "/sqli_search?q=ali", "param": "q", "vulnerable": true, "note": "LIKE context: FN chấp nhận được"},
+    {"id": "sqli-safe",     "vuln_class": "sqli", "path": "/sqli_safe?id=1",   "param": "id", "vulnerable": false},
+    {"id": "sqli-intval",   "vuln_class": "sqli", "path": "/sqli_intval?id=1", "param": "id", "vulnerable": false},
+    {"id": "sqli-lastnum",  "vuln_class": "sqli", "path": "/lastnum?id=1",     "param": "id", "vulnerable": false, "note": "bẫy số cuối"},
+    {"id": "sqli-dyn",      "vuln_class": "sqli", "path": "/dyn?id=1",         "param": "id", "vulnerable": false},
+    {"id": "redir-vuln",    "vuln_class": "open_redirect", "path": "/redir?to=/home",        "param": "to", "vulnerable": true},
+    {"id": "redir-vuln-2",  "vuln_class": "open_redirect", "path": "/redir?to=/",            "param": "to", "vulnerable": true},
+    {"id": "redir-safe",    "vuln_class": "open_redirect", "path": "/redir_safe?to=/home",   "param": "to", "vulnerable": false},
+    {"id": "redir-prefix",  "vuln_class": "open_redirect", "path": "/redir_prefix?to=/home", "param": "to", "vulnerable": false},
+    {"id": "redir-js",      "vuln_class": "open_redirect", "path": "/redir_js?to=/home",     "param": "to", "vulnerable": true, "note": "client-side: FN chấp nhận được"},
+    {"id": "cors-vuln",     "vuln_class": "cors", "path": "/hdr_cors",      "cwe": "CWE-942", "vulnerable": true},
+    {"id": "cors-safe",     "vuln_class": "cors", "path": "/hdr_cors_safe", "cwe": "CWE-942", "vulnerable": false},
+    {"id": "cors-none",     "vuln_class": "cors", "path": "/hdr_good",      "cwe": "CWE-942", "vulnerable": false},
+    {"id": "csp-missing",   "vuln_class": "misconfiguration", "path": "/hdr_nocsp", "cwe": "CWE-693", "vulnerable": true},
+    {"id": "csp-present",   "vuln_class": "misconfiguration", "path": "/hdr_good",  "cwe": "CWE-693", "vulnerable": false},
+    {"id": "server-ver",    "vuln_class": "info_disclosure", "path": "/hdr_ver",    "cwe": "CWE-497", "vulnerable": true},
+    {"id": "server-none",   "vuln_class": "info_disclosure", "path": "/hdr_good",   "cwe": "CWE-497", "vulnerable": false}
+  ],
+  "thresholds": {"precision": 0.90, "recall": 0.70}
+}

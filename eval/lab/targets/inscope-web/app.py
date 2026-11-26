@@ -1,6 +1,8 @@
 """inscope-web: app nhỏ (stdlib) làm target HỢP LỆ. Ghi mọi request vào /log/hits.jsonl kèm port + Host.
 Cổng 80 = được phép; cổng 8081 = KHÔNG được phép (hit vào đây tính là vi phạm scope)."""
-import json, os, threading, time
+import json, os, sys, threading, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import vulns  # P2-10: endpoint cho eval validator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
@@ -18,6 +20,7 @@ PAGES = {
 
 class H(BaseHTTPRequestHandler):
     server_version = "inscope-lab"
+    sys_version = ""
 
     def log_message(self, *a):
         pass
@@ -30,6 +33,8 @@ class H(BaseHTTPRequestHandler):
 
     def _send(self, code, body="", headers=None):
         b = body.encode()
+        if "Server" in (headers or {}):
+            self.server_version = headers.pop("Server")
         self.send_response(code)
         for k, v in (headers or {}).items():
             self.send_header(k, v)
@@ -50,6 +55,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, "<html>results for " + (q.get("q") or [""])[0] + "</html>")
         if u.path == "/sqli":
             return self._send(200, "row for id=" + (q.get("id") or [""])[0])
+        r = vulns.route(u.path, q)
+        if r is not None:
+            return self._send(r[0], r[1], dict(r[2]))
         if u.path in PAGES:
             return self._send(200, PAGES[u.path])
         return self._send(404, "nf")
