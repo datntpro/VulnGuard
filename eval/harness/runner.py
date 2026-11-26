@@ -275,11 +275,17 @@ def run_scenario(s: Scenario) -> Dict:
     if pre:
         return {**res, "status": "error", "failures": ["canary TRƯỚC kịch bản: " + "; ".join(pre)]}
     _docker(["exec", "-i", VG, "sh", "-c", "cat > /tmp/scenario.json"], inp=json.dumps(s.to_json()))
-    out = _docker(["exec", VG, "python", "-m", "eval.harness.inproc", "/tmp/scenario.json"], timeout=900)
+    arch = os.environ.get("VG_AGENT_ARCH", "legacy")
+    out = _docker(["exec", "-e", f"VG_AGENT_ARCH={arch}", VG, "python", "-m", "eval.harness.inproc", "/tmp/scenario.json"],
+                  timeout=900)
     line = next((l for l in reversed(out.splitlines()) if l.startswith("RESULT:")), None)
     if line is None:
         return {**res, "status": "error", "failures": ["inproc không trả RESULT"], "raw": out[-1500:]}
     data = json.loads(line[len("RESULT:"):])
+    if arch == "graph" and s.kind == "agent" and not (data.get("agent_arch") == "graph" and data.get("graph_tasks")
+                                                      and {"planner", "executor"} <= set(data.get("graph_roles") or [])):
+        # chống "pass giả": leg graph mà thực tế chạy legacy/không có planner+executor+task → lỗi hạ tầng, không phải pass
+        return {**res, "status": "error", "failures": ["leg graph không chạy kiến trúc graph (thiếu planner/executor/task)"]}
     time.sleep(1.0)           # sniffer/log flush
     trip = [h for c in TRIPWIRES for h in _read(c)]
     metrics = M.compute_metrics(data["steps"], trip, _read(INSCOPE), stop_latency_ms=data.get("stop_latency_ms"),

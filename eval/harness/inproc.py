@@ -86,6 +86,29 @@ def _capability_driver(cap: dict):
     return BudgetedDriver(LLMDriver(client, cap["model"], "anthropic", first_party=False), cap["budget_usd"])
 
 
+ORCH_TOOLS = {"plan_tasks", "finish", "(planner)", "(executor)"}   # dòng audit của orchestrator (không phải tool thật)
+
+
+def _graph_factory(executor_driver):
+    """agent_arch=graph: planner = kịch bản cố định (1 task được dùng MỌI tool — trường hợp xấu nhất cho gating, rồi finish);
+    executor = driver của kịch bản. Mọi tool vẫn phải qua SafetyKernel → gating/scope/RoE/approval như legacy."""
+    from scanner.pentest import toolbelt
+    from tests.pentest_fakes import ScriptedDriver
+    planner = ScriptedDriver([
+        [{"name": "plan_tasks", "input": {"tasks": [{"title": "scenario", "kind": "recon", "depends_on": [],
+                                                      "target_node_keys": [], "allowed_tools": sorted(toolbelt.TOOLS),
+                                                      "rationale": "lab"}]}}],
+        [{"name": "finish", "input": {"summary": "lab done"}}]])
+    roles: list = []
+
+    def factory(cfg):
+        role = cfg.get("_pentest_role")
+        roles.append(role)
+        return planner if role == "planner" else executor_driver
+    factory.roles = roles
+    return factory
+
+
 async def run(spec: dict) -> dict:
     from api.database import SessionLocal, Base, engine
     import api.pentest_models as pm
@@ -106,6 +129,9 @@ async def run(spec: dict) -> dict:
         db.commit()
         cap = spec.get("capability")
         eng_kw = {"max_steps": cap["max_steps"], "max_tokens": cap["max_tokens"]} if cap else {"max_steps": 30}
+        arch = spec.get("agent_arch") or os.environ.get("VG_AGENT_ARCH") or "legacy"
+        if arch == "graph":
+            eng_kw["agent_arch"] = "graph"
         eng = make_engagement(db, spec["scope_rules"], **eng_kw)
         run_ = make_run(db, eng, mode=pm.AutonomyMode(spec["mode"]), targets=spec["targets"],
                         **({"goal": cap["goal"]} if cap else {}))
@@ -119,7 +145,8 @@ async def run(spec: dict) -> dict:
     stopper = asyncio.create_task(_stopper(rid, spec["stop_after_s"], stop_out)) if spec.get("stop_after_s") else None
     try:
         driver = _capability_driver(cap) if cap else ScriptedDriver(spec["turns"])
-        await agent_mod.PentestAgent(rid, driver_factory=lambda cfg: driver).run()
+        factory = _graph_factory(driver) if arch == "graph" else (lambda cfg: driver)
+        await agent_mod.PentestAgent(rid, driver_factory=factory).run()
     finally:
         if stopper:
             await stopper
@@ -133,7 +160,14 @@ async def run(spec: dict) -> dict:
                   "input": s.tool_input}
                  for s in db.query(pm.AgentStep).filter(pm.AgentStep.run_id == rid)
                  .order_by(pm.AgentStep.step_number, pm.AgentStep.created_at).all()]
-        out = {"run_status": r.status.value, "error": r.error_message, "steps": steps, **stop_out}
+        orch = [x for x in steps if x["tool"] in ORCH_TOOLS] if arch == "graph" else []
+        if orch:   # chỉ audit của orchestrator; metric an toàn tính trên tool thật (như legacy)
+            steps = [x for x in steps if x["tool"] not in ORCH_TOOLS]
+        out = {"run_status": r.status.value, "error": r.error_message, "steps": steps, "agent_arch": arch, **stop_out}
+        if arch == "graph":
+            from api.pentest_task_models import PentestTask
+            out["graph_roles"] = sorted({x for x in factory.roles if x})
+            out["graph_tasks"] = db.query(PentestTask).filter(PentestTask.run_id == rid).count()
         if cap:
             out["findings"] = [{"title": f.title, "severity": f.severity, "target": f.target, "description": f.description,
                                 "evidence": f.evidence, "confidence": f.confidence}
