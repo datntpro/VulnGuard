@@ -94,3 +94,4 @@ eval/out/
 
 # P1-7: benchmark XBOW dựng tại chỗ (flag ngẫu nhiên, không commit)
 eval/lab/xbow/out/
+eval/lab/apb/out/

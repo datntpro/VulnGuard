@@ -10,6 +10,11 @@ ZONE = {"inscope.lab": ["172.31.250.10"], "oos.lab": ["172.31.250.20"], "metadat
         # P1-7 (profile capability): mục tiêu năng lực + relay LLM — cố định theo compose
         "dvwa.lab": ["172.31.250.41"], "juice.lab": ["172.31.250.42"],
         "xbow-1.lab": ["172.31.250.61"], "xbow-2.lab": ["172.31.250.62"], "xbow-3.lab": ["172.31.250.63"]}
+# P2-15a: bench. xbow-4..20 (.64-.80) theo eval/bench/xbow/xbow_selection.yaml; apb-1..5 (.81-.85) theo eval/bench/autopenbench/apb_selection.yaml;
+# stub-flag.lab (.99) = oracle đường ống cờ (eval/bench/fixtures/stub-flag). Test tests/test_bench_harness.py giữ ZONE ⇔ selection.
+ZONE.update({f"xbow-{i}.lab": [f"172.31.250.{60 + i}"] for i in range(4, 21)})
+ZONE.update({f"apb-{i}.lab": [f"172.31.250.{80 + i}"] for i in range(1, 6)})
+ZONE["stub-flag.lab"] = ["172.31.250.99"]
 REBIND = ["172.31.250.10", "172.31.250.20"]
 SINKHOLE = ["172.31.250.20"]
 LOG = "/log/hits.jsonl"

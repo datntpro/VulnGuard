@@ -13,30 +13,35 @@ import tarfile
 import urllib.request
 from typing import Dict, List, Optional
 
+from eval.bench import isolation
+
 REPO = "KeygraphHQ/xbow-validation-benchmarks"
 PINNED_SHA = "07721361bc2464a7625a27dd1f0b5570f75f3db5"
-LAB_NETWORK = "vglab_lab_net"          # project `vglab` + network `lab_net` của docker-compose.lab.yml
+LAB_NETWORK = isolation.LAB_NETWORK  # project `vglab` + network `lab_net` của docker-compose.lab.yml
 OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "lab", "xbow", "out")
 
-# Mặc định: 3 benchmark web đơn giản, mỗi cái 1 service lộ cổng. Danh sách CHỈNH TAY được (level không có trong bản đã gỡ hint —
-# chủ repo rà lại sau lần chạy đầu). `ip` phải khớp ZONE trong eval/lab/dns/dns_server.py.
-BENCHMARKS: Dict[str, Dict] = {
-    "XBEN-004-24": {"ip": "172.31.250.61", "name": "xbow-1.lab"},
-    "XBEN-005-24": {"ip": "172.31.250.62", "name": "xbow-2.lab"},
-    "XBEN-007-24": {"ip": "172.31.250.63", "name": "xbow-3.lab"},
-}
+SELECTION_FILE = os.path.join(os.path.dirname(__file__), "..", "bench", "xbow", "xbow_selection.yaml")
+
+
+def load_selection(path: str = SELECTION_FILE) -> Dict[str, Dict]:
+    """P2-15a: 20 challenge ở eval/bench/xbow/xbow_selection.yaml → {id: {ip, name, category, core, capability}}. `ip` khớp ZONE của DNS lab."""
+    import yaml
+    with open(path) as f:
+        rows = yaml.safe_load(f)["challenges"]
+    out = {r["id"]: {k: v for k, v in r.items() if k != "id"} for r in rows}
+    if len(out) != len(rows):
+        raise ValueError("xbow_selection.yaml: id trùng")
+    return out
+
+
+SELECTION: Dict[str, Dict] = load_selection()
+# 3 task năng lực cũ (P1-7, eval.harness.capability.TASKS) = các mục `capability: true`; phần còn lại thuộc bench (eval.harness.bench).
+BENCHMARKS: Dict[str, Dict] = {k: {"ip": v["ip"], "name": v["name"]} for k, v in SELECTION.items() if v.get("capability")}
 FLAG_RE = re.compile(r"flag\{vg-[0-9a-f]{32}\}")
 
 
 def new_flag() -> str:
     return "flag{vg-%s}" % secrets.token_hex(16)
-
-
-def _container_port(ports: List) -> Optional[int]:
-    for p in ports or []:
-        s = str(p).split("/")[0]
-        return int(s.rsplit(":", 1)[-1])
-    return None
 
 
 def _with_flag_env(svc: Dict) -> None:
@@ -62,15 +67,6 @@ def _with_flag_env(svc: Dict) -> None:
         svc["build"] = b
 
 
-def _strip_health(svc: Dict) -> None:
-    """Healthcheck của benchmark hay dùng công cụ image không có (XBEN-007: `curl` trên python:slim) ⇒ `up --wait` lỗi ⇒ cả run chết.
-    Bỏ healthcheck; sự sẵn sàng được harness thăm dò bằng HTTP từ vg-under-test (capability.wait_ready)."""
-    svc.pop("healthcheck", None)
-    dep = svc.get("depends_on")
-    if isinstance(dep, dict):
-        svc["depends_on"] = {k: {**(v or {}), "condition": "service_started"} for k, v in dep.items()}
-
-
 def flag_is_injected(rendered: Dict, flag: str) -> bool:
     """`docker compose config` đã thế biến: mọi service có build phải nhận cờ qua env HOẶC build arg, và service lộ cổng phải có env."""
     ok = False
@@ -85,56 +81,53 @@ def flag_is_injected(rendered: Dict, flag: str) -> bool:
 
 
 def transform_compose(cfg: Dict, ip: str) -> Dict:
-    """Bỏ mọi `ports` (không publish ra host), đặt service lộ cổng lên lab_net (IP cố định) + mạng nội bộ của benchmark
-    (`internal: true`); các service còn lại (DB...) CHỈ ở mạng nội bộ. Trả (compose mới); cổng web ở `x-vg-entry-port`."""
-    out = {k: v for k, v in cfg.items() if k not in ("networks", "services", "name")}
-    entry = [n for n, s in cfg["services"].items() if s.get("ports")]
-    if len(entry) != 1:
-        raise ValueError(f"cần đúng 1 service lộ cổng, có {entry}")
-    out["networks"] = {"lab_net": {"external": True, "name": LAB_NETWORK}, "bench_internal": {"internal": True}}
-    out["services"] = {}
-    for name, svc in cfg["services"].items():
-        s = {k: v for k, v in svc.items() if k not in ("ports", "networks", "container_name", "network_mode", "privileged")}
-        _with_flag_env(s)
-        _strip_health(s)
-        if name == entry[0]:
-            s["expose"] = [str(_container_port(svc["ports"]))]
-            s["networks"] = {"lab_net": {"ipv4_address": ip}, "bench_internal": {}}
-            out["x-vg-entry-port"] = _container_port(svc["ports"])
-        else:
-            s["networks"] = {"bench_internal": {}}
-        out["services"][name] = s
+    """Viết lại cô lập (eval.bench.isolation) + đưa cờ ngẫu nhiên vào env/build arg của MỌI service. Trả compose mới; cổng web ở `x-vg-entry-port`."""
+    out = isolation.transform_compose(cfg, ip, LAB_NETWORK)
+    for svc in out["services"].values():
+        _with_flag_env(svc)
     return out
 
 
-def _host_source(v) -> bool:
-    """True nếu mục volumes là bind mount từ đường dẫn host (tuyệt đối, ~, .., hoặc long-syntax type=bind)."""
-    if isinstance(v, dict):
-        return v.get("type") == "bind" or _host_source(str(v.get("source") or ""))
-    src = str(v).split(":", 1)[0]
-    return src.startswith(("/", "~", "..", "$")) or (":" in str(v) and src.startswith("."))
-
-
 def assert_xbow_compose_safe(cfg: Dict, ip: str) -> None:
+    """Kiểm compose ĐÃ viết lại (phase post). Giữ tên + ngoại lệ cũ (LabSafetyError) cho harness P1-7."""
     from eval.harness.runner import LabSafetyError, _lab_ip
     import ipaddress
     if not _lab_ip(ipaddress.ip_address(ip)):
         raise LabSafetyError(f"xbow ip ngoài lab: {ip}")
-    nets = cfg.get("networks") or {}
-    if set(nets) != {"lab_net", "bench_internal"} or nets["bench_internal"].get("internal") is not True \
-            or nets["lab_net"].get("name") != LAB_NETWORK or nets["lab_net"].get("external") is not True:
-        raise LabSafetyError("xbow compose: networks phải là lab_net(external) + bench_internal(internal)")
-    for name, svc in (cfg.get("services") or {}).items():
-        for bad in ("ports", "privileged", "network_mode", "pid", "cap_add", "devices"):
-            if svc.get(bad):
-                raise LabSafetyError(f"xbow service {name}: `{bad}` bị cấm")
-        for v in svc.get("volumes") or []:
-            if "docker.sock" in str(v):
-                raise LabSafetyError(f"xbow service {name}: mount docker.sock bị cấm")
-            if _host_source(v):
-                raise LabSafetyError(f"xbow service {name}: bind mount từ host bị cấm: {v}")
-        if not set(svc.get("networks") or {}) <= {"lab_net", "bench_internal"}:
-            raise LabSafetyError(f"xbow service {name}: network lạ")
+    try:
+        isolation.assert_bench_compose_safe(cfg, [ip], "post")
+    except isolation.UnsafeCompose as e:
+        raise LabSafetyError(f"xbow compose: {e}") from e
+
+
+def fetch_composes(ids: List[str]) -> Dict[str, Dict]:
+    """Stream tarball ở SHA ghim và đọc CHỈ docker-compose.yml của `ids` (dừng sớm — tarball ~1.3 GB, không giải nén ra đĩa)."""
+    import yaml
+    want = {f"xbow-validation-benchmarks-{PINNED_SHA}/benchmarks/{i}/docker-compose.yml": i for i in ids}
+    found: Dict[str, Dict] = {}
+    url = f"https://codeload.github.com/{REPO}/tar.gz/{PINNED_SHA}"
+    with tarfile.open(fileobj=urllib.request.urlopen(url, timeout=120), mode="r|gz") as t:  # nosec B310 — URL cố định, https
+        for m in t:
+            if m.name in want and m.isfile():
+                found[want[m.name]] = yaml.safe_load(t.extractfile(m).read())
+                if len(found) == len(want):
+                    break
+    return found
+
+
+def lint(ids: Optional[List[str]] = None) -> List[str]:
+    """Chạy cô lập pre→transform→post trên compose upstream của selection. Trả danh sách lỗi (rỗng = sạch). Không build, không Docker."""
+    ids = ids or list(SELECTION)
+    errs: List[str] = []
+    cfgs = fetch_composes(ids)
+    for i in ids:
+        try:
+            if i not in cfgs:
+                raise RuntimeError("không có trong tarball ở SHA ghim")
+            isolation.rewrite_and_check(cfgs[i], SELECTION[i]["ip"])
+        except Exception as e:
+            errs.append(f"{i}: {type(e).__name__}: {e}")
+    return errs
 
 
 def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Dict[str, Dict]:
@@ -142,6 +135,9 @@ def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Di
     import tempfile
     import yaml
     ids = bench_ids or list(BENCHMARKS)
+    unknown = [i for i in ids if i not in SELECTION]
+    if unknown:
+        raise ValueError(f"không có trong selection: {unknown}")
     os.makedirs(out_dir, exist_ok=True)
     res: Dict[str, Dict] = {}
     with tempfile.TemporaryDirectory(prefix="xbow_") as tmp:
@@ -151,19 +147,24 @@ def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Di
             t.extractall(tmp, filter="data")
         root = os.path.join(tmp, f"xbow-validation-benchmarks-{PINNED_SHA}", "benchmarks")
         for bid in ids:
-            meta = BENCHMARKS[bid]
+            meta = {"ip": SELECTION[bid]["ip"], "name": SELECTION[bid]["name"]}
             dst = os.path.join(out_dir, bid)
             shutil.rmtree(dst, ignore_errors=True)
             shutil.copytree(os.path.join(root, bid), dst)
+            for dot in (".env", ".env.local"):                       # compose tự đọc .env của project dir ⇒ xoá (upstream không được đưa biến vào)
+                if os.path.isfile(os.path.join(dst, dot)):
+                    os.unlink(os.path.join(dst, dot))
             with open(os.path.join(dst, "docker-compose.yml")) as f:
-                cfg = transform_compose(yaml.safe_load(f), meta["ip"])
+                raw = yaml.safe_load(f)
+            isolation.assert_bench_compose_safe(raw, [meta["ip"]], "pre")      # từ chối TRƯỚC khi viết lại (fail closed)
+            cfg = transform_compose(raw, meta["ip"])
             assert_xbow_compose_safe({k: v for k, v in cfg.items() if k != "x-vg-entry-port"}, meta["ip"])
             with open(os.path.join(dst, "docker-compose.vglab.yml"), "w") as f:
                 yaml.safe_dump(cfg, f)
             flag = new_flag()
             with open(os.path.join(dst, "flag.txt"), "w") as f:
                 f.write(flag)
-            env = dict(os.environ, FLAG=flag)
+            env = isolation.minimal_env(FLAG=flag)
             rendered = json.loads(subprocess.run(["docker", "compose", "-f", "docker-compose.vglab.yml", "config", "--format", "json"],  # nosec B603 B607
                                                  cwd=dst, env=env, check=True, timeout=120, capture_output=True, text=True).stdout)
             if not flag_is_injected(rendered, flag):       # không có đường đưa cờ vào ⇒ benchmark vô nghĩa ⇒ từ chối

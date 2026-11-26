@@ -1,0 +1,27 @@
+# P2-15a (O9-style pin): 20 challenge XBOW (KeygraphHQ/xbow-validation-benchmarks @ eval.harness.xbow.PINNED_SHA) cho bench.
+# Chọn từ compose 1–2 service, không volume/cap/privileged/network_mode (lint: `python -m eval.harness.bench --lint-selection`).
+# Challenge nào không qua eval.bench.isolation thì BỎ khỏi danh sách này — KHÔNG nới danh sách từ chối.
+# `ip` ∈ 172.31.250.61-.80 và PHẢI khớp ZONE ở eval/lab/dns/dns_server.py. `capability: true` = 3 task cũ của P1-7 (eval.harness.capability).
+# `category`/`level`: bản upstream đã gỡ hint nên chưa có — chủ repo rà lại (level để trống).
+# `core: true` = tập nhỏ chạy ở job nhanh (suite `core`).
+challenges:
+  - {id: XBEN-004-24, name: xbow-1.lab, ip: 172.31.250.61, category: web, core: true,  capability: true}
+  - {id: XBEN-005-24, name: xbow-2.lab, ip: 172.31.250.62, category: web, core: true,  capability: true}
+  - {id: XBEN-007-24, name: xbow-3.lab, ip: 172.31.250.63, category: web, core: true,  capability: true}
+  - {id: XBEN-008-24, name: xbow-4.lab, ip: 172.31.250.64, category: web, core: true}
+  - {id: XBEN-009-24, name: xbow-5.lab, ip: 172.31.250.65, category: web, core: true}
+  - {id: XBEN-010-24, name: xbow-6.lab, ip: 172.31.250.66, category: web, core: true}
+  - {id: XBEN-011-24, name: xbow-7.lab, ip: 172.31.250.67, category: web, core: false}
+  - {id: XBEN-012-24, name: xbow-8.lab, ip: 172.31.250.68, category: web, core: false}
+  - {id: XBEN-013-24, name: xbow-9.lab, ip: 172.31.250.69, category: web, core: false}
+  - {id: XBEN-014-24, name: xbow-10.lab, ip: 172.31.250.70, category: web, core: false}
+  - {id: XBEN-015-24, name: xbow-11.lab, ip: 172.31.250.71, category: web, core: false}
+  - {id: XBEN-016-24, name: xbow-12.lab, ip: 172.31.250.72, category: web, core: false}
+  - {id: XBEN-017-24, name: xbow-13.lab, ip: 172.31.250.73, category: web, core: false}
+  - {id: XBEN-018-24, name: xbow-14.lab, ip: 172.31.250.74, category: web, core: false}
+  - {id: XBEN-019-24, name: xbow-15.lab, ip: 172.31.250.75, category: web, core: false}
+  - {id: XBEN-022-24, name: xbow-16.lab, ip: 172.31.250.76, category: web, core: false}
+  - {id: XBEN-023-24, name: xbow-17.lab, ip: 172.31.250.77, category: web, core: false}
+  - {id: XBEN-024-24, name: xbow-18.lab, ip: 172.31.250.78, category: web, core: false}
+  - {id: XBEN-025-24, name: xbow-19.lab, ip: 172.31.250.79, category: web, core: false}
+  - {id: XBEN-026-24, name: xbow-20.lab, ip: 172.31.250.80, category: web, core: false}
