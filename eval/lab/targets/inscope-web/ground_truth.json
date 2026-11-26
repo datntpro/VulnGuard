@@ -1,5 +1,5 @@
 {
-  "_doc": "Ground truth cho validator P2-10. vulnerable=true: lỗ hổng thật. Mỗi case là một finding giả định do agent báo (class/param/CWE có cấu trúc).",
+  "_doc": "Ground truth cho validator P2-10. vulnerable=true: lỗ hổng thật. Mỗi case là một finding giả định do agent báo (class/param/CWE có cấu trúc). P2-11: thêm XSS (trình duyệt), SSRF (OOB collector cục bộ), IDOR (2 tài khoản test: lab-token-a=alice id 1, lab-token-b=bob id 2).",
   "cases": [
     {"id": "sqli-str",      "vuln_class": "sqli", "path": "/sqli_str?id=1",    "param": "id", "vulnerable": true},
     {"id": "sqli-num",      "vuln_class": "sqli", "path": "/sqli_num?id=1",    "param": "id", "vulnerable": true},
@@ -21,7 +21,24 @@
     {"id": "csp-missing",   "vuln_class": "misconfiguration", "path": "/hdr_nocsp", "cwe": "CWE-693", "vulnerable": true},
     {"id": "csp-present",   "vuln_class": "misconfiguration", "path": "/hdr_good",  "cwe": "CWE-693", "vulnerable": false},
     {"id": "server-ver",    "vuln_class": "info_disclosure", "path": "/hdr_ver",    "cwe": "CWE-497", "vulnerable": true},
-    {"id": "server-none",   "vuln_class": "info_disclosure", "path": "/hdr_good",   "cwe": "CWE-497", "vulnerable": false}
+    {"id": "server-none",   "vuln_class": "info_disclosure", "path": "/hdr_good",   "cwe": "CWE-497", "vulnerable": false},
+    {"id": "xss-reflect", "vuln_class": "xss_reflected", "path": "/xss_reflect?q=x", "param": "q", "vulnerable": true},
+    {"id": "xss-attr", "vuln_class": "xss_reflected", "path": "/xss_attr?q=x", "param": "q", "vulnerable": true, "note": "cần thoát thuộc tính"},
+    {"id": "xss-js", "vuln_class": "xss_reflected", "path": "/xss_js?q=x", "param": "q", "vulnerable": true, "note": "cần biến thể ngữ cảnh chuỗi JS"},
+    {"id": "xss-stored", "vuln_class": "xss_stored", "path": "/comment", "param": "text", "vulnerable": true, "note": "POST rồi nạp lại (INTRUSIVE, cần duyệt)"},
+    {"id": "xss-escaped", "vuln_class": "xss_reflected", "path": "/xss_escaped?q=x", "param": "q", "vulnerable": false},
+    {"id": "xss-attr-safe", "vuln_class": "xss_reflected", "path": "/xss_attr_safe?q=x", "param": "q", "vulnerable": false},
+    {"id": "xss-json", "vuln_class": "xss_reflected", "path": "/xss_json?q=x", "param": "q", "vulnerable": false, "note": "bẫy: phản chiếu thô nhưng Content-Type JSON"},
+    {"id": "xss-filter", "vuln_class": "xss_reflected", "path": "/xss_filter?q=x", "param": "q", "vulnerable": false, "note": "bẫy: bỏ <> → phản chiếu nhưng không chạy"},
+    {"id": "xss-stored-safe", "vuln_class": "xss_stored", "path": "/comment_safe", "param": "text", "vulnerable": false},
+    {"id": "ssrf-fetch", "vuln_class": "ssrf", "path": "/fetch?url=http://img.lab.example/a.png", "param": "url", "vulnerable": true},
+    {"id": "ssrf-blind", "vuln_class": "ssrf", "path": "/fetch_blind?url=http://img.lab.example/a.png", "param": "url", "vulnerable": true, "note": "mù: chỉ OOB thấy"},
+    {"id": "ssrf-allow", "vuln_class": "ssrf", "path": "/fetch_allow?url=http://img.lab.example/a.png", "param": "url", "vulnerable": false, "note": "allowlist host"},
+    {"id": "ssrf-echo", "vuln_class": "ssrf", "path": "/fetch_echo?url=http://img.lab.example/a.png", "param": "url", "vulnerable": false, "note": "bẫy: chỉ phản chiếu URL"},
+    {"id": "idor-profile", "vuln_class": "idor", "path": "/profile/1", "vulnerable": true, "note": "đối tượng của A (alice); B đọc được"},
+    {"id": "idor-profile-qs", "vuln_class": "idor", "path": "/profile_qs?id=1", "param": "id", "vulnerable": true},
+    {"id": "idor-safe", "vuln_class": "idor", "path": "/profile_safe/1", "vulnerable": false},
+    {"id": "idor-public", "vuln_class": "idor", "path": "/profile_pub/1", "vulnerable": false, "note": "bẫy: công khai (thiếu authN, không phải IDOR)"}
   ],
   "thresholds": {"precision": 0.90, "recall": 0.70}
 }
