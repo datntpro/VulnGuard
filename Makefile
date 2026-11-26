@@ -2,7 +2,7 @@
 # VulnGuard — Makefile shortcuts
 # ─────────────────────────────────────────────
 
-.PHONY: help up down build logs scan pull-model clean
+.PHONY: help up down build logs scan pull-model clean pentest-images
 
 help:
 	@echo ""
@@ -77,3 +77,7 @@ scan:
 clean:
 	docker compose down -v
 	@echo "Cleaned up all containers and volumes"
+
+# P2-1: image sandbox cho Pentest Agent (xem docker/pentest-runner/)
+pentest-images:
+	./scripts/build_pentest_images.sh --self-test
