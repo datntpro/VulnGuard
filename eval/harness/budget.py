@@ -15,6 +15,8 @@ class BudgetedDriver:
         self.budget_usd = float(budget_usd)
         self.tokens_in = 0
         self.tokens_out = 0
+        self.tokens_cache_read = 0
+        self.tokens_cache_write = 0
         self.calls = 0
         self.usd = 0.0
         self.budget_exhausted = False
@@ -22,18 +24,20 @@ class BudgetedDriver:
     def __getattr__(self, name):          # native_tools, create, assistant_entry, tool_result_entries, model, ...
         return getattr(self._inner, name)
 
-    async def create(self, system, messages, native_tools):
+    async def create(self, system, messages, native_tools, **kw):
         if self.budget_exhausted or self.usd >= self.budget_usd:   # không bao giờ gọi thêm sau khi chạm trần
             self.budget_exhausted = True
             raise RuntimeError(f"budget {self.budget_usd:.2f} USD đã hết")
-        return await self._inner.create(system, messages, native_tools)
+        return await self._inner.create(system, messages, native_tools, **kw)
 
     def parse(self, raw):
         res = self._inner.parse(raw)
         self.calls += 1
         self.tokens_in += res.tokens_in
         self.tokens_out += res.tokens_out
-        self.usd += call_usd(self._model, res.tokens_in, res.tokens_out)
+        self.tokens_cache_read += res.tokens_cache_read
+        self.tokens_cache_write += res.tokens_cache_write
+        self.usd += call_usd(self._model, res.tokens_in, res.tokens_out, res.tokens_cache_read, res.tokens_cache_write)
         if self.usd >= self.budget_usd:
             self.budget_exhausted = True
             res.tool_calls = []          # không chạy thêm tool; agent kết thúc ở lượt này
@@ -41,5 +45,6 @@ class BudgetedDriver:
         return res
 
     def usage(self) -> dict:
-        return {"tokens_in": self.tokens_in, "tokens_out": self.tokens_out, "usd": round(self.usd, 4),
+        return {"tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
+                "tokens_cache_read": self.tokens_cache_read, "tokens_cache_write": self.tokens_cache_write, "usd": round(self.usd, 4),
                 "llm_calls": self.calls, "budget_exhausted": self.budget_exhausted}

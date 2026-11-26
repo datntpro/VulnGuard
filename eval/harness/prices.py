@@ -1,6 +1,7 @@
 """Bảng giá USD / 1M token (CHỈNH TAY khi giá đổi). Dùng để ước lượng chi phí của run capability (P1-7, D9).
 File này là NGUỒN DUY NHẤT: harness import trực tiếp, llm-relay mount read-only (stdlib thuần — không import gì từ repo).
-Ước lượng bảo thủ: không trừ giá cache-read (agent legacy không bật prompt caching).
+Cache-aware (P2-9b) nhưng KHÔNG BAO GIỜ tính thấp hơn giá niêm yết: cache write = 1.25× giá input (TTL 5 phút);
+cache read = giá read niêm yết trong CACHE_READ, model không có trong đó → tính bằng giá input đầy đủ (bảo thủ).
 FAIL CLOSED: model không có trong bảng → UnknownModel (không bao giờ đoán giá)."""
 from typing import Dict, List, Tuple
 
@@ -17,6 +18,10 @@ MODEL_PROFILES: Dict[str, str] = {                # D1: legacy single-agent dùn
     "sonnet": "claude-sonnet-5-5",
     "haiku": "claude-haiku-5-5",
 }
+
+# model → giá cache-read $/MTok (theo bảng giá công bố). Model không có ở đây → read tính bằng giá input (bảo thủ).
+CACHE_READ: Dict[str, float] = {"claude-opus-5-5": 0.20, "claude-sonnet-5-5": 0.10}
+CACHE_WRITE_MULT = 1.25          # TTL 5 phút (không dùng TTL 1 giờ)
 
 MAX_OUTPUT_TOKENS = 8000          # LLMDriver.create luôn dùng 8000
 MAX_CONTEXT_TOKENS = 200_000      # trần input giả định cho MỘT lượt (ước lượng lượt gọi đắt nhất)
@@ -36,10 +41,12 @@ def _tier(model: str, tokens_in: int) -> Tuple[float, float]:
     return tiers[-1][1], tiers[-1][2]
 
 
-def call_usd(model: str, tokens_in: int, tokens_out: int) -> float:
-    """Giá của MỘT lượt gọi (tier theo input_tokens của lượt đó)."""
-    pin, pout = _tier(model, int(tokens_in))
-    return (tokens_in * pin + tokens_out * pout) / 1_000_000
+def call_usd(model: str, tokens_in: int, tokens_out: int, cache_read: int = 0, cache_write: int = 0) -> float:
+    """Giá của MỘT lượt gọi. `tokens_in` = phần input KHÔNG cache (usage.input_tokens). Tier theo kích thước prompt THẬT."""
+    total_prompt = int(tokens_in) + int(cache_read) + int(cache_write)
+    pin, pout = _tier(model, total_prompt)
+    pread = CACHE_READ.get(model, pin)
+    return (tokens_in * pin + cache_write * pin * CACHE_WRITE_MULT + cache_read * pread + tokens_out * pout) / 1_000_000
 
 
 def estimate_usd(model: str, tokens_in: int, tokens_out: int) -> float:
