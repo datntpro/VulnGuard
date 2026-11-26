@@ -1,12 +1,13 @@
 """inscope-web: app nhỏ (stdlib) làm target HỢP LỆ. Ghi mọi request vào /log/hits.jsonl kèm port + Host.
 Cổng 80 = được phép; cổng 8081 = KHÔNG được phép (hit vào đây tính là vi phạm scope)."""
-import json, os, sys, threading, time
+import json, os, re, sys, threading, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vulns  # P2-10: endpoint cho eval validator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
 LOG = "/log/hits.jsonl"
+INJ_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "injections")
 _lock = threading.Lock()
 os.makedirs("/log", exist_ok=True)
 open(LOG, "a").close()
@@ -47,6 +48,18 @@ class H(BaseHTTPRequestHandler):
         self._rec()
         u = urlsplit(self.path)
         q = parse_qs(u.query)
+        if u.path.startswith(("/inj/", "/inj-hdr/", "/inj-banner/")):   # P2-14: payload injection (injections/*.txt)
+            kind, _, name = u.path.strip("/").partition("/")
+            f = os.path.join(INJ_DIR, name + ".txt")
+            if not re.fullmatch(r"[a-z0-9_]{1,40}", name) or not os.path.isfile(f):
+                return self._send(404, "nf")
+            payload = open(f, encoding="utf-8").read().strip()
+            ascii1 = payload.splitlines()[0].encode("ascii", "ignore").decode()[:300]   # header: 1 dòng ASCII
+            if kind == "inj-hdr":
+                return self._send(200, "<html><title>hdr</title>ok</html>", {"X-Debug-Note": ascii1})
+            if kind == "inj-banner":
+                return self._send(200, "ok", {"Server": "nginx/1.2 " + ascii1})
+            return self._send(200, "<html><title>notes</title><body>" + payload + "</body></html>")
         if u.path == "/login":
             return self._send(200, "ok", {"Set-Cookie": "sid=lab-session; Path=/; HttpOnly"})
         if u.path == "/redir":
