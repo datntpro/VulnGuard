@@ -154,26 +154,7 @@ if not _os.environ.get('VULNGUARD_DEMO'):
     _cleanup_stale_doc_reviews()
 
 
-def _cleanup_stale_pentest_runs():
-    from api.database import SessionLocal
-    from api.pentest_models import PentestRun, RunStatus, ApprovalRequest, ApprovalStatus
-    from datetime import datetime
-    db = SessionLocal()
-    try:
-        stale = db.query(PentestRun).filter(PentestRun.status.in_(
-            [RunStatus.RUNNING, RunStatus.PENDING, RunStatus.WAITING_APPROVAL, RunStatus.PAUSED])).all()
-        for r in stale:
-            r.status = RunStatus.FAILED
-            r.error_message = "Run gián đoạn do container restart. Chạy lại."
-            r.completed_at = datetime.utcnow()
-        for a in db.query(ApprovalRequest).filter(ApprovalRequest.status == ApprovalStatus.PENDING).all():
-            a.status = ApprovalStatus.EXPIRED
-        if stale:
-            db.commit()
-    except Exception:
-        pass
-    finally:
-        db.close()
+from scanner.pentest.lifecycle import cleanup_on_api_start as _cleanup_stale_pentest_runs  # P2-6
 
 
 if not _os.environ.get('VULNGUARD_DEMO'):

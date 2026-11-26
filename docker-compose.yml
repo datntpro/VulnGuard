@@ -69,6 +69,33 @@ services:
     restart: unless-stopped
 
   # ─────────────────────────────────────────────
+  # Pentest worker bền (P2-6, TUỲ CHỌN) — chạy run ở tiến trình riêng, resume sau khi chết:
+  #   PENTEST_WORKER_MODE=worker docker compose --profile pentest-worker up -d
+  # (API cũng cần PENTEST_WORKER_MODE=worker để xếp job thay vì chạy tại chỗ.)
+  # KHÔNG có ports, KHÔNG có docker.sock; chỉ dùng chung ./storage (SQLite WAL).
+  # ─────────────────────────────────────────────
+  pentest-worker:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: vulnguard-pentest-worker
+    profiles: ["pentest-worker"]
+    command: ["python", "-m", "scanner.pentest.worker"]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      - DEPLOY_MODE=docker
+      - DATABASE_URL=sqlite:////app/storage/db/vulnguard.db
+      - APP_ENV=${APP_ENV:-production}
+      - VULNGUARD_SECRET_KEY=${VULNGUARD_SECRET_KEY:-}
+      - PENTEST_WORKER_MODE=worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
   # SonarQube Community (TUỲ CHỌN) — bật bằng:  docker compose --profile sonar up -d
   # Mặc định KHÔNG chạy (nặng RAM). Sau khi lên, tạo token rồi đặt vào .env:
   #   SONARQUBE_URL=http://sonarqube:9000   SONARQUBE_TOKEN=<token>
