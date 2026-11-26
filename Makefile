@@ -78,6 +78,6 @@ clean:
 	docker compose down -v
 	@echo "Cleaned up all containers and volumes"
 
-# P2-1: image sandbox cho Pentest Agent (xem docker/pentest-runner/)
+# P2-1/P2-3: image sandbox (docker/pentest-runner/) + gateway egress (docker/pentest-egress/) cho Pentest Agent
 pentest-images:
 	./scripts/build_pentest_images.sh --self-test
