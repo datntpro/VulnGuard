@@ -1,10 +1,10 @@
 """P2-2: pentest-runner service + RunnerClient, với docker client giả (không Docker, không mạng ngoài)."""
 import asyncio
-import io
+import base64
+import builtins
 import json
-import os
-import tarfile
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -13,23 +13,26 @@ from fastapi.testclient import TestClient
 from scanner.pentest.runner_client import RunnerClient, RunnerError
 from services.pentest_runner.app import Settings, create_app
 
-TOKEN = "t0ken-for-tests"
+TOKEN = "t0ken-for-tests-0123456789abcdef0123456789"
 H = {"Authorization": f"Bearer {TOKEN}"}
 POLICY = {"engagement_id": "e1", "version": 1, "allow": []}
 
 
+def _iso(age_s: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z"
+
+
 class FakeContainer:
     def __init__(self, kw, cid):
-        self.kw, self.id, self.labels, self.created_ts = kw, cid, kw["labels"], 0.0
+        self.kw, self.id, self.labels = kw, cid, kw["labels"]
+        self.attrs = {"Created": _iso(0)}  # như SDK thật: không có created_ts
         self.removed = self.killed = False
         self.files = {}
         self.exec_calls = []
         self.block = None  # threading.Event: giữ exec "đang chạy"
 
-    def put_archive(self, path, data):
-        with tarfile.open(fileobj=io.BytesIO(data)) as t:
-            for m in t.getmembers():
-                self.files[f"{path}/{m.name}"] = t.extractfile(m).read()
+    def put_archive(self, path, data):  # Docker thật từ chối trên rootfs read-only (B1) — fake mô phỏng đúng
+        raise RuntimeError("400: container rootfs is marked read-only")
 
     def exec_run(self, cmd, user=None, environment=None, demux=False):
         self.exec_calls.append((cmd, user, environment))
@@ -41,12 +44,14 @@ class FakeContainer:
             self.files[f"/work/{step}/stdout"] = b"hello-out"
             self.files[f"/work/{step}/stderr"] = b""
             return (0, b"{}")
-        if cmd[0] == "tail":
-            n, path = cmd[2], cmd[3]
+        if cmd[0] == "dd":
+            path = cmd[1][3:]
+            skip, count = int(cmd[3][5:]), int(cmd[4][6:])
             data = self.files.get(path)
-            if data is None:
-                return (1, b"")
-            return (0, data[int(n[1:]) - 1:] if n.startswith("+") else data[-int(n):])
+            return (1, b"") if data is None else (0, data[skip:skip + count])
+        if cmd[0] == "tail":
+            data = self.files.get(cmd[3])
+            return (1, b"") if data is None else (0, data[-int(cmd[2]):])
         return (0, b"")  # sh -c kill
 
     def kill(self):
@@ -58,7 +63,7 @@ class FakeContainer:
 
 class FakeNet:
     def __init__(self, name, labels):
-        self.name, self.attrs, self.created_ts, self.removed = name, {"Labels": labels, "Containers": {}}, 0.0, False
+        self.name, self.attrs, self.removed = name, {"Labels": labels, "Containers": {}, "Created": _iso(0)}, False
 
     def reload(self): pass
 
@@ -81,9 +86,10 @@ class FakeDocker:
                 return c
 
             def list(self, all=False, filters=None):
-                lab = (filters or {}).get("label")
-                k, _, v = (lab or "=").partition("=")
-                return [c for c in outer.containers_ if not c.removed and (not lab or (c.labels.get(k) == v))]
+                labs = (filters or {}).get("label") or []
+                labs = [labs] if isinstance(labs, str) else labs
+                kv = [x.partition("=") for x in labs]
+                return [c for c in outer.containers_ if not c.removed and builtins.all(c.labels.get(k) == v for k, _, v in kv)]
 
         class Networks:
             def create(self, name, **kw):
@@ -96,7 +102,13 @@ class FakeDocker:
                     out = [n for n in out if n.name in names]
                 return out
 
-        self.containers, self.networks = Containers(), Networks()
+        class Images:
+            def get(self, name):
+                if outer.no_image:
+                    raise RuntimeError("not found")
+
+        self.no_image = False
+        self.containers, self.networks, self.images = Containers(), Networks(), Images()
 
     def info(self):
         return {"Runtimes": {r: {} for r in self.runtimes}}
@@ -104,7 +116,7 @@ class FakeDocker:
 
 def _mk(runtimes=("runc",), image="vg-runner@sha256:abc", **sk):
     d = FakeDocker(runtimes)
-    app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": image, **sk}), lambda: d)
+    app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": image, "PENTEST_RUNNER_GC_INTERVAL_S": "0", **sk}), lambda: d)
     return TestClient(app), d, app.state.runner
 
 
@@ -119,6 +131,8 @@ def _sandbox(c, rid="r1", eid="e1"):
 def test_requires_token_to_start():
     with pytest.raises(RuntimeError):
         create_app(Settings({}), lambda: None)
+    with pytest.raises(RuntimeError):  # quá ngắn
+        create_app(Settings({"PENTEST_RUNNER_TOKEN": "short"}), lambda: None)
 
 
 @pytest.mark.parametrize("hdr", [{}, {"Authorization": "Bearer nope"}, {"Authorization": TOKEN}, {"Authorization": "Basic " + TOKEN}])
@@ -202,16 +216,16 @@ def test_exec_roundtrip_and_output():
     c, d, _ = _mk()
     _sandbox(c)
     r = c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s1", "tool": "nmap", "argv": ["nmap", "-sV", "10.0.0.5"],
-                                                     "timeout_s": 30, "env": {"HTTP_PROXY": "http://gw:3128"}})
+                                                     "timeout_s": 30, "env": {"LANG": "C"}})
     assert r.status_code == 200
     xid = r.json()["exec_id"]
     st = _wait(c, "r1", xid)
     assert st["status"] == "finished" and st["returncode"] == 0 and st["timed_out"] is False
     assert st["stdout_tail"] == "hello-out"
     cont = d.containers_[0]
-    assert json.loads(cont.files["/tmp/vg-argv-s1.json"]) == ["nmap", "-sV", "10.0.0.5"]
     cmd, user, env = cont.exec_calls[0]
-    assert cmd[:3] == ["/usr/local/bin/vg-exec", "run", "--tool"] and user == "10002:10002" and env == {"HTTP_PROXY": "http://gw:3128"}
+    assert cmd[:3] == ["/usr/local/bin/vg-exec", "run", "--tool"] and user == "10002:10002" and env == {"LANG": "C"}
+    assert json.loads(base64.b64decode(cmd[cmd.index("--argv-b64") + 1])) == ["nmap", "-sV", "10.0.0.5"]  # không put_archive (B1)
     o = c.get(f"/v1/runs/r1/exec/{xid}/output?stream=stdout&offset=6", headers=H)
     assert o.content == b"out" and o.headers["x-next-offset"] == "9"
     assert c.get(f"/v1/runs/r1/exec/{xid}/output?stream=../x", headers=H).status_code == 422
@@ -229,6 +243,14 @@ def test_exec_argv_allowlist(argv, tool):
     r = c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s1", "tool": tool, "argv": argv})
     assert r.status_code == 422
     assert d.containers_[0].exec_calls == []
+
+
+@pytest.mark.parametrize("k", ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "AWS_SECRET"])
+def test_caller_cannot_set_proxy_or_other_env(k):  # M1
+    c, d, _ = _mk()
+    _sandbox(c)
+    r = c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s1", "tool": "nmap", "argv": ["nmap", "x"], "env": {k: "*"}})
+    assert r.status_code == 422 and d.containers_[0].exec_calls == []
 
 
 def test_exec_rejects_bad_step_env_and_missing_sandbox():
@@ -271,19 +293,22 @@ def test_kill_stops_running_exec_and_falls_back_to_docker_kill():
 
 
 def test_delete_sandbox_and_gc():
-    c, d, _ = _mk()
+    c, d, rn = _mk()
     _sandbox(c, "r1")
     _sandbox(c, "r2")
     assert c.delete("/v1/runs/r1/sandbox", headers=H).status_code == 204
     assert d.containers_[0].removed and not d.containers_[1].removed
     # gc: r2 không active → xoá; sandbox trẻ (<60s) được giữ để tránh race tạo mới
-    d.containers_[1].created_ts = time.time()
+    d.containers_[1].attrs["Created"] = _iso(0)
     assert c.post("/v1/gc", headers=H, json={"active_runs": [], "active_engagements": ["e1"]}).json()["removed_sandboxes"] == 0
-    d.containers_[1].created_ts = time.time() - 3600
+    d.containers_[1].attrs["Created"] = _iso(3600)
     assert c.post("/v1/gc", headers=H, json={"active_runs": ["r2"], "active_engagements": ["e1"]}).json()["removed_sandboxes"] == 0
     assert c.post("/v1/gc", headers=H, json={"active_runs": [], "active_engagements": ["e1"]}).json()["removed_sandboxes"] == 1
     assert d.containers_[1].removed and not d.nets[0].removed  # engagement còn active → giữ network
+    d.nets[0].attrs["Created"] = _iso(3600)
     assert c.post("/v1/gc", headers=H, json={"active_runs": [], "active_engagements": []}).json()["removed_networks"] == 1
+    assert "e1" not in rn.policies  # state được dọn → create_sandbox sau đó là 409, không phải 500
+    assert c.post("/v1/runs/r9/sandbox", json={"eid": "e1"}, headers=H).status_code == 409
 
 
 def test_gateway_hook_called_and_dns_set():
@@ -300,7 +325,7 @@ def test_gateway_hook_called_and_dns_set():
             self.calls.append(("remove", gid))
 
     d, gw = FakeDocker(), GW()
-    app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": "img"}), lambda: d, gw)
+    app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": "img@sha256:abc", "PENTEST_RUNNER_GC_INTERVAL_S": "0"}), lambda: d, gw)
     c = TestClient(app)
     assert c.post("/v1/engagements/e1/network", json={"policy": POLICY}, headers=H).json() == {"network": "vg-eng-e1", "gateway_id": "gw1"}
     c.put("/v1/engagements/e1/policy", json={"policy": {**POLICY, "version": 2}}, headers=H)
@@ -353,3 +378,123 @@ def test_client_requires_token_and_uds_url():
 def test_default_settings_unchanged_legacy():
     from scanner.pentest.settings import PentestSettings
     assert PentestSettings().exec_backend == "local"  # sandbox là opt-in
+
+
+# ── regressions from review of #67 ──
+def test_gc_keeps_just_created_sandbox():  # B2: tuổi lấy từ attrs.Created như Docker thật
+    c, d, _ = _mk()
+    _sandbox(c)
+    assert not hasattr(d.containers_[0], "created_ts")
+    assert c.post("/v1/gc", headers=H, json={"active_runs": [], "active_engagements": []}).json() == {"removed_sandboxes": 0, "removed_networks": 0}
+    assert not d.containers_[0].removed
+
+
+def test_parse_ts_is_fail_safe():
+    from services.pentest_runner.app import _parse_ts
+    assert abs(_parse_ts("garbage") - time.time()) < 2 and abs(_parse_ts(None) - time.time()) < 2
+    assert abs(_parse_ts("2026-01-01T00:00:00.5Z") - (datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp() + 0.5)) < 1e-3
+
+
+def test_periodic_gc_startup_lease_and_hard_age():
+    c, d, rn = _mk(PENTEST_RUNNER_MAX_SANDBOX_AGE_S="1000")
+    _sandbox(c)
+    d.containers_[0].attrs["Created"] = _iso(500)
+    assert rn.periodic_gc()["removed_sandboxes"] == 0  # chưa có lease, chưa quá trần tuổi
+    d.containers_[0].attrs["Created"] = _iso(5000)
+    c.post("/v1/gc", headers=H, json={"active_runs": ["r1"], "active_engagements": ["e1"]})
+    assert rn.periodic_gc()["removed_sandboxes"] == 0  # lease còn hạn, r1 active
+    rn.gc_lease = (rn.gc_lease[0] - 10**6, *rn.gc_lease[1:])  # lease hết hạn → chỉ còn trần tuổi cứng
+    assert rn.periodic_gc()["removed_sandboxes"] == 1
+    c2, d2, rn2 = _mk()
+    _sandbox(c2)
+    d2.containers_[0].attrs["Created"] = _iso(3600)
+    assert rn2.periodic_gc(startup=True)["removed_sandboxes"] == 1  # khởi động: state RAM đã mất → dọn mồ côi
+
+
+def test_lifespan_runs_gc_task():
+    d = FakeDocker()
+    app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": "i@sha256:a", "PENTEST_RUNNER_GC_INTERVAL_S": "1"}), lambda: d)
+    called = []
+    app.state.runner.periodic_gc = lambda startup=False: called.append(startup) or {}
+    with TestClient(app) as cl:
+        for _ in range(100):
+            if called:
+                break
+            time.sleep(0.02)
+    assert called and called[0] is True
+
+
+def test_image_must_be_pinned_and_present_never_pulled():
+    c, d, _ = _mk(image="vulnguard-pentest-runner:latest")
+    c.post("/v1/engagements/e1/network", json={"policy": POLICY}, headers=H)
+    assert c.post("/v1/runs/r1/sandbox", json={"eid": "e1"}, headers=H).status_code == 503
+    c, d, _ = _mk(image="vulnguard-pentest-runner:latest", PENTEST_ALLOW_UNPINNED_IMAGE="1")
+    assert _sandbox(c)
+    c, d, _ = _mk()
+    d.no_image = True
+    c.post("/v1/engagements/e1/network", json={"policy": POLICY}, headers=H)
+    assert c.post("/v1/runs/r1/sandbox", json={"eid": "e1"}, headers=H).status_code == 503
+    assert d.containers_ == []
+
+
+def test_sandbox_quotas_and_server_side_limit_maxima():
+    c, d, _ = _mk(PENTEST_RUNNER_MAX_SANDBOXES="3", PENTEST_RUNNER_MAX_SANDBOXES_PER_ENG="2")
+    _sandbox(c, "r1")
+    assert c.post("/v1/runs/r2/sandbox", json={"eid": "e1"}, headers=H).status_code == 200
+    assert c.post("/v1/runs/r3/sandbox", json={"eid": "e1"}, headers=H).status_code == 429  # per-engagement
+    c.post("/v1/engagements/e2/network", json={"policy": POLICY}, headers=H)
+    assert c.post("/v1/runs/r4/sandbox", json={"eid": "e2"}, headers=H).status_code == 200
+    assert c.post("/v1/runs/r5/sandbox", json={"eid": "e2"}, headers=H).status_code == 429  # global
+    c, d, _ = _mk(PENTEST_RUNNER_MAX_MEM_MB="512")
+    c.post("/v1/engagements/e1/network", json={"policy": POLICY}, headers=H)
+    assert c.post("/v1/runs/r1/sandbox", json={"eid": "e1", "limits": {"mem_mb": 1024}}, headers=H).status_code == 422
+    assert c.post("/v1/runs/r1/sandbox", json={"eid": "e1", "limits": {"mem_mb": 512, "cpus": 1}}, headers=H).status_code == 200
+
+
+def test_exec_concurrency_and_rate_limits_and_pruning():
+    import threading
+    c, d, rn = _mk(PENTEST_RUNNER_MAX_EXECS_PER_RUN="2", PENTEST_RUNNER_EXEC_RATE_PER_MIN="5")
+    _sandbox(c)
+    ev = threading.Event()
+    d.containers_[0].block = ev
+    post = lambda i: c.post("/v1/runs/r1/exec", headers=H, json={"step_id": f"s{i}", "tool": "nmap", "argv": ["nmap", "x"]}).status_code  # noqa: E731
+    assert post(1) == 200 and post(2) == 200 and post(3) == 429  # đồng thời
+    ev.set()
+    time.sleep(0.3)
+    assert [post(i) for i in (4, 5, 6)] == [200, 200, 200] and post(7) == 429  # rate: 5/phút (2 + 3 đã nhận)
+    for k in list(rn.execs):
+        rn.execs[k]["status"] = "finished"
+    from services.pentest_runner import app as appmod
+    appmod.KEEP_FINISHED_EXECS = 2
+    rn.s.exec_rate_per_min = 10**6
+    for i in range(10, 16):
+        assert post(i) == 200
+        time.sleep(0.05)
+    assert len(rn.execs) <= 2 + 2 + 1
+
+
+def test_output_is_bounded_with_truncated_flag():
+    c, d, _ = _mk()
+    _sandbox(c)
+    xid = c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s1", "tool": "nmap", "argv": ["nmap", "x"]}).json()["exec_id"]
+    _wait(c, "r1", xid)
+    big = b"A" * (3 * (1 << 20))
+    d.containers_[0].files["/work/s1/stdout"] = big
+    o = c.get(f"/v1/runs/r1/exec/{xid}/output?offset=0", headers=H)
+    assert len(o.content) == 1 << 20 and o.headers["x-truncated"] == "1" and o.headers["x-next-offset"] == str(1 << 20)
+    o2 = c.get(f"/v1/runs/r1/exec/{xid}/output?offset={2 * (1 << 20) + 5}", headers=H)
+    assert len(o2.content) == (1 << 20) - 5 and o2.headers["x-truncated"] == "0"
+    cmds = [x[0] for x in d.containers_[0].exec_calls if x[0][0] == "dd"]
+    assert cmds and all(any(a.startswith("count=") for a in x) for x in cmds)  # giới hạn thực thi TRONG sandbox
+    st = c.get(f"/v1/runs/r1/exec/{xid}", headers=H).json()
+    assert len(st["stdout_tail"]) <= 4096
+
+
+def test_delete_network_purges_state_and_requires_managed_label():
+    c, d, rn = _mk()
+    _sandbox(c)
+    c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s1", "tool": "nmap", "argv": ["nmap", "x"]})
+    time.sleep(0.1)
+    d.containers_.append(FakeContainer({"labels": {"vulnguard.run": "foreign", "vulnguard.eng": "e1"}}, "x"))  # không managed
+    c.delete("/v1/engagements/e1/network", headers=H)
+    assert not rn.execs and "e1" not in rn.policies and not d.containers_[-1].removed

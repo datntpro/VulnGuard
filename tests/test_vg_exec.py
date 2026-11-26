@@ -333,3 +333,15 @@ def test_sqlmap_option_table_matches_real_sqlmap():
                  "shared-lib", "results-file", "check-internet", "udf-inject", "purge", "wizard", "google-dork"}
     assert not dangerous & set(vg_exec.SQLMAP_LONG)
     assert not set("rclmgdstzh") & set(vg_exec.SQLMAP_SHORT)
+
+
+def test_cli_argv_b64(fake_tools, tmp_path, capsys):
+    import base64
+    enc = base64.b64encode(json.dumps(["nmap", "q"]).encode()).decode()
+    assert vg_exec.main(["run", "--tool", "nmap", "--argv-b64", enc, "--step", "b1", "--work-root", str(fake_tools)]) == 0
+    assert json.loads(capsys.readouterr().out)["returncode"] == 3
+    bad = base64.b64encode(json.dumps(["sh", "-c", "id"]).encode()).decode()
+    assert vg_exec.main(["run", "--tool", "sh", "--argv-b64", bad, "--work-root", str(fake_tools)]) == 2
+    assert vg_exec.main(["run", "--tool", "nmap", "--argv-b64", "!!notb64", "--work-root", str(fake_tools)]) == 2
+    with pytest.raises(SystemExit):  # --argv-json và --argv-b64 loại trừ nhau, một trong hai bắt buộc
+        vg_exec.main(["run", "--tool", "nmap"])
