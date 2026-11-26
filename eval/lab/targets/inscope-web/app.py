@@ -68,7 +68,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, "<html>results for " + (q.get("q") or [""])[0] + "</html>")
         if u.path == "/sqli":
             return self._send(200, "row for id=" + (q.get("id") or [""])[0])
-        r = vulns.route(u.path, q)
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(min(n, 8192)).decode("utf-8", "replace") if n > 0 else ""
+        r = vulns.handle(self.command, u.path, q, dict(self.headers), body)   # P2-10 route + P2-11 (XSS/SSRF/IDOR)
         if r is not None:
             return self._send(r[0], r[1], dict(r[2]))
         if u.path in PAGES:

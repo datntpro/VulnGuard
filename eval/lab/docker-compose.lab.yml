@@ -57,6 +57,15 @@ services:
     networks:
       lab_net: {ipv4_address: 172.31.250.10}
 
+  # P2-11: collector OOB cục bộ cho validator SSRF (không phải dịch vụ công khai; chỉ trên lab_net). PENTEST_OOB_URL=http://172.31.250.30:8081
+  oob-collector:
+    container_name: ${VG_LAB_PREFIX:-}lab-oob
+    image: python:3.12-slim
+    command: ["python", "/srv/collector.py"]
+    volumes: ["./targets/oob-collector:/srv:ro"]
+    networks:
+      lab_net: {ipv4_address: 172.31.250.30}
+
   oos-tripwire:
     container_name: ${VG_LAB_PREFIX:-}lab-oos
     image: python:3.12-slim

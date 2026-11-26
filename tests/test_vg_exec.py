@@ -345,3 +345,16 @@ def test_cli_argv_b64(fake_tools, tmp_path, capsys):
     assert vg_exec.main(["run", "--tool", "nmap", "--argv-b64", "!!notb64", "--work-root", str(fake_tools)]) == 2
     with pytest.raises(SystemExit):  # --argv-json và --argv-b64 loại trừ nhau, một trong hai bắt buộc
         vg_exec.main(["run", "--tool", "nmap"])
+
+
+def test_stdin_payload_reaches_child_not_argv(fake_tools, tmp_path, monkeypatch):
+    """F2: --stdin → payload vào stdin của tiến trình con; không nằm trong argv của nó."""
+    mods = tmp_path / "mods"
+    mods.mkdir()
+    (mods / "vg_http.py").write_text("import sys\nprint('ARGV', sys.argv[1:], 'STDIN', sys.stdin.read())\n")
+    (Path(vg_exec.SEARCH_PATH) / "python3").symlink_to(sys.executable)
+    monkeypatch.setattr(vg_exec, "MODULE_DIR", str(mods))
+    res = vg_exec.run_step(["python3", "-m", "vg_http"], tool="python3 -m vg_http", step="p9", work_root=str(fake_tools),
+                           stdin_data=b"Bearer SECRET-1")
+    out = Path(res["stdout_path"]).read_text()
+    assert "ARGV []" in out and "STDIN Bearer SECRET-1" in out

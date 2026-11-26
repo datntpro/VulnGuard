@@ -221,6 +221,8 @@ app.include_router(auth.router)
 app.include_router(ai.router)
 app.include_router(webscans.router)
 app.include_router(pentest.router)
+from api.routes import pentest_accounts  # noqa: E402  P2-11
+app.include_router(pentest_accounts.router)
 app.include_router(assets.router)
 app.include_router(intel.router)
 app.include_router(connectors.router)
