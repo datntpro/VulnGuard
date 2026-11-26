@@ -71,6 +71,18 @@ def _cfg():
     return key, token, model, cap
 
 
+def _bad_cache_ttl(node) -> bool:
+    """True nếu BẤT KỲ cache_control nào trong body có ttl ≠ mặc định (None / '5m')."""
+    if isinstance(node, dict):
+        cc = node.get("cache_control")
+        if cc is not None and (not isinstance(cc, dict) or cc.get("ttl") not in (None, "5m")):
+            return True
+        return any(_bad_cache_ttl(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_bad_cache_ttl(v) for v in node)
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
@@ -128,6 +140,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._refuse(400, "header anthropic-beta không được phép")
         if "beta" in (self.path.split("?", 1) + [""])[1]:
             return self._refuse(400, "endpoint beta không được phép")
+        if _bad_cache_ttl(req):
+            return self._refuse(400, "cache_control.ttl khác mặc định 5 phút không được phép (giá ghi cache 1h = 2×, relay tính 1.25×)")
         bad = [f for f in FORBIDDEN_FIELDS if req.get(f)]
         if bad:
             return self._refuse(400, f"trường không được phép: {bad}")
@@ -175,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 j = json.loads(data)
                 u = j["usage"]
-                tin = int(u.get("input_tokens", 0))
+                tin = int(u["input_tokens"])      # thiếu input_tokens ⇒ KeyError ⇒ fail closed (không đếm 0)
                 cw = int(u.get("cache_creation_input_tokens") or 0)
                 cr = int(u.get("cache_read_input_tokens") or 0)
                 tout = int(u["output_tokens"])
