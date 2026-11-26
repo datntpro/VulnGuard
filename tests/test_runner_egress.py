@@ -206,7 +206,10 @@ def test_attach_adds_default_route_from_helper_container_not_sandbox():
     cli.ctrs.append(sbx)
     g.attach(cli, "e1", gid, gip, sbx, "r1")
     helper = cli.ran[-1]
-    assert helper["entrypoint"] == ["ip"] and helper["command"] == ["route", "replace", "default", "via", gip]
+    assert helper["entrypoint"][:2] == ["sh", "-ec"] and "ip route replace default via" in helper["entrypoint"][2]
+    assert helper["environment"]["VG_GW"] == gip
+    nft = helper["environment"]["VG_NFT"]                                                                   # cô lập sandbox↔sandbox: chỉ gateway trong subnet engagement
+    assert f"ip daddr != {gip} drop" in nft and f"ip saddr != {gip} drop" in nft and 'oifname "lo" accept' in nft and "10.9.2.0/24" in nft
     assert helper["network_mode"] == "container:sbx" and helper["cap_add"] == ["NET_ADMIN"] and helper["cap_drop"] == ["ALL"]
     assert helper["remove"] is True and helper["read_only"] is True
     assert sbx.kw.get("cap_add") is None                                                                    # sandbox KHÔNG được thêm cap
@@ -330,3 +333,17 @@ def test_private_cidr_allow_cannot_open_host_ips():
     assert ep.connect_decision(base, "192.168.1.51", 22)[0]
     denied = ep.render_nft(base).split("set denied")[1].split("}")[0]
     assert "192.168.1.50/32" in denied and "172.17.0.0/16" in denied   # 172.17.0.1/32 gộp vào /16
+
+
+def test_check_policy_fails_closed_on_docker_desktop_without_extra_deny():
+    from services.pentest_runner.egress import PolicyRejected
+    cli = Cli()
+    cli.info = lambda: {"OperatingSystem": "Docker Desktop"}
+    wide = {"version": 1, "allow": [{"cidr": "192.168.0.0/16", "ports": None, "proto": "tcp"}]}
+    with pytest.raises(PolicyRejected):
+        _gw().check_policy(cli, wide)
+    _gw().check_policy(cli, {"version": 1, "allow": [{"cidr": "192.168.1.5/32", "ports": None, "proto": "tcp"}, {"cidr": "203.0.113.0/24", "ports": None, "proto": "tcp"}]})
+    g = EgressGateway("img", extra_deny=["192.168.1.63/32"])
+    g.check_policy(cli, wide)                                                                               # EXTRA_DENY có → cho qua
+    cli.info = lambda: {"OperatingSystem": "Ubuntu 24.04"}
+    _gw().check_policy(cli, wide)                                                                           # Linux: host netns discovery đủ

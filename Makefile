@@ -2,7 +2,7 @@
 # VulnGuard — Makefile shortcuts
 # ─────────────────────────────────────────────
 
-.PHONY: help up down build logs scan pull-model clean pentest-images
+.PHONY: help up down build logs scan pull-model clean pentest-images pentest-host-ips
 
 help:
 	@echo ""
@@ -81,3 +81,7 @@ clean:
 # P2-1/P2-3: image sandbox (docker/pentest-runner/) + gateway egress (docker/pentest-egress/) cho Pentest Agent
 pentest-images:
 	./scripts/build_pentest_images.sh --self-test
+
+# P2-5: in IP host (csv /32) cho PENTEST_EGRESS_EXTRA_DENY — bắt buộc trên Docker Desktop khi scope mở dải riêng (xem docs/PENTEST_RUNNER.md)
+pentest-host-ips:
+	@./scripts/pentest_host_ips.sh

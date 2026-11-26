@@ -35,7 +35,11 @@ http.server.ThreadingHTTPServer(('0.0.0.0', 8000), H).serve_forever()
 '''
 
 TARGET_SRC = r'''
-import sys, threading, http.server, socketserver, urllib.parse
+import sys, threading, http.server, socketserver, urllib.parse, socket
+def udp_echo(p):   # P2-5: responder UDP (positive control cho probe UDP/QUIC; mỗi gói tới = một dòng UDP trong log = tripwire)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("0.0.0.0", p))
+    while True:
+        d, a = s.recvfrom(2048); print("UDP", a[0], p, flush=True); s.sendto(b"echo:" + d, a)
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         print("HIT", self.client_address[0], self.command, self.path, flush=True)
@@ -49,6 +53,7 @@ class H(http.server.BaseHTTPRequestHandler):
 class S(socketserver.ThreadingMixIn, http.server.HTTPServer): daemon_threads = True
 for p in map(int, sys.argv[1:]):
     threading.Thread(target=S(("0.0.0.0", p), H).serve_forever, daemon=True).start()
+    threading.Thread(target=udp_echo, args=(p,), daemon=True).start()
 threading.Event().wait()
 '''
 
@@ -408,6 +413,13 @@ def test_explicit_private_cidr_allow_cannot_reach_host_stack(lab):
     out_cfg = lab.cli.networks.get(lab.out.name).attrs["IPAM"]["Config"][0]
     out_gw = out_cfg["Gateway"]
     wide = [{"type": "cidr", "value": c, "mode": "allow"} for c in (out_cfg["Subnet"], "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+    lab_desktop = str((lab.cli.info() or {}).get("OperatingSystem", "")).startswith("Docker Desktop")
+    if lab_desktop:   # P2-5: Docker Desktop fail-closed — cần EXTRA_DENY (IP LAN của host) trước khi scope được mở dải riêng
+        import socket as _s
+        _sk = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+        _sk.connect(("192.0.2.1", 9))
+        lab.gw.extra_deny = (f"{_sk.getsockname()[0]}/32",)
+        _sk.close()
     _put(lab, wide)
     try:
         assert tcp(lab, lab.ip3, 80) == "OPEN"                             # đối chứng: dải được mở thật
@@ -419,6 +431,7 @@ def test_explicit_private_cidr_allow_cannot_reach_host_stack(lab):
                 assert tcp(lab, ip, port, 2) == "FAIL TimeoutError", (ip, port)
     finally:
         _put(lab, lab.rules)
+        lab.gw.extra_deny = ()
     assert tcp(lab, lab.ip1, 80) == "OPEN"
 
 
