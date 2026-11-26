@@ -62,6 +62,10 @@ services:
     container_name: ${VG_LAB_PREFIX:-}lab-oob
     image: python:3.12-slim
     command: ["python", "/srv/collector.py"]
+    # PR-3: key đọc /__hits, harness sinh ngẫu nhiên mỗi lần chạy (export VG_OOB_ADMIN_KEY). Rỗng → /__hits luôn 404 (fail-closed);
+    # không dùng `:?` để các luồng bench/capability/runner (không cần OOB) vẫn `compose config` được.
+    environment:
+      VG_OOB_ADMIN_KEY: ${VG_OOB_ADMIN_KEY:-}
     volumes: ["./targets/oob-collector:/srv:ro"]
     networks:
       lab_net: {ipv4_address: 172.31.250.30}
