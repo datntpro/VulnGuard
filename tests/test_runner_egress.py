@@ -82,8 +82,7 @@ class Cli:
                 for c in o.ctrs:
                     if c.id == i:
                         return c
-                import docker.errors
-                raise docker.errors.NotFound("x")
+                raise type("NotFound", (Exception,), {})("x")   # tên lớp như docker.errors.NotFound (SDK không có trong CI unit)
 
             def run(self, **kw):
                 c = Ctr(kw, f"c{len(o.ctrs)}", None)
