@@ -45,6 +45,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 PUBLIC_API_PATHS = {
     "/api/auth/status", "/api/auth/login", "/api/auth/setup", "/api/auth/logout",
     "/api/health",
+    # P2-3b: ingest của egress gateway — KHÔNG có phiên người dùng, route tự xác thực bằng HMAC theo engagement
+    "/api/pentest/internal/traffic",
 }
 
 # (method or "*", path prefix) chỉ ADMIN được gọi

@@ -448,6 +448,10 @@ detect-secrets==1.5.0 \
     # via
     #   -c api/requirements.txt
     #   -r api/requirements.in
+dnslib==0.9.26 \
+    --hash=sha256:be56857534390b2fbd02935270019bacc5e6b411d156cb3921ac55a7fb51f1a8 \
+    --hash=sha256:e68719e633d761747c7e91bd241019ef5a2b61a63f56025939e144c841a70e0d
+    # via -r requirements-dev.in
 docstring-parser==0.18.0 \
     --hash=sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015 \
     --hash=sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b
