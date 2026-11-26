@@ -197,9 +197,9 @@ def test_totals_never_divide_by_zero():
     assert t["tokens_per_flag"] == 500 and t["usd_per_flag"] == 1.0
 
 
-def test_run_bench_real_is_not_wired_in_15a():
-    with pytest.raises(NotImplementedError):
-        bench.run_bench("stub", "legacy", "opus", driver_mode="real")
+def test_run_bench_rejects_bad_arguments():
+    with pytest.raises(ValueError):
+        bench.run_bench("stub", "legacy", "opus", provider="nope")
     with pytest.raises(ValueError):
         bench.run_bench("stub", "x", "opus")
     with pytest.raises(ValueError):
@@ -417,18 +417,41 @@ def test_compare_cli_writes_step_summary(tmp_path, monkeypatch, capsys):
 
 
 # ── workflow ──
-def test_bench_workflow_has_no_secrets_and_pins_actions():
+def test_bench_workflow_secret_isolation_and_pins_actions():
+    """15a (scripted) + 15b (real): secret CHỈ ở job khai `environment: pentest-eval`; job PR/scripted không bao giờ thấy secret."""
     raw = open(os.path.join(ROOT, ".github/workflows/pentest-bench.yml")).read()
     wf = yaml.safe_load(raw)
-    text = "\n".join(l for l in raw.splitlines() if not l.lstrip().startswith("#"))      # bỏ comment (có nhắc `secrets.*`)
-    assert "secrets." not in text and "environment:" not in text and "pull_request_target" not in text      # 15a: không secret/LLM
-    assert "ANTHROPIC" not in text
-    assert wf["permissions"] == {"contents": "read"}
-    job = wf["jobs"]["bench-scripted"]
+    text = "\n".join(l for l in raw.splitlines() if not l.lstrip().startswith("#"))      # bỏ comment
+    assert "pull_request_target" not in text and wf["permissions"] == {"contents": "read"}
+    jobs = wf["jobs"]
+    assert set(jobs) == {"bench-scripted", "preflight", "bench-real", "bench-compare"}
+    job = jobs["bench-scripted"]
     assert job["name"] == "bench-scripted" and job["strategy"]["matrix"]["arch"] == ["legacy", "graph"] and job["strategy"]["fail-fast"] is False
-    assert set(wf["jobs"]) == {"bench-scripted"} and job["timeout-minutes"] == 45
+    assert job["timeout-minutes"] == 45
+    for name, j in jobs.items():                       # secrets.* / environment chỉ ở preflight + bench-real
+        jt = yaml.safe_dump(j)
+        if name in ("preflight", "bench-real"):
+            assert j["environment"] == "pentest-eval" and "secrets.ANTHROPIC_API_KEY" in jt
+        else:
+            assert "environment" not in j and "secrets." not in jt and "ANTHROPIC" not in jt, name
     for use in re.findall(r"uses:\s*(\S+)", text):
         assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", use), f"action chưa ghim SHA: {use}"
     gate = next(s for s in job["steps"] if "check-safety" in str(s.get("run", "")))
     assert not gate.get("continue-on-error") and "always()" in gate["if"]
-    assert "pull_request" in wf[True] and wf[True]["schedule"][0]["cron"] == "30 18 * * *"
+    on = wf[True]
+    assert "pull_request" in on and [c["cron"] for c in on["schedule"]] == ["30 18 * * *", "45 18 * * 0"]
+    assert "'30 18 * * *'" in job["if"]                                 # cron weekly KHÔNG chạy bench-scripted
+    # real: không bao giờ trên PR/push; thiếu key ⇒ skip sạch; mỗi step chứa secret là step Bench duy nhất
+    pf, real, cmp_ = jobs["preflight"], jobs["bench-real"], jobs["bench-compare"]
+    assert "pull_request" not in pf["if"] and "schedule" in pf["if"] and "workflow_dispatch" in pf["if"] and "'45 18 * * 0'" in pf["if"]
+    assert real["needs"] == "preflight" and "has_key == 'true'" in real["if"] and real["environment"] == "pentest-eval"
+    assert real["concurrency"]["cancel-in-progress"] is False and real["strategy"]["max-parallel"] == 2
+    assert "has_key == 'true'" in cmp_["if"] and cmp_["needs"] == ["preflight", "bench-real"]
+    assert cmp_["permissions"] == {"contents": "read", "actions": "read"}
+    with_key = [st for st in real["steps"] if "secrets." in yaml.safe_dump(st)]
+    assert len(with_key) == 1 and with_key[0]["name"].startswith("Bench") and with_key[0]["continue-on-error"] is True
+    assert "ANTHROPIC_API_KEY" in with_key[0]["env"]
+    gate_r = next(s for s in real["steps"] if "check-safety" in str(s.get("run", "")))
+    assert not gate_r.get("continue-on-error") and gate_r["if"].strip() == "${{ always() }}"
+    assert "contents: write" not in text and "--provider anthropic" in text and "ollama" not in text.lower().replace("# ", "")
+    assert on["workflow_dispatch"]["inputs"]["budget"]["default"] == "25"

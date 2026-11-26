@@ -99,6 +99,12 @@ def _check_relpath(name: str, what: str, p) -> None:
     if (not p or p != p.strip() or "://" in p or p.startswith(("/", "~", "git@", "\\")) or ":" in p or n == ".."
             or n.startswith("../") or "\\" in p):
         raise UnsafeCompose(f"service {name}: build.{what} phải là đường dẫn tương đối nằm TRONG thư mục challenge: {p!r}")
+    if what == "context":
+        # compose coi `github.com/x/y` (và `x.git`, `...#ref`) là git context TỪ XA (kéo mã không ghim lúc build) dù nó trông như đường dẫn
+        # tương đối ⇒ context phải là `.`, `./...`, hoặc thư mục con thuần (đoạn đầu không chứa dấu chấm).
+        first = n.split("/", 1)[0]
+        if "#" in p or n.endswith(".git") or (p != "." and not p.startswith("./") and "." in first):
+            raise UnsafeCompose(f"service {name}: build.context trông như git context từ xa (phải là `.`/`./...` trong thư mục challenge): {p!r}")
 
 
 def _check_build(name: str, b) -> None:

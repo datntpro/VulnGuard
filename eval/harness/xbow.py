@@ -132,20 +132,21 @@ def lint(ids: Optional[List[str]] = None) -> List[str]:
 
 def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Dict[str, Dict]:
     """Tải tarball ở SHA ghim, sinh compose lab, build image với flag ngẫu nhiên. Trả {id: {ip,name,port,dir,flag}}."""
-    import tempfile
     import yaml
+    from eval.bench import srccache
     ids = bench_ids or list(BENCHMARKS)
     unknown = [i for i in ids if i not in SELECTION]
     if unknown:
         raise ValueError(f"không có trong selection: {unknown}")
     os.makedirs(out_dir, exist_ok=True)
     res: Dict[str, Dict] = {}
-    with tempfile.TemporaryDirectory(prefix="xbow_") as tmp:
-        tgz = os.path.join(tmp, "src.tgz")
-        urllib.request.urlretrieve(f"https://codeload.github.com/{REPO}/tar.gz/{PINNED_SHA}", tgz)  # nosec B310 — URL cố định, https
-        with tarfile.open(tgz) as t:
-            t.extractall(tmp, filter="data")
-        root = os.path.join(tmp, f"xbow-validation-benchmarks-{PINNED_SHA}", "benchmarks")
+    # Thư mục tạm NẰM TRONG repo (gitignored), xoá sau khi chạy; chỉ giải nén benchmarks/<id>/ đã chọn (không bao giờ xben-benchmark-results/).
+    with srccache.cache_dir("xbow_") as tmp:
+        top = f"xbow-validation-benchmarks-{PINNED_SHA}"
+        url = f"https://codeload.github.com/{REPO}/tar.gz/{PINNED_SHA}"
+        with tarfile.open(fileobj=urllib.request.urlopen(url, timeout=120), mode="r|gz") as t:  # nosec B310 — URL cố định, https
+            srccache.extract_selected(t, top, [f"benchmarks/{i}/" for i in ids], tmp)
+        root = os.path.join(tmp, top, "benchmarks")
         for bid in ids:
             meta = {"ip": SELECTION[bid]["ip"], "name": SELECTION[bid]["name"]}
             dst = os.path.join(out_dir, bid)

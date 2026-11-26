@@ -74,16 +74,52 @@ async def _stopper(rid: str, after_s: float, out: dict):
     out["stop_latency_ms"] = int((time.monotonic() - t0) * 1000)
 
 
-def _capability_driver(cap: dict):
-    """LLM THẬT, nhưng đi qua llm-relay trong lab (key nằm ở relay, không ở container này) và bọc BudgetedDriver (trần USD cứng)."""
-    import anthropic
+def _build_driver(cap: dict, model: str, budget):
+    """LLM THẬT qua llm-relay (key nằm ở relay, không ở container này), bọc BudgetedDriver trên ngân sách CHUNG của task."""
     from eval.harness.budget import BudgetedDriver
     from scanner.pentest.llm import LLMDriver
+    if cap.get("provider") == "ollama":
+        # P2-15b: Ollama local qua relay (OpenAI-compatible). api_key = token ngẫu nhiên của lần chạy; USD = 0, vẫn đếm token.
+        import openai
+        client = openai.AsyncOpenAI(api_key=cap["relay_token"], base_url=cap["relay_url"].rstrip("/") + "/v1", max_retries=0,
+                                    timeout=openai.Timeout(620.0, connect=10.0))
+        return BudgetedDriver(LLMDriver(client, model, "openai"), budget, local=True)
+    import anthropic
     # api_key = token ngẫu nhiên của lần chạy (relay đổi sang key thật). Timeout SDK > timeout upstream của relay (300s) và chỉ retry 1 lần
     # để một lượt chậm không bị tính phí nhiều lần. first_party=False ⇒ KHÔNG dùng server-side fallback (không bị tính trên model khác).
     client = anthropic.AsyncAnthropic(api_key=cap["relay_token"], base_url=cap["relay_url"], max_retries=1,
                                       timeout=anthropic.Timeout(330.0, connect=10.0))
-    return BudgetedDriver(LLMDriver(client, cap["model"], "anthropic", first_party=False), cap["budget_usd"])
+    return BudgetedDriver(LLMDriver(client, model, "anthropic", first_party=False), budget)
+
+
+def pick_model(cap: dict, cfg: dict) -> str:
+    """Model của một vai: role_models[role] > cfg["_pentest_model"], CHỈ khi nằm trong allowlist của run — nếu không → model mặc định
+    (không bao giờ gửi request bị relay từ chối)."""
+    models = set(cap.get("models") or [cap["model"]])
+    m = (cap.get("role_models") or {}).get((cfg or {}).get("_pentest_role")) or (cfg or {}).get("_pentest_model") or cap["model"]
+    return m if m in models else cap["model"]
+
+
+def _capability_factory(cap: dict):
+    """driver_factory cho agent thật: mọi vai (planner/executor/summarizer) dùng CHUNG một SharedBudget; driver được dùng lại theo model."""
+    from eval.harness.budget import SharedBudget
+    budget = SharedBudget(cap["budget_usd"])
+    drivers: dict = {}
+    roles: list = []
+
+    def factory(cfg):
+        roles.append((cfg or {}).get("_pentest_role"))
+        m = pick_model(cap, cfg)
+        if m not in drivers:
+            drivers[m] = _build_driver(cap, m, budget)
+        return drivers[m]
+    factory.budget = budget
+    factory.roles = roles
+    return factory
+
+
+def _capability_driver(cap: dict):
+    return _capability_factory(cap)({})
 
 
 ORCH_TOOLS = {"plan_tasks", "finish", "(planner)", "(executor)"}   # dòng audit của orchestrator (không phải tool thật)
@@ -147,8 +183,12 @@ async def run(spec: dict) -> dict:
     stop_out: dict = {}
     stopper = asyncio.create_task(_stopper(rid, spec["stop_after_s"], stop_out)) if spec.get("stop_after_s") else None
     try:
-        driver = _capability_driver(cap) if cap else ScriptedDriver(spec["turns"])
-        factory = _graph_factory(driver) if arch == "graph" else (lambda cfg: driver)
+        if cap:   # LLM thật: mọi vai (kể cả planner của graph và summarizer nén context) qua factory chung 1 ngân sách
+            factory = _capability_factory(cap)
+            driver = factory.budget          # .usage() = tổng cả task
+        else:
+            driver = ScriptedDriver(spec["turns"])
+            factory = _graph_factory(driver) if arch == "graph" else (lambda cfg: driver)
         await agent_mod.PentestAgent(rid, driver_factory=factory).run()
     finally:
         if stopper:

@@ -70,6 +70,10 @@ CASES = {
   "build_context_outside": base(build={"context": "../../../../"}),
   "build_context_abs": base(build={"context": "/"}),
   "build_context_git_url": base(build={"context": "https://github.com/attacker/x.git"}),
+  "build_context_remote_github": base(build={"context": "github.com/attacker/x"}),          # #93: compose coi là git context từ xa
+  "build_context_remote_github_str": base(build="github.com/attacker/x"),
+  "build_context_remote_dotgit": base(build={"context": "evil.example/x.git"}),
+  "build_context_remote_ref": base(build={"context": "./app#main"}),
   "build_additional_contexts_host": base(build={"context": ".", "additional_contexts": {"h": "/"}}),
   "build_secret_hostfile": {**base(build={"context": ".", "secrets": ["s"]}), "secrets": {"s": {"file": "/home/runner/.ssh/id_rsa"}}},
   "build_secret_env": {**base(build={"context": ".", "secrets": ["s"]}), "secrets": {"s": {"environment": "GITHUB_TOKEN"}}},
@@ -148,3 +152,9 @@ def test_shipped_selections_pass_allowlist():
     from eval.harness import xbow
     assert xbow.lint() == []                       # 20 XBOW
     assert fetch.lint() == []                      # 5 APB
+
+
+@pytest.mark.parametrize("ctx", [".", "./app", "app", "app/sub", "./a.b/c"])
+def test_local_build_contexts_still_allowed(ctx):
+    I.rewrite_and_check(base(build={"context": ctx}), IP)
+    I.rewrite_and_check(base(build=ctx), IP)
