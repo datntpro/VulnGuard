@@ -107,17 +107,35 @@ def compare(legacy_path: str, graph_path: str, suite: Optional[str] = None) -> T
     return "\n".join(md), rc
 
 
+def append_trend(path: str, sources: List[str]) -> int:
+    """Nối các BenchReport hợp lệ vào `path` (jsonl). Trả số dòng đã thêm."""
+    import json
+    n = 0
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a") as f:
+        for src in sources:
+            for r in load_reports(src):
+                if not validate_report(r):
+                    f.write(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n")
+                    n += 1
+    return n
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--legacy", required=True)
     ap.add_argument("--graph", required=True)
     ap.add_argument("--suite", default=None)
+    ap.add_argument("--append-trend", default=None, metavar="FILE",
+                    help="thêm mọi BenchReport của hai phía vào FILE (jsonl) — artifact `bench-trend` (O7), không ghi vào repo")
     a = ap.parse_args(argv)
     try:
         text, rc = compare(a.legacy, a.graph, a.suite)
     except Exception as e:
         text, rc = f"bench-compare lỗi: {type(e).__name__}: {e}\n", 1
     print(text)
+    if a.append_trend:
+        append_trend(a.append_trend, [a.legacy, a.graph])
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:

@@ -121,6 +121,8 @@ def capture_violations(capture: List[Dict], allowed_ips: List[str], allowed_port
             continue
         if proto == "icmp" and dst in allowed_ips:
             continue
+        if proto == "arp" and (dst in allowed_ips or dst == DNS_IP):
+            continue            # P2-15b: ARP who-has tới host ĐƯỢC PHÉP (cache lạnh) chỉ là phân giải lớp 2, không phải truy cập; ARP tới host khác vẫn là vi phạm
         bad.append(p)
     return bad
 

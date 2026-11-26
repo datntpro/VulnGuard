@@ -94,10 +94,10 @@ def _compose_for(root: str, task: Dict) -> Dict:
 
 def lint(tasks: Optional[List[Dict]] = None) -> List[str]:
     """Tải tarball ở SHA ghim, dựng compose của MỌI task đã chọn, chạy cô lập pre→transform→post. Trả danh sách lỗi (rỗng = sạch). Không build."""
-    import tempfile
+    from eval.bench import srccache
     tasks = tasks or load_selection()
     errs: List[str] = []
-    with tempfile.TemporaryDirectory(prefix="apb_lint_") as tmp:
+    with srccache.cache_dir("apb_lint_") as tmp:
         root = download(tmp, tasks)
         for t in tasks:
             try:
@@ -115,12 +115,12 @@ def prepare(task_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Dic
     """Dựng context + compose cô lập + flag ngẫu nhiên + build image. Trả {id: {ip,name,port,dir,flag}}. Chạy tay/nightly, không ở unit test."""
     import secrets
     import subprocess  # nosec B404 — chỉ gọi `docker` với argv cố định
-    import tempfile
     import yaml
+    from eval.bench import srccache
     tasks = [t for t in load_selection() if not task_ids or t["id"] in task_ids]
     os.makedirs(out_dir, exist_ok=True)
     res: Dict[str, Dict] = {}
-    with tempfile.TemporaryDirectory(prefix="apb_") as tmp:
+    with srccache.cache_dir("apb_") as tmp:
         root = download(tmp, tasks)
         for t in tasks:
             dst = os.path.join(out_dir, t["id"])

@@ -35,6 +35,37 @@ TOTAL_BUDGET_USD = 25.0            # D9: trần cứng cho MỘT lần chạy (r
 DEFAULT_TASK_BUDGET_USD = 4.0
 MIN_TASK_BUDGET_USD = 0.25
 ARCH = "legacy"                    # D3: đường single-agent hiện tại
+ARCHS = ("legacy", "graph")
+OLLAMA_MODEL = os.environ.get("VG_OLLAMA_MODEL", "qwen2.5:7b")      # P2-15b: model local mặc định (Ollama đã pull sẵn, hỗ trợ tool calling)
+OLLAMA_TOKEN_CAP = 2_000_000       # lưới token/task cho provider local (USD = 0 nên không có trần USD)
+# P2-15b (D1): model theo vai. legacy: model chính = planner, summarizer chỉ dùng cho nén context (9b). Ollama: MỌI vai → cùng một model.
+ROLE_PROFILES: Dict[str, Dict[str, str]] = {
+    "opus": {"planner": "claude-opus-5-5", "executor": "claude-sonnet-5-5", "summarizer": "claude-haiku-5-5"},
+    "sonnet": {"planner": "claude-sonnet-5-5", "executor": "claude-sonnet-5-5", "summarizer": "claude-haiku-5-5"},
+}
+
+
+def resolve_profile(profile: str, arch: str = ARCH, ollama_model: Optional[str] = None) -> Dict:
+    """→ {provider, role_models{planner,executor,summarizer}, model (mặc định = planner), models (allowlist, đã khử trùng, ổn định thứ tự)}.
+    Profile `ollama`: một model cho mọi vai (miễn phí, đếm token). Profile cũ `haiku` (legacy 1 model) vẫn dùng được cho legacy."""
+    if arch not in ARCHS:
+        raise ValueError(f"arch không hợp lệ: {arch}")
+    if profile == "ollama":
+        m = ollama_model or OLLAMA_MODEL
+        roles = {"planner": m, "executor": m, "summarizer": m}
+        return {"provider": "ollama", "role_models": roles, "model": m, "models": [m]}
+    if profile in ROLE_PROFILES:
+        roles = dict(ROLE_PROFILES[profile])
+    elif profile in MODEL_PROFILES and arch == "legacy":
+        roles = {"planner": MODEL_PROFILES[profile], "executor": MODEL_PROFILES[profile], "summarizer": MODEL_PROFILES[profile]}
+    else:
+        raise ValueError(f"profile không hợp lệ cho arch {arch}: {profile}")
+    used = [roles["planner"]] if arch == "legacy" else [roles["planner"], roles["executor"]]
+    used.append(roles["summarizer"])               # nén context (legacy) / summarizer (graph)
+    models = list(dict.fromkeys(used))
+    for m in models:
+        require_known(m)                           # fail closed: model chưa có giá ⇒ từ chối
+    return {"provider": "anthropic", "role_models": roles, "model": roles["planner"], "models": models}
 FALLBACKS = False                  # capability chạy KHÔNG server-side fallback (xem inproc._capability_driver)
 
 
@@ -71,6 +102,8 @@ class CapTask:
     budget_usd: float = DEFAULT_TASK_BUDGET_USD
     timeout_s: int = 1800
     ready_url: str = ""                       # URL thăm dò sự sẵn sàng (từ vg-under-test) trước khi chạy agent
+    approvals: str = "approve_all"            # chính sách người duyệt mô phỏng (injection: deny_all)
+    inscope_ok: bool = False                  # P2-15b: inscope-web LÀ mục tiêu (suite injection) ⇒ hit của nó không phải vi phạm
 
 
 def _scope(host: str, ip: str) -> List[Dict]:
@@ -171,7 +204,7 @@ def safety_gate_failures(metrics: Dict) -> List[str]:
 
 
 # ───────────── Kiểm tra an toàn cấu hình capability ─────────────
-RELAY_ENV = {"ANTHROPIC_API_KEY", "RELAY_TOKEN", "RELAY_MODEL", "RELAY_BUDGET_USD"}
+RELAY_ENV = {"ANTHROPIC_API_KEY", "RELAY_TOKEN", "RELAY_MODEL", "RELAY_MODELS", "RELAY_PROVIDER", "RELAY_BUDGET_USD"}
 
 
 def assert_capability_safe(cfg: Dict) -> None:
@@ -255,6 +288,22 @@ def _compose(args: List[str], timeout: int = 600) -> str:
     return runner._docker(COMPOSE[1:] + args, timeout=timeout)
 
 
+def challenge_dir(task: CapTask) -> str:
+    """Thư mục challenge đã `prepare` (XBOW selection hoặc AutoPenBench)."""
+    if task.compose == "apb":
+        from eval.bench.autopenbench import fetch
+        return os.path.join(fetch.OUT_DIR, task.xbow_id)
+    return os.path.join(xbow.OUT_DIR, task.xbow_id)
+
+
+def challenge_meta(task: CapTask) -> Dict:
+    if task.compose == "apb":
+        from eval.bench.autopenbench import fetch
+        t = next(x for x in fetch.load_selection() if x["id"] == task.xbow_id)
+        return {"ip": t["ip"], "name": t["name"]}
+    return xbow.SELECTION[task.xbow_id]
+
+
 def _tasks_by_id(ids: Optional[List[str]]) -> List[CapTask]:
     if not ids:
         return list(TASKS)
@@ -272,12 +321,22 @@ def _relay_token() -> str:
     return t
 
 
-def ensure_relay(model: str, total_budget: float) -> None:
-    """Khởi động llm-relay với token NGẪU NHIÊN, model allowlist và trần USD của lần chạy (relay tự dừng khi chạm trần)."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+def ensure_relay(models, total_budget: float, provider: str = "anthropic") -> None:
+    """Khởi động llm-relay với token NGẪU NHIÊN, allowlist model (một hoặc nhiều; MỘT đồng hồ USD chung) và trần USD của lần chạy
+    (relay tự dừng khi chạm trần). provider="ollama": Ollama local, không cần key, USD = 0 (chỉ chạy tay trên máy owner)."""
+    models = [models] if isinstance(models, str) else list(models)
+    if not models:
+        raise runner.LabSafetyError("allowlist model rỗng")
+    if provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise runner.LabSafetyError("ANTHROPIC_API_KEY chưa đặt")
+    if provider == "ollama":
+        os.environ.pop("ANTHROPIC_API_KEY", None)          # KHÔNG bao giờ để khoá thật vào relay local (compose lấy từ env của harness)
+    elif provider != "anthropic":
+        raise runner.LabSafetyError(f"provider không hợp lệ: {provider}")
     os.environ["RELAY_TOKEN"] = secrets.token_hex(24)
-    os.environ["RELAY_MODEL"] = model
+    os.environ["RELAY_MODEL"] = models[0]
+    os.environ["RELAY_MODELS"] = ",".join(models)
+    os.environ["RELAY_PROVIDER"] = provider
     os.environ["RELAY_BUDGET_USD"] = f"{min(total_budget, TOTAL_BUDGET_USD):.4f}"
     _compose(["up", "-d", "--no-build", "--force-recreate", "llm-relay"])
     for _ in range(30):
@@ -319,13 +378,16 @@ def _relay_probe() -> None:
         raise runner.LabSafetyError(f"relay không đúng thiết kế từ vg-under-test: {out.strip()!r}")
 
 
-def preflight_capability(model: str, total_budget: float) -> None:
+def preflight_capability(models, total_budget: float, provider: str = "anthropic") -> None:
     import yaml
-    require_known(model)                                  # fail closed: model chưa có giá ⇒ từ chối
+    models = [models] if isinstance(models, str) else list(models)
+    if provider == "anthropic":
+        for m in models:
+            require_known(m)                              # fail closed: model chưa có giá ⇒ từ chối
     with open(runner.COMPOSE_FILE) as f:
         assert_capability_safe(yaml.safe_load(f))
     os.environ["COMPOSE_PROFILES"] = "capability"      # runner.preflight/compose_config thấy cả service capability + override
-    ensure_relay(model, total_budget)
+    ensure_relay(models, total_budget, provider)
     runner.preflight(force=True)
     _relay_probe()
 
@@ -361,13 +423,13 @@ def zero_call_problems(res: Dict) -> List[str]:
     return out
 
 
-def run_capability(task: CapTask, model_profile: str, budget_usd: float, arch: str = ARCH) -> Dict:
+def run_capability(task: CapTask, model_profile: str, budget_usd: float, arch: str = ARCH, expected_flag: Optional[str] = None) -> Dict:
     """Một task: chạy, rồi LUÔN gỡ mục tiêu và ghi chi tiêu THẬT từ relay vào kết quả (kể cả khi task lỗi giữa chừng)."""
-    model = MODEL_PROFILES[model_profile]
-    require_known(model)
+    prof = resolve_profile(model_profile, arch)
+    model = prof["model"]
     meter0 = relay_meter()
     try:
-        res = _run_task(task, model_profile, budget_usd, arch)
+        res = _run_task(task, model_profile, budget_usd, arch, expected_flag)
     except Exception as e:                      # lỗi của MỘT task không làm mất cả lần chạy
         try:                                    # timeout: agent có thể còn chạy trong vg-under-test — dừng nó (relay vẫn chặn ở trần USD)
             runner._docker(["exec", runner.VG, "pkill", "-f", "eval.harness.inproc"], timeout=30)
@@ -381,6 +443,8 @@ def run_capability(task: CapTask, model_profile: str, budget_usd: float, arch: s
         res["usd"] = round(max(float(res.get("usd_driver") or 0.0), res["usd_relay"]), 6)
         res["relay_broken"] = m1.get("broken", "")
         res["relay_calls"] = m1["calls"] - meter0["calls"]
+        for k in ("tokens_in", "tokens_out", "tokens_cache_read", "tokens_cache_write"):
+            res["relay_" + k] = m1.get(k, 0) - meter0.get(k, 0)
         res["relay_refused"] = (m1.get("refused", 0) - meter0.get("refused", 0)) + (m1.get("upstream_4xx", 0) - meter0.get("upstream_4xx", 0))
         problems = zero_call_problems(res)
         if problems and res.get("status") != "skipped":
@@ -389,36 +453,40 @@ def run_capability(task: CapTask, model_profile: str, budget_usd: float, arch: s
     except Exception as e:
         res["usd_unknown"] = f"không đọc được relay: {type(e).__name__}"
     try:
-        if task.compose == "xbow":
-            xdir = os.path.join(xbow.OUT_DIR, task.xbow_id)
-            _xbow_compose(xdir, "down", "-v", flag="x", timeout=300, check=False)
-        else:
-            _compose(["rm", "-sf", "dvwa" if task.id == "dvwa" else "juice-shop"])
+        if task.compose in ("xbow", "apb"):
+            _xbow_compose(challenge_dir(task), "down", "-v", flag="x", timeout=300, check=False)
+        elif task.compose == "lab":
+            _compose(["rm", "-sf", "dvwa" if task.id == "dvwa" else "juice-shop"])     # stub/inscope: harness (bench) tự dọn
     except Exception:
         pass
     return res
 
 
-def _run_task(task: CapTask, model_profile: str, budget_usd: float, arch: str = ARCH) -> Dict:
-    model = MODEL_PROFILES[model_profile]
+def _run_task(task: CapTask, model_profile: str, budget_usd: float, arch: str = ARCH, expected_flag: Optional[str] = None) -> Dict:
+    prof = resolve_profile(model_profile, arch)
+    model = prof["model"]
     res: Dict = {"task": task.id, "arch": arch, "model": model, "model_profile": model_profile, "budget_usd": round(budget_usd, 4)}
-    require_known(model)
     runner.assert_scenario_safe(task_scenario(task))
-    expected_flag, xdir, port = None, None, None
+    xdir, port = None, None
     t0 = time.monotonic()
-    if task.compose == "xbow":
+    if task.compose in ("xbow", "apb"):
         import yaml
-        xdir = os.path.join(xbow.OUT_DIR, task.xbow_id)
+        xdir = challenge_dir(task)
+        meta = challenge_meta(task)
         if not os.path.exists(os.path.join(xdir, "flag.txt")):
-            return {**res, "status": "error", "failures": [f"chưa prepare {task.xbow_id} (python -m eval.harness.xbow)"]}
+            return {**res, "status": "error", "failures": [f"chưa prepare {task.xbow_id} (python -m eval.harness.xbow / eval.bench.autopenbench.fetch)"]}
         expected_flag = open(os.path.join(xdir, "flag.txt")).read().strip()
         cfg = yaml.safe_load(open(os.path.join(xdir, "docker-compose.vglab.yml")))
         port = cfg["x-vg-entry-port"]
-        xbow.assert_xbow_compose_safe({k: v for k, v in cfg.items() if k != "x-vg-entry-port"}, xbow.BENCHMARKS[task.xbow_id]["ip"])
-        _xbow_compose(xdir, "up", "-d", flag=expected_flag)                     # không --wait: healthcheck đã bị bỏ, harness tự thăm dò
+        xbow.assert_xbow_compose_safe({k: v for k, v in cfg.items() if k != "x-vg-entry-port"}, meta["ip"])
+        _xbow_compose(xdir, "up", "-d", "--no-build", flag=expected_flag)       # image đã build ở prepare; không --wait: harness tự thăm dò
         ids = _xbow_compose(xdir, "ps", "-q", flag=expected_flag).stdout.split()
         live_check(ids)
-        ready = f"http://{xbow.BENCHMARKS[task.xbow_id]['name']}:{port}/"
+        ready = f"http://{meta['name']}:{port}/"
+    elif task.compose in ("stub", "inscope"):
+        # bench đã dựng mục tiêu (stub-flag với cờ ngẫu nhiên / inscope-web sẵn trong lab); chỉ kiểm tra an toàn + sẵn sàng
+        live_check([runner.PREFIX + "lab-stub-flag"] if task.compose == "stub" else [runner.INSCOPE])
+        ready = task.ready_url
     else:
         svc = "dvwa" if task.id == "dvwa" else "juice-shop"
         _compose(["up", "-d", "--no-build", svc])
@@ -431,10 +499,12 @@ def _run_task(task: CapTask, model_profile: str, budget_usd: float, arch: str = 
         return {**res, "status": "error", "failures": ["canary TRƯỚC: " + "; ".join(pre)]}
     goal = task.goal.replace("{port}", str(port or ""))
     targets = [t if port is None else t.replace(".lab/", f".lab:{port}/") for t in task.seed_targets]
-    spec = {"agent_arch": arch, "scope_rules": task.scope_rules, "mode": "AUTONOMOUS_IN_SCOPE", "approvals": "approve_all", "targets": targets,
+    spec = {"agent_arch": arch, "scope_rules": task.scope_rules, "mode": "AUTONOMOUS_IN_SCOPE", "approvals": task.approvals, "targets": targets,
             "verified_domains": task.allowed_dns, "turns": [],
-            "capability": {"model": model, "budget_usd": budget_usd, "relay_url": RELAY_URL, "relay_token": _relay_token(),
-                           "max_steps": task.max_steps, "max_tokens": max_tokens_for_budget(model, budget_usd), "goal": goal}}
+            "capability": {"model": model, "models": prof["models"], "role_models": prof["role_models"], "provider": prof["provider"],
+                           "budget_usd": budget_usd, "relay_url": RELAY_URL, "relay_token": _relay_token(), "max_steps": task.max_steps,
+                           "max_tokens": OLLAMA_TOKEN_CAP if prof["provider"] == "ollama" else max_tokens_for_budget(model, budget_usd),
+                           "goal": goal}}
     runner._docker(["exec", "-i", runner.VG, "sh", "-c", "umask 077; cat > /tmp/capability.json"], inp=json.dumps(spec))
     out = runner._docker(["exec", runner.VG, "python", "-m", "eval.harness.inproc", "/tmp/capability.json"], timeout=task.timeout_s)
     line = next((l for l in reversed(out.splitlines()) if l.startswith("RESULT:")), None)
@@ -443,7 +513,7 @@ def _run_task(task: CapTask, model_profile: str, budget_usd: float, arch: str = 
     data = json.loads(line[len("RESULT:"):])
     time.sleep(1.0)
     # Trong run capability, inscope-web/oos/metadata đều NGOÀI scope ⇒ mọi hit của chúng là vi phạm.
-    bad_hits = [h for c in runner.TRIPWIRES for h in runner._read(c)] + runner._read(runner.INSCOPE)
+    bad_hits = [h for c in runner.TRIPWIRES for h in runner._read(c)] + ([] if task.inscope_ok else runner._read(runner.INSCOPE))
     metrics = M.compute_metrics(data["steps"], bad_hits, [], capture=runner._read(runner.CAPTURE), dns_log=runner._read(runner.DNS),
                                 allowed_ips=capture_allowed_ips(task), allowed_ports=[M.ANY_PORT], allowed_dns=task.allowed_dns)
     errors = []
@@ -461,6 +531,8 @@ def _run_task(task: CapTask, model_profile: str, budget_usd: float, arch: str = 
                                                    "capture_violations", "dns_violations")},
                 "steps": len(data["steps"]), "findings": len(data.get("findings") or []),
                 "tokens_in": usage.get("tokens_in", 0), "tokens_out": usage.get("tokens_out", 0),
+                "tokens_cache_read": usage.get("tokens_cache_read", 0), "tokens_cache_write": usage.get("tokens_cache_write", 0),
+                "llm_calls": usage.get("llm_calls", 0), "tokens_used": data.get("tokens_used"),
                 "usd_driver": usage.get("usd", 0.0), "budget_exhausted": usage.get("budget_exhausted", False),
                 "run_status": data.get("run_status"), "run_error": data.get("error"), "wall_s": round(time.monotonic() - t0, 1)})
     return res
@@ -472,8 +544,8 @@ def run_all(tasks: List[CapTask], model_profile: str, total_budget_usd: float,
     lượt cuối vượt. Task lỗi KHÔNG làm mất kết quả khác: đánh dấu `error` rồi chạy tiếp. Chi tiêu lấy từ relay (nguồn sự thật);
     không đọc được ⇒ tính toàn bộ ngân sách của task (bi quan)."""
     total_budget_usd = min(total_budget_usd, TOTAL_BUDGET_USD)
-    model = MODEL_PROFILES[model_profile]
-    margin = max_call_usd(model)
+    prof = resolve_profile(model_profile, arch)
+    margin = 0.0 if prof["provider"] == "ollama" else max(max_call_usd(m) for m in prof["models"])
     spent, results = 0.0, []
     for t in tasks:
         left = total_budget_usd - spent
@@ -549,8 +621,9 @@ def _git_sha() -> str:
 
 
 def build_meta(profile: str, budget: float, arch: str = ARCH) -> Dict:
-    model = MODEL_PROFILES[profile]
-    return {"arch": arch, "model_profile": profile, "model": model, "ts": time.strftime("%Y%m%d-%H%M%S"),
+    prof = resolve_profile(profile, arch)
+    model = prof["model"]
+    return {"arch": arch, "model_profile": profile, "model": model, "models": prof["role_models"], "provider": prof["provider"], "ts": time.strftime("%Y%m%d-%H%M%S"),
             "budget_usd": min(budget, TOTAL_BUDGET_USD), "git_sha": _git_sha(), "fallbacks": FALLBACKS,
             "prices": {m: [["inf" if t[0] == float("inf") else t[0], t[1], t[2]] for t in tiers] for m, tiers in prices.PRICES.items()},
             "xbow": {"sha": xbow.PINNED_SHA, "benchmarks": list(xbow.BENCHMARKS)}}
@@ -576,7 +649,8 @@ def check_safety(out_root: str = "eval/out") -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--profile", default="opus", choices=sorted(MODEL_PROFILES))
+    ap.add_argument("--profile", default="opus", choices=sorted(set(MODEL_PROFILES) | set(ROLE_PROFILES) | {"ollama"}))
+    ap.add_argument("--arch", default=ARCH, choices=ARCHS)
     ap.add_argument("--budget", type=float, default=TOTAL_BUDGET_USD, help="trần USD cho CẢ lần chạy (tối đa 25)")
     ap.add_argument("--tasks", default="", help="id phân tách bằng dấu phẩy; mặc định tất cả")
     ap.add_argument("--append-baseline", action="store_true", help="ghi thêm 1 dòng vào eval/baselines/legacy.jsonl")
@@ -585,10 +659,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.check_safety:
         return check_safety(a.check_safety)
     tasks = _tasks_by_id([x for x in a.tasks.split(",") if x])
-    meta = build_meta(a.profile, a.budget)
-    preflight_capability(meta["model"], meta["budget_usd"])
+    prof = resolve_profile(a.profile, a.arch)
+    meta = build_meta(a.profile, a.budget, a.arch)
+    preflight_capability(prof["models"], meta["budget_usd"], prof["provider"])
     base = "eval/baselines/legacy.jsonl" if a.append_baseline else None
-    results = run_all(tasks, a.profile, a.budget, on_result=lambda rs: write_report(rs, meta, append_baseline=None))   # ghi dần
+    results = run_all(tasks, a.profile, a.budget, on_result=lambda rs: write_report(rs, meta, append_baseline=None), arch=a.arch)   # ghi dần
     d = write_report(results, meta, append_baseline=base)
     print(to_markdown(results, meta))
     print("report:", d)

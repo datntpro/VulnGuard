@@ -2,7 +2,13 @@
 # VulnGuard — Makefile shortcuts
 # ─────────────────────────────────────────────
 
-.PHONY: help up down build logs scan pull-model clean pentest-images pentest-host-ips
+BENCH_SUITE ?= stub,injection,xbow
+BENCH_TASKS ?= XBEN-004-24,XBEN-005-24,XBEN-007-24
+BENCH_ARCH ?= both
+BENCH_MODEL ?= qwen2.5:7b
+PY ?= python3
+
+.PHONY: help up down build logs scan pull-model clean pentest-images pentest-host-ips bench-local
 
 help:
 	@echo ""
@@ -15,6 +21,7 @@ help:
 	@echo "  make check-docker    Kiểm tra Docker socket path"
 	@echo "  make scan ...        Scan qua CLI (xem ví dụ bên dưới)"
 	@echo "  make clean           Xóa containers và volumes"
+	@echo "  make bench-local     Pentest bench với Ollama local (0 USD; BENCH_SUITE/BENCH_TASKS/BENCH_ARCH/BENCH_MODEL)"
 	@echo ""
 	@echo "  Sau khi 'make up': mở http://localhost:8080 → Settings → Pull model"
 	@echo ""
@@ -85,3 +92,7 @@ pentest-images:
 # P2-5: in IP host (csv /32) cho PENTEST_EGRESS_EXTRA_DENY — bắt buộc trên Docker Desktop khi scope mở dải riêng (xem docs/PENTEST_RUNNER.md)
 pentest-host-ips:
 	@./scripts/pentest_host_ips.sh
+
+# P2-15b: bench LLM thật bằng Ollama local (không dùng ở CI). Xem eval/bench/bench-local.sh.
+bench-local:
+	@PY="$(PY)" BENCH_SUITE="$(BENCH_SUITE)" BENCH_TASKS="$(BENCH_TASKS)" BENCH_ARCH="$(BENCH_ARCH)" BENCH_MODEL="$(BENCH_MODEL)" ./eval/bench/bench-local.sh

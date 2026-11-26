@@ -140,6 +140,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       RELAY_TOKEN: ${RELAY_TOKEN:-}
       RELAY_MODEL: ${RELAY_MODEL:-}
+      RELAY_MODELS: ${RELAY_MODELS:-}                  # P2-15b: allowlist nhiều model (phân tách dấu phẩy)
+      RELAY_PROVIDER: ${RELAY_PROVIDER:-anthropic}     # P2-15b: "ollama" CHỈ khi chạy local (make bench-local); CI luôn anthropic
       RELAY_BUDGET_USD: ${RELAY_BUDGET_USD:-}
     volumes:
       - ./llm-relay:/srv:ro
