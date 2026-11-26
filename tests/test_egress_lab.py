@@ -346,9 +346,10 @@ def test_account_credentials_in_gateway_copy_never_reach_db_or_api(lab, monkeypa
     from tests._authutil import bearer, login, make_user, new_client
     from tests.pentest_fakes import make_engagement, make_run
     secret = "Bearer PR83-LABSECRET-" + uuid.uuid4().hex
+    tokval = secret.split(" ", 1)[1]
     code = ("import urllib.request as u, os\n"
             "h=u.ProxyHandler({'http':os.environ['HTTP_PROXY'],'https':os.environ['HTTPS_PROXY']})\n"
-            f"o=u.build_opener(h)\nr=o.open(u.Request('http://inscope.lab/', headers={{'Authorization': {secret!r}}}), timeout=10)\nprint('STATUS', r.status)")
+            f"o=u.build_opener(h)\nr=o.open(u.Request('http://inscope.lab/?tok='+{tokval!r}+'&q=1', headers={{'Authorization': {secret!r}}}), timeout=10)\nprint('STATUS', r.status)")
     assert "STATUS 200" in py(lab, code)[1]
 
     def wire():
@@ -357,6 +358,7 @@ def test_account_credentials_in_gateway_copy_never_reach_db_or_api(lab, monkeypa
         return evs or None
     evs = _wait(wire, 20)
     assert evs, "secret không xuất hiện trong bản sao gateway → test không có ý nghĩa"
+    assert any(tokval in e.get("url", "") for e in evs), "secret không có trong URL của bản sao gateway (R1)"
 
     monkeypatch.setattr(pentest_settings, "runner_token", TOKEN)
     Base.metadata.create_all(bind=engine)
@@ -385,7 +387,7 @@ def test_account_credentials_in_gateway_copy_never_reach_db_or_api(lab, monkeypa
         for t in rows:
             api = c.get(f"/api/pentest/traffic/{t.id}", headers=hdr)
             assert api.status_code == 200
-            blob = json.dumps([t.request_headers, t.request_body, t.response_headers, t.response_body]) + api.text
+            blob = json.dumps([t.request_headers, t.request_body, t.response_headers, t.response_body, t.url]) + api.text   # R1: cả URL
             assert secret not in blob and secret.split(" ", 1)[1] not in blob
     finally:
         db.query(TrafficEntry).filter(TrafficEntry.engagement_id == eng.id).delete()
