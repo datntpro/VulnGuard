@@ -9,11 +9,6 @@ updates:
   - package-ecosystem: pip
     directory: "/docker/scanners"
     schedule: { interval: weekly }
-    ignore:
-      # semgrep.in ghim setuptools<81: opentelemetry-instrumentation (dep của semgrep) còn import
-      # pkg_resources, bị gỡ từ setuptools 81. Bỏ ignore này khi semgrep không còn cần pkg_resources.
-      - dependency-name: "setuptools"
-        versions: [">=81"]
   - package-ecosystem: pip
     directory: "/"
     schedule: { interval: weekly }
