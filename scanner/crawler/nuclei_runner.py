@@ -119,8 +119,14 @@ async def run_nuclei(
     exclude_tags: List[str] = None,
     safe_net: bool = False,
     proxy: Optional[str] = None,
+    backend: Any = None,
+    step_id: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Chạy nuclei → (findings, meta{error, timed_out, stderr_tail})."""
+    """Chạy nuclei → (findings, meta{error, timed_out, stderr_tail}).
+    backend (P2-4): ExecBackend `sandbox` → chạy trong sandbox qua runner (argv y hệt, `-u` thay cho `-l <file host>`)."""
+    if backend is not None and getattr(backend, "name", "") == "sandbox":
+        return await _run_nuclei_sandbox(backend, step_id, targets, severities, tags, fuzz, rate_limit, timeout,
+                                         on_finding, capture_traffic, exclude_tags, safe_net)
     if not is_nuclei_available():
         return [], {"error": "Tool 'nuclei' chưa được cài. Rebuild Docker image hoặc xem docs/NATIVE_INSTALL.md."}
     if not targets:
@@ -173,4 +179,31 @@ async def run_nuclei(
             REGISTRY.unregister(rid, proc)
         if proc.returncode not in (0, None) and not findings and not meta["error"]:
             meta["error"] = (meta["stderr_tail"].strip()[-500:] or f"nuclei exit code {proc.returncode}")
+    return findings, meta
+
+
+async def _run_nuclei_sandbox(backend, step_id, targets, severities, tags, fuzz, rate_limit, timeout, on_finding,
+                              capture_traffic, exclude_tags, safe_net):
+    if not targets:
+        return [], {"error": "Không có URL nào để quét."}
+    cmd = build_command("-", severities, tags, fuzz, rate_limit, capture_traffic=capture_traffic,
+                        exclude_tags=exclude_tags, safe_net=safe_net, proxy=None)
+    i = cmd.index("-l")
+    cmd[i:i + 2] = [x for t in targets for x in ("-u", t)]    # file target của host không tới được sandbox
+    from scanner.pentest.procs import current_run_id
+    res = await backend.run_argv(cmd, timeout, run_id=current_run_id.get(), step_id=step_id, max_output=1)
+    findings: List[Dict[str, Any]] = []
+    meta: Dict[str, Any] = {"error": None, "timed_out": bool(res.get("timed_out")), "stderr_tail": (res.get("stderr") or "")[-1500:]}
+    for line in (res.get("stdout") or "").splitlines():
+        item = parse_finding(line.strip())
+        if item:
+            findings.append(item)
+            if on_finding:
+                await on_finding(item)
+    if res.get("timed_out"):
+        meta["error"] = f"Nuclei timeout sau {timeout // 60} phút — giữ các finding đã thu được."
+    elif res.get("error"):
+        meta["error"] = str(res["error"])[:500]
+    elif res.get("returncode") not in (0, None) and not findings:
+        meta["error"] = meta["stderr_tail"].strip()[-500:] or f"nuclei exit code {res.get('returncode')}"
     return findings, meta
