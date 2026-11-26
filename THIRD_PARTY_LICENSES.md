@@ -21,6 +21,7 @@ nó. Danh sách dưới đây để rà soát tuân thủ — **cần kiểm tra
 | sqlmap | Pentest | GPL-2.0 | Chỉ gọi khi được uỷ quyền + duyệt |
 | SonarQube Community | SAST server | LGPL-3.0 | Chạy tách như service |
 | SecLists | Wordlist | nhiều giấy phép | Rà từng danh sách |
+| FIRST CVSS v4.0 calculator (github.com/FIRSTdotorg/cvss-v4-calculator, RedHatProductSecurity/cvss-v4-calculator) | Chấm điểm CVSS v4 (Pentest Agent) | BSD-2-Clause, © 2023 FIRST.ORG, Inc., Red Hat, and contributors | Bảng dữ liệu + thuật toán được port vào `scanner/pentest/{cvss4_data,scoring}.py`; giữ nguyên notice trong header file |
 
 ## Hành động cần làm (P0.11)
 - [ ] Luật sư/kỹ thuật xác nhận từng dòng giấy phép ở trên theo phiên bản thực tế đang dùng.
