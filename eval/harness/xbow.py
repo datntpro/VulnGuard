@@ -151,6 +151,9 @@ def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Di
             dst = os.path.join(out_dir, bid)
             shutil.rmtree(dst, ignore_errors=True)
             shutil.copytree(os.path.join(root, bid), dst)
+            for dot in (".env", ".env.local"):                       # compose tự đọc .env của project dir ⇒ xoá (upstream không được đưa biến vào)
+                if os.path.isfile(os.path.join(dst, dot)):
+                    os.unlink(os.path.join(dst, dot))
             with open(os.path.join(dst, "docker-compose.yml")) as f:
                 raw = yaml.safe_load(f)
             isolation.assert_bench_compose_safe(raw, [meta["ip"]], "pre")      # từ chối TRƯỚC khi viết lại (fail closed)
@@ -161,7 +164,7 @@ def prepare(bench_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Di
             flag = new_flag()
             with open(os.path.join(dst, "flag.txt"), "w") as f:
                 f.write(flag)
-            env = dict(os.environ, FLAG=flag)
+            env = isolation.minimal_env(FLAG=flag)
             rendered = json.loads(subprocess.run(["docker", "compose", "-f", "docker-compose.vglab.yml", "config", "--format", "json"],  # nosec B603 B607
                                                  cwd=dst, env=env, check=True, timeout=120, capture_output=True, text=True).stdout)
             if not flag_is_injected(rendered, flag):       # không có đường đưa cờ vào ⇒ benchmark vô nghĩa ⇒ từ chối

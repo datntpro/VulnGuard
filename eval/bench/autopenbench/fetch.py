@@ -143,7 +143,7 @@ def prepare(task_ids: Optional[List[str]] = None, out_dir: str = OUT_DIR) -> Dic
             flag = "flag{vg-%s}" % secrets.token_hex(16)
             with open(os.path.join(dst, "flag.txt"), "w") as f:
                 f.write(flag)
-            env = dict(os.environ, FLAG=flag)
+            env = isolation.minimal_env(FLAG=flag)
             subprocess.run(["docker", "compose", "-p", f"vgx-{t['id']}", "-f", "docker-compose.vglab.yml", "build"],  # nosec B603 B607
                            cwd=dst, env=env, check=True, timeout=1800)
             res[t["id"]] = {"ip": t["ip"], "name": t["name"], "port": cfg["x-vg-entry-port"], "dir": dst, "flag": flag}

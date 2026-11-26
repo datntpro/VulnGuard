@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 from urllib.parse import unquote
 
+from eval.bench import isolation
 from eval.harness import metrics as M
 from eval.harness import prices, runner, xbow
 from eval.harness.prices import MODEL_PROFILES, max_call_usd, max_tokens_for_budget, require_known
@@ -346,7 +347,7 @@ def wait_ready(url: str, timeout_s: int = 180) -> None:
 
 def _xbow_compose(xdir: str, *args: str, flag: str, timeout: int = 600, check: bool = True):
     return subprocess.run(["docker", "compose", "-p", f"vgx-{os.path.basename(xdir).lower()}", "-f", "docker-compose.vglab.yml", *args],  # nosec B603 B607
-                          cwd=xdir, env=dict(os.environ, FLAG=flag), check=check, timeout=timeout, capture_output=True, text=True)
+                          cwd=xdir, env=isolation.minimal_env(FLAG=flag), check=check, timeout=timeout, capture_output=True, text=True)
 
 
 def zero_call_problems(res: Dict) -> List[str]:

@@ -10,6 +10,9 @@ lộ cổng; ở phase "post" `ports` bị cấm tuyệt đối."""
 import copy
 import ipaddress
 import logging
+import os
+import posixpath
+import re
 from typing import Dict, Iterable, List, Optional
 
 LAB_NETWORK = "vglab_lab_net"          # project `vglab` + network `lab_net` của docker-compose.lab.yml
@@ -40,6 +43,146 @@ def _as_dict(x) -> Dict:
     return x if isinstance(x, dict) else {}
 
 
+# ── ALLOWLIST (fail closed): khoá không nằm trong danh sách ⇒ từ chối, ở MỌI cấp ──
+_TOP_ALLOWED = ("services", "networks", "volumes", "version", "name")           # + mọi `x-*`
+_SERVICE_ALLOWED = frozenset((
+    "image", "build", "command", "entrypoint", "environment", "expose", "ports", "depends_on", "healthcheck", "platform", "init",
+    "working_dir", "user", "restart", "networks", "volumes", "tmpfs", "read_only", "stop_signal", "stop_grace_period", "labels",
+    "hostname", "cap_drop", "shm_size", "ulimits", "security_opt", "container_name"))   # container_name/ports/networks: pre-only, transform xoá
+_BUILD_ALLOWED = frozenset(("context", "dockerfile", "args", "target"))
+_HEALTH_ALLOWED = frozenset(("test", "interval", "timeout", "retries", "start_period", "start_interval", "disable"))
+_DEP_ALLOWED = frozenset(("condition", "required", "restart"))
+_NET_TOP_ALLOWED = frozenset(("name", "driver", "internal", "external"))   # external chỉ nhận giá trị false (kiểm riêng bên dưới)
+_VOL_LONG_ALLOWED = frozenset(("type", "source", "target", "read_only", "tmpfs", "volume"))
+_NAMED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SAFE_DOLLAR = "${FLAG}"
+
+
+def _walk_strings(x):
+    if isinstance(x, dict):
+        for k, v in x.items():
+            yield str(k)
+            yield from _walk_strings(v)
+    elif isinstance(x, (list, tuple)):
+        for v in x:
+            yield from _walk_strings(v)
+    elif isinstance(x, str):
+        yield x
+
+
+def _check_interpolation(cfg: Dict) -> None:
+    """Mọi `$` trong chuỗi (kể cả khoá) bị từ chối, trừ đúng `${FLAG}` — chặn rò biến môi trường host qua nội suy."""
+    for s in _walk_strings(cfg):
+        if "$" in s.replace(_SAFE_DOLLAR, ""):
+            raise UnsafeCompose(f"nội suy biến `$` bị cấm (chỉ cho phép ${{FLAG}}): {s[:60]!r}")
+
+
+def _check_env_list_or_map(name: str, where: str, v) -> None:
+    """environment/build.args: mục không có `=` (hoặc giá trị null) = chuyển tiếp biến từ host ⇒ cấm, trừ đúng `FLAG`."""
+    if v is None:
+        return
+    if isinstance(v, dict):
+        for k, val in v.items():
+            if val is None and str(k) != "FLAG":
+                raise UnsafeCompose(f"service {name}: {where}.{k} không có giá trị (chuyển tiếp biến host)")
+    elif isinstance(v, list):
+        for e in v:
+            if "=" not in str(e) and str(e) != "FLAG":
+                raise UnsafeCompose(f"service {name}: {where} mục `{e}` không có `=` (chuyển tiếp biến host)")
+    else:
+        raise UnsafeCompose(f"service {name}: {where} kiểu lạ")
+
+
+def _check_relpath(name: str, what: str, p) -> None:
+    p = str(p)
+    n = posixpath.normpath(p)
+    if (not p or p != p.strip() or "://" in p or p.startswith(("/", "~", "git@", "\\")) or ":" in p or n == ".."
+            or n.startswith("../") or "\\" in p):
+        raise UnsafeCompose(f"service {name}: build.{what} phải là đường dẫn tương đối nằm TRONG thư mục challenge: {p!r}")
+
+
+def _check_build(name: str, b) -> None:
+    if isinstance(b, str):
+        _check_relpath(name, "context", b)
+        return
+    if not isinstance(b, dict):
+        raise UnsafeCompose(f"service {name}: build kiểu lạ")
+    for k in b:
+        if k not in _BUILD_ALLOWED:
+            raise UnsafeCompose(f"service {name}: build.{k} không nằm trong allowlist")
+    if "context" in b:
+        _check_relpath(name, "context", b["context"])
+    if "dockerfile" in b:
+        _check_relpath(name, "dockerfile", b["dockerfile"])
+    _check_env_list_or_map(name, "build.args", b.get("args"))
+
+
+def _check_volume_entry(name: str, v, declared) -> None:
+    if isinstance(v, dict):
+        for k in v:
+            if k not in _VOL_LONG_ALLOWED:
+                raise UnsafeCompose(f"service {name}: volumes.{k} không nằm trong allowlist")
+        t = v.get("type")
+        if t not in ("volume", "tmpfs"):
+            raise UnsafeCompose(f"service {name}: volume phải có type volume|tmpfs, có {t!r}")
+        if t == "volume" and str(v.get("source")) not in declared:
+            raise UnsafeCompose(f"service {name}: volume nguồn phải là named volume đã khai báo: {v.get('source')!r}")
+        return
+    parts = str(v).split(":")
+    if len(parts) < 2 or len(parts) > 3 or parts[0] not in declared or not _NAMED.match(parts[0]) or not parts[1].startswith("/") \
+            or (len(parts) == 3 and parts[2] not in ("ro", "rw", "nocopy")):
+        raise UnsafeCompose(f"service {name}: volume chỉ được là `named_volume_đã_khai_báo:/path[:ro]`: {v!r}")
+
+
+def _check_allowlist(cfg: Dict, phase: str) -> None:
+    for k in cfg:
+        if k not in _TOP_ALLOWED and not str(k).startswith("x-"):
+            raise UnsafeCompose(f"khoá cấp cao `{k}` không nằm trong allowlist")
+    _check_interpolation(cfg)
+    tv = cfg.get("volumes")
+    if tv is not None and not isinstance(tv, dict):
+        raise UnsafeCompose("volumes cấp cao kiểu lạ")
+    for vn, spec in (tv or {}).items():
+        if spec not in (None, {}) or not _NAMED.match(str(vn)):
+            raise UnsafeCompose(f"volume cấp cao `{vn}` chỉ được khai báo rỗng (không driver/driver_opts/external/name)")
+    declared = {str(k) for k in (tv or {})}
+    for n, spec in _as_dict(cfg.get("networks")).items():
+        if not isinstance(spec, (dict, type(None))):
+            raise UnsafeCompose(f"network {n}: kiểu lạ")
+        if phase == "pre":
+            for k in spec or {}:
+                if k not in _NET_TOP_ALLOWED:
+                    raise UnsafeCompose(f"network {n}: `{k}` không nằm trong allowlist")
+    for name, svc in cfg["services"].items():
+        if not isinstance(svc, dict):
+            raise UnsafeCompose(f"service {name}: không phải mapping")
+        for k in svc:
+            if k not in _SERVICE_ALLOWED and not str(k).startswith("x-"):
+                raise UnsafeCompose(f"service {name}: khoá `{k}` không nằm trong allowlist")
+        if "build" in svc:
+            _check_build(name, svc["build"])
+        _check_env_list_or_map(name, "environment", svc.get("environment"))
+        for v in svc.get("volumes") or []:
+            _check_volume_entry(name, v, declared)
+        for o in svc.get("security_opt") or []:
+            if str(o) not in ("no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"):
+                raise UnsafeCompose(f"service {name}: security_opt `{o}` không nằm trong allowlist")
+        hc = svc.get("healthcheck")
+        if hc is not None and (not isinstance(hc, dict) or set(hc) - _HEALTH_ALLOWED):
+            raise UnsafeCompose(f"service {name}: healthcheck có khoá ngoài allowlist")
+        dep = svc.get("depends_on")
+        if isinstance(dep, dict):
+            for dn, ds in dep.items():
+                if ds is not None and (not isinstance(ds, dict) or set(ds) - _DEP_ALLOWED):
+                    raise UnsafeCompose(f"service {name}: depends_on.{dn} có khoá ngoài allowlist")
+        elif dep is not None and not isinstance(dep, list):
+            raise UnsafeCompose(f"service {name}: depends_on kiểu lạ")
+        for key in ("command", "entrypoint"):
+            c = svc.get(key)
+            if c is not None and not isinstance(c, (str, list)):
+                raise UnsafeCompose(f"service {name}: {key} kiểu lạ")
+
+
 def assert_bench_compose_safe(cfg: Dict, allowed_ips: Iterable[str], phase: str = "pre") -> None:
     """Từ chối (fail closed) với UnsafeCompose. phase="pre": compose gốc; phase="post": compose đã `transform_compose`."""
     if phase not in ("pre", "post"):
@@ -52,8 +195,9 @@ def assert_bench_compose_safe(cfg: Dict, allowed_ips: Iterable[str], phase: str 
     services = cfg.get("services")
     if not isinstance(services, dict) or not services:
         raise UnsafeCompose("compose không có services")
-    for name, svc in services.items():
-        svc = _as_dict(svc)
+    for name, svc in services.items():            # denylist trước để có thông điệp cụ thể; allowlist (bên dưới) chặn MỌI thứ còn lại
+        if not isinstance(svc, dict):
+            raise UnsafeCompose(f"service {name}: không phải mapping")
         for bad in _FORBIDDEN_ANY:
             if svc.get(bad):
                 raise UnsafeCompose(f"service {name}: `{bad}` bị cấm")
@@ -81,11 +225,14 @@ def assert_bench_compose_safe(cfg: Dict, allowed_ips: Iterable[str], phase: str 
             if not names or not names <= {"lab_net", BENCH_NET}:
                 raise UnsafeCompose(f"service {name}: network lạ {sorted(names)}")
             for n, spec in _as_dict(nets).items():
+                if set(_as_dict(spec)) - {"ipv4_address"}:
+                    raise UnsafeCompose(f"service {name}: networks.{n} có khoá ngoài allowlist")
                 ip = _as_dict(spec).get("ipv4_address")
                 if ip and str(ip) not in allowed:
                     raise UnsafeCompose(f"service {name}: ipv4_address {ip} không nằm trong allowed_ips")
                 if n == BENCH_NET and ip:
                     raise UnsafeCompose(f"service {name}: bench_internal không được có IP cố định")
+    _check_allowlist(cfg, phase)                  # allowlist cuối: mọi khoá/giá trị còn lại phải nằm trong danh sách cho phép
     top = _as_dict(cfg.get("networks"))
     if phase == "pre":
         for n, spec in top.items():
@@ -153,3 +300,11 @@ def rewrite_and_check(cfg: Dict, ip: str, entry: Optional[str] = None) -> Dict:
     out = transform_compose(cfg, ip, entry=entry)
     assert_bench_compose_safe({k: v for k, v in out.items() if k != "x-vg-entry-port"}, [ip], "post")
     return out
+
+
+def minimal_env(**extra: str) -> Dict[str, str]:
+    """Môi trường TỐI THIỂU cho `docker compose`/build: PATH, HOME (+ DOCKER_* để tới daemon/context) và `extra` (vd FLAG). KHÔNG chuyển
+    tiếp phần còn lại của os.environ (khoá API, token CI…) vào compose/build của benchmark bên thứ ba."""
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
+    env.update(extra)
+    return env
