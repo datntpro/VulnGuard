@@ -166,12 +166,116 @@ def test_dockerfile_invariants():
     assert re.search(r"^FROM debian:bookworm-slim@sha256:[0-9a-f]{64} AS base", code, re.M)  # pin digest
     assert ":latest" not in code
     # target cuối (mặc định) là runner, không phải browser
-    assert re.findall(r"^FROM .* AS (\w+)", code, re.M) == ["base", "browser", "runner"]
+    assert re.findall(r"^FROM .* AS (\w+)", code, re.M) == ["fetch", "base", "browser", "runner"]
     # mọi stage cuối chạy non-root và ENTRYPOINT idle
-    for stage in code.split("\nFROM ")[2:]:
+    for stage in code.split("\nFROM ")[3:]:
         assert "USER 10002:10002" in stage
         assert 'ENTRYPOINT ["/usr/local/bin/vg-exec","--idle"]' in stage
     assert "USER root" not in code and "HEALTHCHECK" not in code
     assert "/usr/sbin/nologin" in code
     # binary tải về đều có sha256
     assert code.count("sha256sum -c") >= 4
+
+
+# ── cờ nguy hiểm (defence in depth) ────────────────────────────────────────
+@pytest.mark.parametrize("argv", [
+    ["sqlmap", "-u", "http://x/?id=1", "--eval", "import os"], ["sqlmap", "--eval=import os"],
+    ["sqlmap", "--ev", "x"], ["sqlmap", "--os-shell"], ["sqlmap", "--os-cmd=id"], ["sqlmap", "--os", "x"],
+    ["sqlmap", "--file-read=/etc/passwd"], ["sqlmap", "--file-write", "a"], ["sqlmap", "--sql-shell"],
+    ["sqlmap", "--sql-file=a"], ["sqlmap", "--priv-esc"], ["sqlmap", "--reg-read"], ["sqlmap", "-r", "req.txt"],
+    ["sqlmap", "-rreq.txt"], ["sqlmap", "-c", "x.conf"], ["sqlmap", "--tamper=/work/x.py"],
+    ["sqlmap", "--tamper", "../x"], ["sqlmap", "--output-dir=/tmp"], ["sqlmap", "--update"], ["sqlmap", "-g", "q"],
+    ["sqlmap", "--OS-SHELL"],
+    ["nmap", "--script", "/work/x.nse", "h"], ["nmap", "--script=./x.nse", "h"], ["nmap", "--script=vuln,exploit", "h"],
+    ["nmap", "--script", "default,http-*", "h"], ["nmap", "--script"], ["nmap", "--scri=evil", "h"],
+    ["nmap", "--script-args=a=b", "h"], ["nmap", "--script-args-file", "f"], ["nmap", "--script-updatedb"],
+    ["nmap", "--datadir=/work"], ["nmap", "--dat", "/work"], ["nmap", "-iL", "/etc/passwd"], ["nmap", "-iLfile"],
+    ["nmap", "--resume", "log"], ["nmap", "--stylesheet=x"], ["nmap", "-oN", "/tmp/x"], ["nmap", "-oX/etc/x"],
+    ["nmap", "-oN", "/work/../tmp/x"], ["nmap", "-oN", "rel.txt"],
+    ["nuclei", "-code"], ["nuclei", "--code"], ["nuclei", "-t", "/work/x.yaml"], ["nuclei", "-t=/tmp/x"],
+    ["nuclei", "-t", "/opt/nuclei-templates/../../work/x"], ["nuclei", "-templates", "/opt/nuclei-templates,/work/x"],
+    ["nuclei", "-w", "/work/wf"], ["nuclei", "-ut"], ["nuclei", "-ud", "/work"], ["nuclei", "-tu", "http://e"],
+    ["nuclei", "-l", "/etc/hosts"], ["nuclei", "-config", "/work/c"], ["nuclei", "-t"],
+    ["ffuf", "-input-cmd", "id"], ["ffuf", "--input-cmd=id"],
+])
+def test_dangerous_flags_refused(argv):
+    with pytest.raises(vg_exec.ExecRefused):
+        vg_exec.validate_argv(argv)
+
+
+@pytest.mark.parametrize("argv", [
+    ["sqlmap", "-u", "http://x/?id=1", "--batch", "--level=2", "--risk", "1", "--forms", "--dbs"],
+    ["sqlmap", "--tamper=space2comment,between", "-u", "http://x"],
+    ["sqlmap", "--technique=BEU", "--data", "a=1", "--random-agent", "--sql-query=select 1"],
+    ["nmap", "-sV", "-Pn", "-p", "80,443", "--top-ports", "100", "10.0.0.1"],
+    ["nmap", "-sC", "--script=default,safe", "h"], ["nmap", "--script", "http-title,ssl-cert", "h"],
+    ["nmap", "-oX", "/work/s1/out.xml", "h"], ["nmap", "-oN/work/s1/out.txt", "h"], ["nmap", "-oX", "-", "h"],
+    ["nuclei", "-u", "http://x", "-t", "/opt/nuclei-templates/http/", "-duc", "-ni", "-dr"],
+    ["nuclei", "-u", "http://x", "-t=/opt/nuclei-templates/cves,/opt/nuclei-templates/http", "-rl", "50"],
+    ["nuclei", "-l", "/work/s1/targets.txt", "-o", "/work/s1/out.jsonl", "-jsonl"],
+    ["ffuf", "-u", "http://x/FUZZ", "-w", "/usr/share/seclists/x.txt", "-rate", "10"],
+])
+def test_legit_flags_allowed(argv):
+    assert vg_exec.validate_argv(argv) == argv
+
+
+def test_nuclei_always_gets_duc(fake_tools, monkeypatch):
+    (Path(vg_exec.SEARCH_PATH) / "nuclei").write_text('#!/bin/sh\necho "$@"\n')
+    (Path(vg_exec.SEARCH_PATH) / "nuclei").chmod(0o755)
+    res = vg_exec.run_step(["nuclei", "-u", "http://x"], step="n1", work_root=str(fake_tools))
+    assert Path(res["stdout_path"]).read_text().split() == ["-u", "http://x", "-duc"]
+    res = vg_exec.run_step(["nuclei", "-u", "http://x", "-duc"], step="n2", work_root=str(fake_tools))
+    assert Path(res["stdout_path"]).read_text().split().count("-duc") == 1
+
+
+# ── helper python: không bao giờ thực thi vg_http.py từ cwd ────────────────
+def test_python_helper_runs_isolated_and_ignores_planted_module(fake_tools, tmp_path, monkeypatch):
+    mods = tmp_path / "mods"
+    mods.mkdir()
+    (mods / "vg_http.py").write_text("import sys\nprint('REAL', sys.argv[1:])\n")
+    bindir = Path(vg_exec.SEARCH_PATH)
+    (bindir / "python3").symlink_to(sys.executable)
+    monkeypatch.setattr(vg_exec, "MODULE_DIR", str(mods))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "evil"))  # cũng không được dùng
+    step = fake_tools / "p1"
+    step.mkdir(parents=True)
+    (step / "vg_http.py").write_text("print('HIJACKED')\n")  # cài sẵn trong cwd của bước
+    res = vg_exec.run_step(["python3", "-m", "vg_http", "--x"], tool="python3 -m vg_http", step="p1",
+                           work_root=str(fake_tools))
+    out = Path(res["stdout_path"]).read_text()
+    assert res["returncode"] == 0 and out.startswith("REAL") and "HIJACKED" not in out and "'--x'" in out
+
+
+def test_python_helper_missing_module_refused(fake_tools, tmp_path, monkeypatch):
+    (Path(vg_exec.SEARCH_PATH) / "python3").symlink_to(sys.executable)
+    monkeypatch.setattr(vg_exec, "MODULE_DIR", str(tmp_path / "empty"))
+    with pytest.raises(vg_exec.ExecRefused, match="not installed"):
+        vg_exec.run_step(["python3", "-m", "vg_http"], step="p2", work_root=str(fake_tools))
+
+
+def test_existing_output_symlink_not_followed(fake_tools, tmp_path):
+    step = fake_tools / "l1"
+    step.mkdir(parents=True)
+    target = tmp_path / "victim"
+    (step / "stdout").symlink_to(target)
+    with pytest.raises(OSError):
+        vg_exec.run_step(["nmap", "x"], step="l1", work_root=str(fake_tools))
+    assert not target.exists()
+
+
+def test_vg_http_timeout_validation():
+    vg_http = _load("vg_http")
+    t = httpx.MockTransport(lambda req: httpx.Response(200))
+    for bad in (-1, 0, float("nan"), float("inf"), "x", 10_000):
+        assert "error" in vg_http.perform({"url": "http://x/", "timeout": bad}, transport=t)
+    assert "error" in vg_http.perform({"url": "http://x/", "body": "a" * (vg_http.MAX_BODY + 1)}, transport=t)
+    assert vg_http.perform({"url": "http://x/", "timeout": 5}, transport=t)["status"] == 200
+
+
+def test_dockerfile_pins_and_minimal_image():
+    code = (DIR / "Dockerfile").read_text()
+    assert code.splitlines()[0] == "# syntax=docker/dockerfile:1"
+    assert re.search(r"NUCLEI_TEMPLATES_COMMIT=[0-9a-f]{40}", code)
+    final = code.split("AS base")[1]
+    assert not re.search(r"apt-get install[^&]*\b(curl|unzip|git)\b", final.split("AS browser")[0])
+    assert code.count("perm /6000") >= 2  # base + browser
