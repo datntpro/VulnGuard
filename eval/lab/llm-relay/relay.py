@@ -175,9 +175,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 j = json.loads(data)
                 u = j["usage"]
-                tin = int(u.get("input_tokens", 0)) + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                tin = int(u.get("input_tokens", 0))
+                cw = int(u.get("cache_creation_input_tokens") or 0)
+                cr = int(u.get("cache_read_input_tokens") or 0)
                 tout = int(u["output_tokens"])
-                METER.usd += prices.call_usd(j.get("model") or "", tin, tout)     # giá theo model THỰC SỰ phản hồi
+                METER.usd += prices.call_usd(j.get("model") or "", tin, tout, cr, cw)     # giá theo model THỰC SỰ phản hồi
             except Exception as e:                # thiếu usage / model lạ ⇒ tính xấu nhất + khoá
                 METER.usd += prices.max_call_usd(req_model)
                 METER.broken = f"không tính được chi phí lượt gọi ({type(e).__name__})"
