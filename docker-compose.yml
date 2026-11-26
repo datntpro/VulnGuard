@@ -131,7 +131,33 @@ services:
       - sonarqube_db:/var/lib/postgresql/data
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────
+  # pentest-runner (P2-2) — dịch vụ DUY NHẤT giữ docker.sock; opt-in: --profile pentest-sandbox
+  # Bật kèm PENTEST_EXEC_BACKEND=sandbox ở API/worker (mặc định vẫn "local"). Cần PENTEST_RUNNER_TOKEN + PENTEST_RUNNER_IMAGE.
+  # ─────────────────────────────────────────────
+  pentest-runner:
+    profiles: ["pentest-sandbox"]
+    build:
+      context: .
+      dockerfile: services/pentest_runner/Dockerfile
+    container_name: vulnguard-pentest-runner
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    environment:
+      - PENTEST_RUNNER_TOKEN=${PENTEST_RUNNER_TOKEN:?set PENTEST_RUNNER_TOKEN}
+      - PENTEST_RUNNER_IMAGE=${PENTEST_RUNNER_IMAGE:-vulnguard-pentest-runner:latest}
+      - PENTEST_SANDBOX_RUNTIME=${PENTEST_SANDBOX_RUNTIME:-auto}
+    group_add:
+      - "${DOCKER_GID:-0}"   # GID của docker.sock trên host (stat -c %g /var/run/docker.sock)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - pentest_runner_sock:/run/vulnguard
+    restart: unless-stopped
+
 volumes:
+  pentest_runner_sock:
   sonarqube_data:
   sonarqube_extensions:
   sonarqube_logs:
