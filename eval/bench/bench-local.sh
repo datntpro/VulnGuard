@@ -25,9 +25,9 @@ unset ANTHROPIC_API_KEY            # chế độ local KHÔNG bao giờ dùng/fo
 curl -fsS http://localhost:11434/api/tags | grep -q "\"$MODEL\"" || { echo "Ollama không chạy hoặc chưa pull $MODEL (ollama pull $MODEL)"; exit 1; }
 TASK_ARGS=(); [ -n "$TASKS" ] && TASK_ARGS=(--tasks "$TASKS")
 docker image inspect vulnguard-lab:latest >/dev/null 2>&1 || docker build -q -t vulnguard-lab:latest -f api/Dockerfile .
-case ",$SUITE," in *,xbow,*|*,core,*|*,full,*|*,autopenbench,*) "$PY" -m eval.harness.bench --prepare --suite "$SUITE" "${TASK_ARGS[@]}" ;; esac
-trap 'docker compose $LAB down -v >/dev/null 2>&1 || true' EXIT
+case ",$SUITE," in *,xbow,*|*,core,*|*,full,*|*,autopenbench,*) "$PY" -m eval.harness.bench --prepare --suite "$SUITE" ${TASK_ARGS[@]+"${TASK_ARGS[@]}"} ;; esac
+trap 'rc=$?; docker compose $LAB down -v >/dev/null 2>&1 || true; exit $rc' EXIT     # giữ NGUYÊN exit code (không che lỗi)
 docker compose $LAB up -d --no-build vg-under-test capture
 for _ in $(seq 1 30); do docker exec vg-under-test getent hosts inscope.lab stub-flag.lab >/dev/null 2>&1 && break; sleep 2; done
-"$PY" -m eval.harness.bench --suite "$SUITE" --arch "$ARCH" --driver real --provider ollama --model "$MODEL" "${TASK_ARGS[@]}" --out "$OUT"
+"$PY" -m eval.harness.bench --suite "$SUITE" --arch "$ARCH" --driver real --provider ollama --model "$MODEL" ${TASK_ARGS[@]+"${TASK_ARGS[@]}"} --out "$OUT"
 "$PY" -m eval.harness.bench --check-safety "$OUT"

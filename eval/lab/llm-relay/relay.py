@@ -45,6 +45,7 @@ class Meter:
     def __init__(self):
         self.lock = threading.Lock()
         self.usd = 0.0
+        self.pending = 0.0               # USD đã GIỮ CHỖ cho các lượt đang bay (chưa có usage) — S1
         self.calls = 0
         self.refused = 0
         self.upstream_4xx = 0
@@ -174,9 +175,13 @@ class Handler(BaseHTTPRequestHandler):
         with METER.lock:
             if METER.broken:
                 return self._deny(402, f"relay bị khoá: {METER.broken}")
-            if METER.usd >= cap:
+            # S1: giữ chỗ chi phí XẤU NHẤT của lượt này trước khi gửi (max_tokens × giá output + ước lượng input) ⇒ các lượt song song
+            # không bao giờ cùng vượt trần. Ước lượng input = số byte body (1 token ≤ 1 byte) tính theo giá cache-write (đắt nhất).
+            reserve = prices.call_usd(model, 0, mt, 0, len(raw))
+            if METER.usd + METER.pending + reserve > cap:
                 METER.refused += 1
-                return self._deny(402, f"đã chạm trần chi tiêu {cap:.2f} USD")
+                return self._deny(402, f"đã chạm trần chi tiêu {cap:.2f} USD (kể cả phần giữ chỗ cho lượt đang bay)")
+            METER.pending += reserve
         headers = {h: self.headers[h] for h in FORWARD_HEADERS if self.headers.get(h)}
         headers["x-api-key"] = key
         conn_cls = http.client.HTTPSConnection if UPSTREAM_TLS else http.client.HTTPConnection
@@ -188,10 +193,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             # lượt gọi có thể ĐÃ bị tính phí dù không nhận được phản hồi ⇒ tính phí xấu nhất và khoá relay
             with METER.lock:
+                METER.pending = max(0.0, METER.pending - reserve)
                 METER.usd += prices.max_call_usd(model)
                 METER.broken = f"upstream lỗi không rõ chi phí ({type(e).__name__})"
             return self._deny(502, f"upstream lỗi: {type(e).__name__}")
-        self._account(r.status, data, model)
+        self._account(r.status, data, model, reserve)
         _log(status=r.status, bytes=len(data))
         self.send_response(r.status)           # 3xx KHÔNG được theo: trả nguyên cho client (SDK không theo cross-host)
         self.send_header("Content-Type", r.getheader("Content-Type", "application/json"))
@@ -241,8 +247,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     @staticmethod
-    def _account(status, data, req_model):
+    def _account(status, data, req_model, reserve=0.0):
         with METER.lock:
+            METER.pending = max(0.0, METER.pending - reserve)       # quyết toán: nhả phần giữ chỗ, cộng chi phí thật
             if status != 200:                  # lỗi 4xx/5xx của Anthropic không tính phí
                 if 400 <= status < 500:
                     METER.upstream_4xx += 1

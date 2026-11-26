@@ -131,10 +131,11 @@ def test_relay_meter_is_one_usd_clock_shared_across_models(multi):
 def test_relay_shared_cap_stops_all_models(monkeypatch):
     m, srv, up = _start_relay(monkeypatch, "anthropic", RELAY_MODELS=f"{OPUS},{HAIKU}", RELAY_BUDGET_USD="0.01")
     try:
-        _Up.reply = _anthropic_reply(OPUS)                    # 1000 in + 100 out ≈ 0.006 USD
-        codes = [_msg(srv.server_port, OPUS)[0] for _ in range(3)]
-        assert codes[-1] == 402                               # trần chạm bằng model này...
+        _Up.reply = _anthropic_reply(OPUS, tin=10, tout=100)  # ≈ 0.00224 USD / lượt; giữ chỗ ≈ 0.0024 (max_tokens=100)
+        codes = [_msg(srv.server_port, OPUS, max_tokens=100)[0] for _ in range(6)]
+        assert codes[0] == 200 and codes[-1] == 402           # trần chạm bằng model này...
         assert _msg(srv.server_port, HAIKU)[0] == 402         # ...thì model kia cũng bị chặn
+        assert _meter(srv.server_port)["usd"] <= 0.01
     finally:
         srv.shutdown()
         up.shutdown()
@@ -201,8 +202,9 @@ def test_ollama_relay_never_forwards_a_real_key(monkeypatch):
 
 
 # ───────────── SharedBudget ─────────────
-def _drv(model=OPUS, n=5):
-    d = ScriptedDriver([[{"name": "http_probe", "input": {"url": "http://x.lab/"}}]] * n)
+def _drv(model=OPUS, n=5, usage=None):
+    turn = {"tool_calls": [{"name": "http_probe", "input": {"url": "http://x.lab/"}}], **({"usage": usage} if usage else {})}
+    d = ScriptedDriver([turn] * n)
     d.model = model
     return d
 
@@ -214,8 +216,9 @@ def _turn(d):
 
 
 def test_shared_budget_two_drivers_stop_together():
-    sb = budget.SharedBudget(0.0005)                           # 10 in + 5 out ≈ 0.00014 USD / lượt (opus)
-    a, b = budget.BudgetedDriver(_drv(OPUS), sb), budget.BudgetedDriver(_drv(SONNET), sb)
+    big = {"in": 10000, "out": 8000}                           # opus 0.20 USD / lượt, sonnet 0.10; giữ chỗ tối đa 0.16 / 0.08
+    sb = budget.SharedBudget(0.29)
+    a, b = budget.BudgetedDriver(_drv(OPUS, usage=big), sb), budget.BudgetedDriver(_drv(SONNET, usage=big), sb)
     for _ in range(10):
         if sb.exhausted:
             break
@@ -231,7 +234,7 @@ def test_shared_budget_two_drivers_stop_together():
 def test_budgeted_driver_float_signature_and_keyword_still_work():
     d = budget.BudgetedDriver(_drv(), 1.0)
     assert d.budget_usd == 1.0 and not d.budget_exhausted
-    d2 = budget.BudgetedDriver(_drv(), budget_usd=0.0001)
+    d2 = budget.BudgetedDriver(_drv(usage={"in": 10000, "out": 8000}), budget_usd=0.19)
     _turn(d2)
     assert d2.budget_exhausted
 
@@ -245,6 +248,79 @@ def test_local_budgeted_driver_has_no_price_table_but_counts_tokens():
     _turn(d)
     u = d.usage()
     assert u["usd"] == 0 and u["tokens_in"] > 0 and u["llm_calls"] == 1 and not d.budget_exhausted
+
+
+def test_shared_budget_reserve_never_overshoots_under_concurrency():
+    """S1: N executor song song (cùng một SharedBudget) — mỗi lượt giữ chỗ 0.16 trước khi gọi; tổng chi KHÔNG BAO GIỜ vượt trần."""
+    cap = 0.5
+    sb = budget.SharedBudget(cap)
+    big = {"in": 0, "out": 8000}                               # opus: đúng 0.16 USD / lượt = đúng mức giữ chỗ (trường hợp xấu nhất)
+    inners = []
+
+    class Slow(ScriptedDriver):                               # create() nhường event loop ⇒ các lượt thật sự chồng lên nhau
+        async def create(self, *a, **kw):
+            await asyncio.sleep(0.05)
+            return await super().create(*a, **kw)
+
+    drivers = []
+    for _ in range(6):
+        inner = Slow([{"tool_calls": [{"name": "http_probe", "input": {"url": "http://x.lab/"}}], "usage": big}] * 3)
+        inner.model = OPUS
+        inners.append(inner)
+        drivers.append(budget.BudgetedDriver(inner, sb))
+
+    async def one(d):
+        done = refused = 0
+        for _ in range(3):
+            try:
+                d.parse(await d.create("s", [], []))
+                done += 1
+            except RuntimeError:
+                refused += 1
+        return done, refused
+
+    async def go():
+        return await asyncio.gather(*(one(d) for d in drivers))
+
+    out = _run(go())
+    done = sum(x[0] for x in out)
+    assert sb.usd <= cap + 1e-9                                # không vượt trần dù 6 lượt cùng lúc (cũ: ~6 × 0.16 = 0.96)
+    assert done == 3 and sb.calls == 3 and sb.pending == pytest.approx(0.0)      # 3 × 0.16 = 0.48 ≤ 0.5 < 4 × 0.16
+    assert sum(x[1] for x in out) == 18 - done                 # phần còn lại bị từ chối TRƯỚC khi gọi
+
+
+def test_relay_reservation_blocks_concurrent_overshoot(monkeypatch):
+    """S1: 6 request song song, upstream chậm; trần 0.5 USD, mỗi lượt giữ chỗ ≥ 0.16 (max_tokens 8000, opus) ⇒ tối đa 3 lượt tới upstream."""
+    m, srv, up = _start_relay(monkeypatch, "anthropic", RELAY_MODELS=OPUS, RELAY_BUDGET_USD="0.5")
+
+    class Slow(_Up):
+        def do_POST(self):
+            import time
+            time.sleep(0.2)
+            super().do_POST()
+
+    up.RequestHandlerClass = Slow
+    from http.server import ThreadingHTTPServer
+    up2 = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=up2.serve_forever, daemon=True).start()
+    m.UPSTREAM_PORT = up2.server_port
+    from http.server import ThreadingHTTPServer as T
+    srv.shutdown()
+    srv = T(("127.0.0.1", 0), m.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        _Up.reply = _anthropic_reply(OPUS, tin=10, tout=8000)            # 0.16 USD thật / lượt
+        codes = []
+        ts = [threading.Thread(target=lambda: codes.append(_msg(srv.server_port, OPUS)[0])) for _ in range(6)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert sorted(codes) == [200] * 3 + [402] * 3
+        mt = _meter(srv.server_port)
+        assert mt["usd"] <= 0.5 and mt["calls"] == 3
+    finally:
+        srv.shutdown()
+        up2.shutdown()
+        up.shutdown()
 
 
 # ───────────── inproc: model theo vai ─────────────
@@ -385,6 +461,30 @@ def test_check_safety_fails_on_real_report_with_safety_metric(tmp_path, monkeypa
     ok_dir = tmp_path / "ok"
     bench.write_report(good, str(ok_dir))
     assert bench.check_safety(str(ok_dir)) == 0                                       # capability (cờ/thành công) là thông tin, không phải cổng
+
+
+def test_trend_pick_takes_newest_main_bench_trend_not_scripted_or_branch_or_expired():
+    from eval.harness import trend_pick
+
+    def art(i, name="bench-trend", br="main", exp=False, at="2026-01-01T00:00:00Z"):
+        return {"name": name, "expired": exp, "created_at": at, "workflow_run": {"id": i, "head_branch": br}}
+    listing = {"artifacts": [
+        art(1, at="2026-01-01T00:00:00Z"),
+        art(2, at="2026-01-08T00:00:00Z"),                     # tuần trước (real) ⇒ ứng viên đúng
+        art(3, br="feat/x", at="2026-01-09T00:00:00Z"),        # nhánh khác ⇒ loại
+        art(4, exp=True, at="2026-01-10T00:00:00Z"),           # hết hạn ⇒ loại
+        art(5, name="bench-real-legacy", at="2026-01-11T00:00:00Z"),   # không phải trend (vd. artifact của run scripted) ⇒ loại
+        art(6, at="2026-01-12T00:00:00Z"),                     # run hiện tại ⇒ loại
+    ]}
+    assert trend_pick.pick(listing, exclude_run="6") == "2"
+    assert trend_pick.pick({"artifacts": []}) is None and trend_pick.pick({}) is None
+    assert trend_pick.pick({"artifacts": [art(7, br="dev")]}) is None
+
+
+def test_bench_workflow_uses_trend_picker_not_latest_run():
+    wf = open(os.path.join(ROOT, ".github/workflows/pentest-bench.yml")).read()
+    assert "eval.harness.trend_pick" in wf and "name=bench-trend" in wf
+    assert "gh run list" not in wf                             # không còn lấy "run thành công mới nhất" (thường là cron scripted)
 
 
 def test_bench_compare_append_trend(tmp_path, monkeypatch):
