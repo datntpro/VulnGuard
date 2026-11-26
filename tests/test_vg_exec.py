@@ -180,7 +180,7 @@ def test_dockerfile_invariants():
 # ── cờ nguy hiểm (defence in depth) ────────────────────────────────────────
 @pytest.mark.parametrize("argv", [
     ["sqlmap", "-u", "http://x/?id=1", "--eval", "import os"], ["sqlmap", "--eval=import os"],
-    ["sqlmap", "--ev", "x"], ["sqlmap", "--os-shell"], ["sqlmap", "--os-cmd=id"], ["sqlmap", "--os", "x"],
+    ["sqlmap", "--ev", "x"], ["sqlmap", "--os-shell"], ["sqlmap", "--os-cmd=id"], 
     ["sqlmap", "--file-read=/etc/passwd"], ["sqlmap", "--file-write", "a"], ["sqlmap", "--sql-shell"],
     ["sqlmap", "--sql-file=a"], ["sqlmap", "--priv-esc"], ["sqlmap", "--reg-read"], ["sqlmap", "-r", "req.txt"],
     ["sqlmap", "-rreq.txt"], ["sqlmap", "-c", "x.conf"], ["sqlmap", "--tamper=/work/x.py"],
@@ -279,3 +279,57 @@ def test_dockerfile_pins_and_minimal_image():
     final = code.split("AS base")[1]
     assert not re.search(r"apt-get install[^&]*\b(curl|unzip|git)\b", final.split("AS browser")[0])
     assert code.count("perm /6000") >= 2  # base + browser
+
+
+# ── cờ ngắn gộp / option một gạch (vòng re-verify) ─────────────────────────
+@pytest.mark.parametrize("argv", [
+    # sqlmap: cờ ngắn gộp — `-br file` = -b -r file (đã tái hiện trên sqlmap thật)
+    ["sqlmap", "-br", "/work/req.txt", "--batch"], ["sqlmap", "-bc", "x.conf"], ["sqlmap", "-vr", "req.txt"],
+    ["sqlmap", "-bl", "log"], ["sqlmap", "-bm", "bulk"], ["sqlmap", "-bg", "dork"], ["sqlmap", "-bd", "mysql://x"],
+    ["sqlmap", "-bs", "/work/s.sqlite"], ["sqlmap", "-bt", "/work/t.txt"], ["sqlmap", "-obr", "f"],
+    ["sqlmap", "-rreq.txt"], ["sqlmap", "-s", "/work/s.sqlite"], ["sqlmap", "-t", "/work/traffic.txt"],
+    ["sqlmap", "-z", "flu,bat"], ["sqlmap", "-u", "http://x/?a=1", "-r", "f"],
+    ["sqlmap", "-u", "http://x/", "--batch", "-hh"], ["sqlmap", "-u"],            # thiếu giá trị
+    ["sqlmap", "--batch=1"], ["sqlmap", "http://x/"], ["sqlmap", "--", "-u"],     # cờ không nhận giá trị / positional
+    ["sqlmap", "--dump-fil=/work/x"], ["sqlmap", "--dump-file=/work/x"], ["sqlmap", "--alert=id"],
+    ["sqlmap", "--preprocess=/work/p.py"], ["sqlmap", "--save=/work/c.ini"], ["sqlmap", "--live-cookies=/etc/x"],
+    ["sqlmap", "--safe-req=f"], ["sqlmap", "--second-req=f"], ["sqlmap", "--shell"], ["sqlmap", "--check-internet"],
+    ["sqlmap", "--bat"], ["sqlmap", "--BATCH"], ["sqlmap", "--results-file=/work/r"], ["sqlmap", "--udf-inject"],
+    # nmap: cụm cờ ngắn, option dài MỘT gạch (getopt_long_only), viết tắt
+    ["nmap", "-ni", "/etc/hosts"], ["nmap", "-sLi/tmp/h"], ["nmap", "-i", "f"], ["nmap", "-iL", "f"],
+    ["nmap", "-script=/work/x.nse", "h"], ["nmap", "-script", "banner", "h"], ["nmap", "-resume", "f"],
+    ["nmap", "-datadir=/work"], ["nmap", "-nvoN", "/tmp/o"], ["nmap", "-noN", "/work/o"], ["nmap", "-sI", "z"],
+    ["nmap", "--open-x"], ["nmap", "--op"], ["nmap", "-e", "eth0"], ["nmap", "-D", "a,b"], ["nmap", "-S", "1.1.1.1"],
+    ["nmap", "-b", "ftp"], ["nmap", "--proxies", "x"], ["nmap", "-oN"], ["nmap", "--top-ports"],
+    ["nmap", "--top-ports=1;id"], ["nmap", "-p", "80;id"], ["nmap", "--"], ["nmap", "-"],
+])
+def test_bundled_and_single_dash_bypasses_refused(argv):
+    with pytest.raises(vg_exec.ExecRefused):
+        vg_exec.validate_argv(argv)
+
+
+@pytest.mark.parametrize("argv", [
+    # dạng argv thật mà toolbelt/LLM sinh ra
+    ["sqlmap", "-u", "http://x/?id=1", "--batch", "--level=3", "--risk=2", "--dbs", "--technique=BEUSTQ"],
+    ["sqlmap", "-u", "http://x/", "--data=id=1", "--cookie=a=b", "-p", "id", "--dbms=mysql", "--random-agent"],
+    ["sqlmap", "-uhttp://x/?id=1", "-pid", "-v3", "--batch"], ["sqlmap", "-u", "http://x/", "-bf", "-a"],
+    ["sqlmap", "-u", "http://x/", "-D", "app", "-T", "users", "-C", "id,name", "--dump", "--threads=4"],
+    ["sqlmap", "-u", "http://x/", "-H", "X-A: b", "-A", "ua", "--proxy=http://gw:8080", "--timeout=10"],
+    ["sqlmap", "-u", "http://x/", "--tamper=space2comment", "--os=Linux", "--sql-query=select 1"],
+    ["nmap", "-Pn", "-n", "-sT", "-sV", "-p", "80,443,8080", "-T3", "--open", "--max-hostgroup", "1", "10.0.0.5"],
+    ["nmap", "-Pn", "-n", "-sT", "-sV", "--top-ports", "100", "-T3", "--open", "--max-hostgroup=1", "app.lab"],
+    ["nmap", "-p80,443", "-sV", "-vv", "-oX", "/work/s1/scan.xml", "h"], ["nmap", "-sC", "-sV", "-A", "-F", "h"],
+    ["nmap", "-PS80,443", "-PE", "--reason", "--host-timeout", "30s", "10.0.0.0/30"],
+])
+def test_real_argument_forms_allowed(argv):
+    assert vg_exec.validate_argv(argv) == argv
+
+
+def test_sqlmap_option_table_matches_real_sqlmap():
+    """Mọi option dài trong bảng allowlist phải là option sqlmap thật; không option nguy hiểm nào lọt vào."""
+    dangerous = {"eval", "os-cmd", "os-shell", "os-pwn", "file-read", "file-write", "sql-shell", "sql-file", "alert",
+                 "preprocess", "postprocess", "shell", "update", "save", "har", "output-dir", "dump-file",
+                 "tmp-dir", "load-cookies", "live-cookies", "safe-req", "second-req", "proxy-file", "auth-file",
+                 "shared-lib", "results-file", "check-internet", "udf-inject", "purge", "wizard", "google-dork"}
+    assert not dangerous & set(vg_exec.SQLMAP_LONG)
+    assert not set("rclmgdstzh") & set(vg_exec.SQLMAP_SHORT)
