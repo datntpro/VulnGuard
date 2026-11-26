@@ -69,6 +69,7 @@ class Net:
 
 class Cli:
     def __init__(self):
+        self.helpers, self.host_ips_fail, self.os = [], False, "Ubuntu"
         self.ctrs, self.nets, self.created_nets, self.ran = [], [Net("bridge", "172.17.0.0/16"), Net("vulnguard-network", "172.20.0.0/16")], [], []
         o = self
 
@@ -85,6 +86,17 @@ class Cli:
                 raise type("NotFound", (Exception,), {})("x")   # tên lớp như docker.errors.NotFound (SDK không có trong CI unit)
 
             def run(self, **kw):
+                if kw.get("network_mode") == "host":     # container phụ đọc IP của host (ip -j -4 addr)
+                    o.ran.append(kw)
+                    if o.host_ips_fail:
+                        raise RuntimeError("host netns denied")
+                    c = Ctr(kw, f"c{len(o.ctrs)}", None)
+                    c.wait = lambda timeout=None: {"StatusCode": 0}
+                    c.logs = lambda stdout=True, stderr=False, tail=0: json.dumps(
+                        [{"ifname": "lo", "addr_info": [{"local": "127.0.0.1"}]}, {"ifname": "eth0", "addr_info": [{"local": "192.168.1.50"}]},
+                         {"ifname": "docker0", "addr_info": [{"local": "172.17.0.1"}]}]).encode()
+                    o.helpers.append(c)
+                    return c
                 c = Ctr(kw, f"c{len(o.ctrs)}", None)
                 c.status = "running"
                 o.ctrs.append(c)
@@ -122,7 +134,7 @@ class Cli:
         self.containers, self.networks, self.images = C(), N(), I()
 
     def info(self):
-        return {"Runtimes": {"runc": {}}}
+        return {"Runtimes": {"runc": {}}, "OperatingSystem": self.os}
 
 
 all_ = all
@@ -271,3 +283,50 @@ def test_runner_hot_reload_and_newer_create_reload_gateway():
     assert len(reloads) == 2
     assert c.delete("/v1/engagements/e1/network", headers=H).status_code == 204
     assert cli.ctrs[0].removed
+
+
+# ───────────── M2: IP của host / gateway mạng ra ngoài luôn nằm trong always_deny ─────────────
+def _merged(cli, **kw):
+    cli.networks.create("vg-eng-e1", driver="bridge")
+    g = _gw(**kw)
+    return g, g.merge_policy(cli, "vg-eng-e1", {"version": 1, "always_deny": []})["always_deny"]
+
+
+def test_always_deny_includes_out_gateway_host_ips_and_every_bridge_gateway():
+    cli = Cli()
+    cli.networks.create("vg-egress-out", driver="bridge")        # Net.create gán gateway 10.9.x.1
+    out = next(n for n in cli.nets if n.name == "vg-egress-out")
+    g, deny = _merged(cli)
+    assert f"{out.attrs['IPAM']['Config'][0]['Gateway']}/32" in deny                   # IP của host trên bridge ra ngoài
+    assert out.attrs["IPAM"]["Config"][0]["Subnet"] not in deny                        # nhưng không chặn cả dải ra ngoài
+    assert "192.168.1.50/32" in deny and "172.17.0.1/32" in deny                       # IP LAN + docker0 của host
+    host_call = [k for k in cli.ran if k.get("network_mode") == "host"][0]
+    assert host_call["cap_drop"] == ["ALL"] and host_call["read_only"] is True
+    assert [c for c in cli.helpers if c.kw is host_call][0].removed                       # container phụ luôn bị xoá
+    assert host_call["entrypoint"] == ["ip"] and "volumes" not in host_call
+
+
+def test_docker_desktop_vm_subnet_is_denied_and_discovery_can_be_disabled_or_fail_soft():
+    cli = Cli()
+    cli.os = "Docker Desktop"
+    assert "192.168.65.0/24" in _merged(cli)[1]
+    cli2 = Cli()
+    cli2.host_ips_fail = True                                                          # authz-proxy cấm host netns → vẫn tạo được gateway
+    assert "192.168.1.50/32" not in _merged(cli2)[1]
+    cli3 = Cli()
+    _, deny3 = _merged(cli3, host_ip_discovery="off")
+    assert not [k for k in cli3.ran if k.get("network_mode") == "host"] and "192.168.1.50/32" not in deny3
+
+
+def test_private_cidr_allow_cannot_open_host_ips():
+    """Scope cho phép tường minh 192.168.0.0/16 + 172.16.0.0/12 (pentest nội bộ): IP của host vẫn bị chặn, host khác trong dải thì không."""
+    from scanner.pentest import egress_policy as ep
+    cli = Cli()
+    cli.networks.create("vg-egress-out", driver="bridge")
+    _, deny = _merged(cli)
+    base = ep.compile_policy([{"type": "cidr", "value": "192.168.0.0/16", "mode": "allow"}, {"type": "cidr", "value": "172.16.0.0/12", "mode": "allow"}],
+                             None, 1, None, engagement_id="e1", extra_always_deny=deny)
+    assert not ep.connect_decision(base, "192.168.1.50", 22)[0] and not ep.connect_decision(base, "172.17.0.1", 2375)[0]
+    assert ep.connect_decision(base, "192.168.1.51", 22)[0]
+    denied = ep.render_nft(base).split("set denied")[1].split("}")[0]
+    assert "192.168.1.50/32" in denied and "172.17.0.0/16" in denied   # 172.17.0.1/32 gộp vào /16

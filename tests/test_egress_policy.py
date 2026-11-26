@@ -178,7 +178,7 @@ def test_port_pin_denies_through_proxy_and_nft_alike():
 
 # ───────────── nft ─────────────
 def _golden_policy():
-    rules = [R("domain", "inscope.lab", sub=False), R("ip", "172.31.250.10"), R("cidr", "10.20.0.0/16"), R("ip", "10.20.0.66", "deny"),
+    rules = [R("url", "http://10.20.0.7:8080", "deny"), R("domain", "inscope.lab", sub=False), R("ip", "172.31.250.10"), R("cidr", "10.20.0.0/16"), R("ip", "10.20.0.66", "deny"),
              R("url", "https://app.example.com:8443"), R("url", "http://pinned.example.com:8081")]
     return pol(rules, pins={"app.example.com": [PUB1, PUB2], "pinned.example.com": [PUB3.replace("198.51.100.0", "93.184.216.40")]},
                expiry=datetime(2030, 1, 1, tzinfo=timezone.utc), version=7, extra_always_deny=["172.17.0.0/16", "172.28.0.0/16"])
@@ -312,3 +312,45 @@ def test_parity_lab_scenario_network_expectations():
     # port-pinned url rule (kịch bản port_pinned_url_port_scan)
     q = pol([R("url", f"http://{sc.INSCOPE}:8081")], pins={sc.INSCOPE: ["93.184.216.40"]})
     assert ep.connect_decision(q, "93.184.216.40", 8081)[0] and not ep.connect_decision(q, "93.184.216.40", 80)[0]
+
+
+# ───────────── M1: deny url / ip:port / dải / IPv6 → nft ─────────────
+def test_deny_url_on_ip_literal_is_compiled_into_denied_ports():
+    p = pol([R("cidr", "100.70.0.0/24"), R("url", "http://100.70.0.5:8080", "deny"), R("url", "https://100.70.0.6", "deny")])
+    assert {(r.cidr, r.ports) for r in p.deny_ports} == {("100.70.0.5/32", (8080,)), ("100.70.0.6/32", (443,))}
+    assert not ep.connect_decision(p, "100.70.0.5", 8080)[0] and ep.connect_decision(p, "100.70.0.5", 80)[0]
+    assert not ep.connect_decision(p, "100.70.0.6", 443)[0] and ep.connect_decision(p, "100.70.0.7", 8080)[0]
+    t = ep.render_nft(p)
+    assert "100.70.0.5 . 8080" in t and "100.70.0.6 . 443" in t
+    for chain in (t.split("chain forward")[1].split("chain output")[0], t.split("chain output")[1].split("chain redirect_dns")[0]):
+        assert chain.index("@denied_ports") < chain.index("@allowed_any")          # drop TRƯỚC allow, ở forward lẫn output
+    assert ep.EgressPolicy.from_dict(json.loads(json.dumps(p.to_dict()))) == p
+
+
+def test_deny_url_on_ip_with_ip_allow_rule_the_exact_repro():
+    p = pol([R("ip", "100.70.0.9"), R("url", "https://100.70.0.9", "deny")])
+    assert scope.check_target("100.70.0.9:443", p.rules())[0] is False
+    assert ep.connect_decision(p, "100.70.0.9", 443)[0] is False and ep.connect_decision(p, "100.70.0.9", 22)[0] is True
+
+
+@pytest.mark.parametrize("rules", [
+    [R("cidr", "100.70.0.0/24"), R("url", "http://100.70.0.5:8080", "deny")],
+    [R("ip", "100.70.0.9"), R("url", "https://100.70.0.9", "deny"), R("url", "100.70.0.9", "deny")],
+    [R("cidr", "100.70.0.0/16"), R("cidr", "100.70.1.0/24", "deny"), R("ip", "100.70.2.2", "deny")],              # dải deny
+    [R("cidr", "100.70.0.0/24"), R("cidr", "2001:db8::/32", "deny"), R("url", "http://[2001:db8::1]:80", "deny")],  # IPv6 deny
+    [R("cidr", "10.0.0.0/8"), R("url", "http://10.1.2.3:80", "deny"), R("cidr", "10.9.0.0/16", "deny")],
+])
+def test_parity_connect_decision_equals_check_target_for_ip_ports(rules):
+    p = pol(rules)
+    assert ep.render_nft(p)                                                           # v6 / deny không làm hỏng ruleset
+    for ip in ("100.70.0.5", "100.70.0.6", "100.70.0.9", "100.70.1.7", "100.70.2.2", "100.70.3.3", "10.1.2.3", "10.9.1.1", "10.2.2.2", "8.8.8.8"):
+        for port in (22, 80, 443, 8080, 8443):
+            exp = scope.check_target(f"{ip}:{port}", rules)[0]
+            assert ep.connect_decision(p, ip, port)[0] == exp, (ip, port, rules)
+    assert not ep.connect_decision(p, "2001:db8::1", 80)[0]                           # IPv6 luôn bị chặn (chặt hơn/bằng scope)
+
+
+def test_deny_url_on_name_denies_the_whole_name_at_dns():
+    """L5: rule deny url `host:port` khớp tên trần → check_target(host) cũng deny → NXDOMAIN cho cả tên (chặt hơn scope), không 'thu hẹp 80/443'."""
+    p = pol([R("domain", "example.com", sub=False), R("url", "http://example.com:8080", "deny")], pins={"example.com": [PUB1]})
+    assert not ep.dns_decision(p, "example.com")[0] and p.allow == ()

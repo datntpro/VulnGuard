@@ -28,7 +28,7 @@ import http.server, json
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         b = self.rfile.read(int(self.headers.get('Content-Length') or 0))
-        print('INGEST', json.dumps({'auth': self.headers.get('Authorization'), 'eng': self.headers.get('X-VG-Eng'), 'host': self.headers.get('Host'), 'body': json.loads(b)}), flush=True)
+        print('INGEST', json.dumps({'ts': self.headers.get('X-VG-Ts'), 'nonce': self.headers.get('X-VG-Nonce'), 'sig': self.headers.get('X-VG-Sig'), 'auth': self.headers.get('Authorization'), 'eng': self.headers.get('X-VG-Eng'), 'host': self.headers.get('Host'), 'raw': b.decode(), 'body': json.loads(b)}), flush=True)
         self.send_response(200); self.send_header('Content-Length', '2'); self.end_headers(); self.wfile.write(b'{}')
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(('0.0.0.0', 8000), H).serve_forever()
@@ -72,6 +72,23 @@ DNSServer(R(), port=53, address="0.0.0.0", tcp=True).start()
 '''
 
 
+def _cleanup(cli, uid, eid):
+    """Dọn MỌI thứ của lần chạy này theo NHÃN (không theo tên): container lab (`vgt=<uid>`), container do runner tạo (`vulnguard.eng=<eid>`), mạng.
+    Chạy cả khi setup hỏng giữa chừng (trước đây rò container/mạng)."""
+    for flt in (f"vgt={uid}", f"vulnguard.eng={eid}"):
+        for c in cli.containers.list(all=True, filters={"label": flt}):
+            try:
+                c.remove(force=True)
+            except Exception:  # noqa: BLE001
+                pass
+    for flt in (f"vgt={uid}", f"vulnguard.eng={eid}"):
+        for n in cli.networks.list(filters={"label": flt}):
+            try:
+                n.remove()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _wait(fn, timeout=20, step=0.3):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -93,73 +110,66 @@ def lab():
     for img in (EGW, PY):
         cli.images.get(img)
     uid = uuid.uuid4().hex[:8]
-    made = []
-    # Dải CGNAT 100.64/10: KHÔNG "private/reserved" theo scope._dangerous_ip → mô phỏng IP công khai (test port-pin không cần rule ip tường minh)
-    import random
-    sub = f"100.{random.randint(64, 127)}.{random.randint(0, 255)}.0/24"
-    out = cli.networks.create(f"vgt-out-{uid}", driver="bridge", labels={"vgt": uid},
-                              ipam=docker.types.IPAMConfig(pool_configs=[docker.types.IPAMPool(subnet=sub)]))
-
-    def ip_of(c, net):
-        c.reload()
-        return c.attrs["NetworkSettings"]["Networks"][net]["IPAddress"]
-
-    t1 = cli.containers.run(PY, command=["python", "-c", TARGET_SRC, "80", "8080"], network=out.name, detach=True, name=f"vgt-t1-{uid}")
-    t2 = cli.containers.run(PY, command=["python", "-c", TARGET_SRC, "80", "22"], network=out.name, detach=True, name=f"vgt-t2-{uid}")
-    t3 = cli.containers.run(PY, command=["python", "-c", TARGET_SRC, "80", "8080"], network=out.name, detach=True, name=f"vgt-t3-{uid}")
-    made += [t1, t2, t3]
-    ip1, ip2, ip3 = ip_of(t1, out.name), ip_of(t2, out.name), ip_of(t3, out.name)
-    records = {"inscope.lab": [ip1], "pinned.lab": [ip3], "oos.lab": [ip2], "metadata.lab": ["169.254.169.254"],
-               "loopback.lab": ["127.0.0.1"], "rebind.lab": [[ip1], ["127.0.0.1"], ["169.254.169.254"]], "xn--fa-hia.lab": [ip1]}
-    dns = cli.containers.run(EGW, entrypoint=["python3", "-c", DNS_SRC], environment={"RECORDS": json.dumps(records)},
-                             network=out.name, detach=True, name=f"vgt-dns-{uid}")
-    made.append(dns)
-    dns_ip = ip_of(dns, out.name)
-    ing = cli.networks.create(f"vgt-ing-{uid}", driver="bridge", labels={"vgt": uid})
-    sink = cli.containers.run(PY, command=["python", "-c", SINK_SRC], network=ing.name, detach=True, name=f"vgt-sink-{uid}")
-    made.append(sink)
-    gw = EgressGateway(EGW, out_network=out.name, upstream_dns=dns_ip, secret=TOKEN, ingest_network=ing.name,
-                       ingest_url=f"http://vgt-sink-{uid}:8000/api/pentest/internal/traffic")
-    app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": RUNNER_IMG,
-                               "PENTEST_ALLOW_UNPINNED_IMAGE": "1", "PENTEST_RUNNER_GC_INTERVAL_S": "0"}), lambda: cli, gateway=gw)
-    http = TestClient(app)
+    LBL = {"vgt": uid}
     eid = "lab" + uid
-    rules = [{"type": "domain", "value": "inscope.lab", "include_subdomains": False, "mode": "allow"},
-             {"type": "ip", "value": ip1, "mode": "allow"},
-             {"type": "url", "value": "http://pinned.lab:8080", "mode": "allow"},
-             {"type": "domain", "value": "rebind.lab", "include_subdomains": False, "mode": "allow"},
-             {"type": "domain", "value": "metadata.lab", "include_subdomains": False, "mode": "allow"},
-             {"type": "domain", "value": "loopback.lab", "include_subdomains": False, "mode": "allow"}]
-    exp = datetime.now(timezone.utc) + timedelta(hours=1)
-    pol = compile_policy(rules, {}, 1, exp, engagement_id=eid)
-    r = http.post(f"/v1/engagements/{eid}/network", json={"policy": pol.to_dict()}, headers=H)
-    assert r.status_code == 200, r.text
-    gid = r.json()["gateway_id"]
-    gwc = cli.containers.get(gid)
-    gw_ip = ip_of(gwc, f"vg-eng-{eid}")
-    probe = cli.containers.run(PY, command=["sleep", "3600"], network=f"vg-eng-{eid}", dns=[gw_ip], detach=True, cap_drop=["ALL"],
-                               security_opt=["no-new-privileges:true"], name=f"vgt-probe-{uid}", user="10002:10002",
-                               environment={"HTTP_PROXY": f"http://{gw_ip}:8080", "HTTPS_PROXY": f"http://{gw_ip}:8080", "NO_PROXY": ""})
-    made.append(probe)
-    gw.attach(cli, eid, gid, gw_ip, probe, "labrun")
-    L = type("Lab", (), {})()
-    L.cli, L.http, L.eid, L.gid, L.gwc, L.gw_ip, L.probe = cli, http, eid, gid, gwc, gw_ip, probe
-    L.ip1, L.ip2, L.ip3, L.t1, L.t2, L.dns, L.rules, L.out = ip1, ip2, ip3, t1, t2, dns, rules, out
-    L.version, L.sink, L.ing = 1, sink, ing
+    made = []
+    out = ing = None
     try:
+        # Dải CGNAT 100.64/10: KHÔNG "private/reserved" theo scope._dangerous_ip → mô phỏng IP công khai (test port-pin không cần rule ip tường minh)
+        import random
+        sub = f"100.{random.randint(64, 127)}.{random.randint(0, 255)}.0/24"
+        out = cli.networks.create(f"vgt-out-{uid}", driver="bridge", labels=LBL,
+                                  ipam=docker.types.IPAMConfig(pool_configs=[docker.types.IPAMPool(subnet=sub)]))
+
+        def ip_of(c, net):
+            c.reload()
+            return c.attrs["NetworkSettings"]["Networks"][net]["IPAddress"]
+
+        t1 = cli.containers.run(PY, command=["python", "-c", TARGET_SRC, "80", "8080"], network=out.name, detach=True, name=f"vgt-t1-{uid}", labels=LBL)
+        t2 = cli.containers.run(PY, command=["python", "-c", TARGET_SRC, "80", "22"], network=out.name, detach=True, name=f"vgt-t2-{uid}", labels=LBL)
+        t3 = cli.containers.run(PY, command=["python", "-c", TARGET_SRC, "80", "8080"], network=out.name, detach=True, name=f"vgt-t3-{uid}", labels=LBL)
+        made += [t1, t2, t3]
+        ip1, ip2, ip3 = ip_of(t1, out.name), ip_of(t2, out.name), ip_of(t3, out.name)
+        records = {"inscope.lab": [ip1], "pinned.lab": [ip3], "oos.lab": [ip2], "metadata.lab": ["169.254.169.254"],
+                   "loopback.lab": ["127.0.0.1"], "rebind.lab": [[ip1], ["127.0.0.1"], ["169.254.169.254"]], "xn--fa-hia.lab": [ip1]}
+        dns = cli.containers.run(EGW, entrypoint=["python3", "-c", DNS_SRC], environment={"RECORDS": json.dumps(records)},
+                                 network=out.name, detach=True, name=f"vgt-dns-{uid}", labels=LBL)
+        made.append(dns)
+        dns_ip = ip_of(dns, out.name)
+        ing = cli.networks.create(f"vgt-ing-{uid}", driver="bridge", labels=LBL)
+        sink = cli.containers.run(PY, command=["python", "-c", SINK_SRC], network=ing.name, detach=True, name=f"vgt-sink-{uid}", labels=LBL)
+        made.append(sink)
+        gw = EgressGateway(EGW, out_network=out.name, upstream_dns=dns_ip, secret=TOKEN, ingest_network=ing.name,
+                           ingest_url=f"http://vgt-sink-{uid}:8000/api/pentest/internal/traffic")
+        app = create_app(Settings({"PENTEST_RUNNER_TOKEN": TOKEN, "PENTEST_RUNNER_IMAGE": RUNNER_IMG,
+                                   "PENTEST_ALLOW_UNPINNED_IMAGE": "1", "PENTEST_RUNNER_GC_INTERVAL_S": "0"}), lambda: cli, gateway=gw)
+        http = TestClient(app)
+        rules = [{"type": "domain", "value": "inscope.lab", "include_subdomains": False, "mode": "allow"},
+                 {"type": "ip", "value": ip1, "mode": "allow"},
+                 {"type": "url", "value": "http://pinned.lab:8080", "mode": "allow"},
+                 {"type": "domain", "value": "rebind.lab", "include_subdomains": False, "mode": "allow"},
+                 {"type": "domain", "value": "metadata.lab", "include_subdomains": False, "mode": "allow"},
+                 {"type": "domain", "value": "loopback.lab", "include_subdomains": False, "mode": "allow"}]
+        exp = datetime.now(timezone.utc) + timedelta(hours=1)
+        pol = compile_policy(rules, {}, 1, exp, engagement_id=eid)
+        r = http.post(f"/v1/engagements/{eid}/network", json={"policy": pol.to_dict()}, headers=H)
+        assert r.status_code == 200, r.text
+        gid = r.json()["gateway_id"]
+        gwc = cli.containers.get(gid)
+        gw_ip = ip_of(gwc, f"vg-eng-{eid}")
+        probe = cli.containers.run(PY, command=["sleep", "3600"], network=f"vg-eng-{eid}", dns=[gw_ip], detach=True, cap_drop=["ALL"],
+                                   security_opt=["no-new-privileges:true"], name=f"vgt-probe-{uid}", user="10002:10002", labels=LBL,
+                                   environment={"HTTP_PROXY": f"http://{gw_ip}:8080", "HTTPS_PROXY": f"http://{gw_ip}:8080", "NO_PROXY": ""})
+        made.append(probe)
+        gw.attach(cli, eid, gid, gw_ip, probe, "labrun")
+        L = type("Lab", (), {})()
+        L.uid = uid
+        L.cli, L.http, L.eid, L.gid, L.gwc, L.gw_ip, L.probe = cli, http, eid, gid, gwc, gw_ip, probe
+        L.ip1, L.ip2, L.ip3, L.t1, L.t2, L.dns, L.rules, L.out = ip1, ip2, ip3, t1, t2, dns, rules, out
+        L.version, L.sink, L.ing, L.gw = 1, sink, ing, gw
         yield L
     finally:
-        for c in made:
-            try:
-                c.remove(force=True)
-            except Exception:  # noqa: BLE001
-                pass
-        http.delete(f"/v1/engagements/{eid}/network", headers=H)
-        for n in (out, ing):
-            try:
-                n.remove()
-            except Exception:  # noqa: BLE001
-                pass
+        _cleanup(cli, uid, eid)
 
 
 def py(lab, code, timeout=40):
@@ -280,7 +290,7 @@ def test_icmp_denied_with_raw_socket(lab):
         "pkt=struct.pack('!BBHHH',8,0,0xf7ff,1,1)+b'x'*8\n"
         f"s.sendto(pkt,('{lab.ip1}',0))\n"
         "try: s.recvfrom(100); print('REPLY')\nexcept Exception: print('NOREPLY')"],
-        network=f"vg-eng-{lab.eid}", dns=[lab.gw_ip], cap_drop=["ALL"], cap_add=["NET_RAW"], detach=True, name=f"vgt-icmp-{uuid.uuid4().hex[:6]}")
+        network=f"vg-eng-{lab.eid}", dns=[lab.gw_ip], cap_drop=["ALL"], cap_add=["NET_RAW"], detach=True, name=f"vgt-icmp-{uuid.uuid4().hex[:6]}", labels={"vgt": lab.uid})
     try:
         from services.pentest_runner.egress import EgressGateway
         EgressGateway(EGW, out_network=lab.out.name).attach(cli, lab.eid, lab.gid, lab.gw_ip, p, "labrun")
@@ -304,7 +314,11 @@ def test_events_are_posted_to_api_ingest_with_per_engagement_hmac(lab):
     rows = _wait(got, 20)
     assert rows, lab.sink.logs().decode()[-1500:]
     r0 = rows[0]
-    assert r0["auth"] == f"Bearer {ingest_token(TOKEN, lab.eid)}" and r0["eng"] == lab.eid and r0["host"].startswith("vgt-sink-")
+    from api.routes.pentest_internal import sign
+    assert r0["auth"] is None and r0["eng"] == lab.eid and r0["host"].startswith("vgt-sink-")
+    for r in rows:     # mỗi POST: chữ ký HMAC hợp lệ trên (eid, ts, nonce, body) bằng khoá theo engagement; nonce không lặp
+        assert r["sig"] == sign(ingest_token(TOKEN, lab.eid), lab.eid, r["ts"], r["nonce"], r["raw"].encode())
+    assert len({r["nonce"] for r in rows}) == len(rows)
     assert any(e.get("run_id") == "labrun" for r in rows for e in r["body"]["events"] if e["kind"] == "egress_denied")   # IP sandbox → run (vg-egw map)
     # sandbox KHÔNG tới được mạng ingest/API qua gateway
     sink_ip = lab.sink.attrs["NetworkSettings"]["Networks"][lab.ing.name]["IPAddress"] if lab.sink.reload() is None else None
@@ -355,37 +369,67 @@ def test_proxy_connect_tunnel_oos_denied(lab):
 
 
 # ───────────── hot reload / expiry ─────────────
+def _put(lab, rules, expiry_s=3600):
+    """Biên dịch + PUT policy phiên bản kế tiếp (đơn điệu tăng)."""
+    from scanner.pentest.egress_policy import compile_policy
+    lab.version += 1
+    p = compile_policy(rules, {}, lab.version, datetime.now(timezone.utc) + timedelta(seconds=expiry_s), engagement_id=lab.eid)
+    r = lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": p.to_dict()}, headers=H)
+    assert r.status_code == 204, r.text
+
+
 def test_hot_reload_narrows_and_rejects_stale(lab):
     r = lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": {"version": 1}}, headers=H)
     assert r.status_code == 409                                            # stale (runner)
-    from scanner.pentest.egress_policy import compile_policy
-    narrow = compile_policy([{"type": "domain", "value": "pinned.lab", "include_subdomains": False, "mode": "allow"}], {}, 5, None,
-                            engagement_id=lab.eid)
-    r = lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": narrow.to_dict()}, headers=H)
-    assert r.status_code == 204, r.text
+    _put(lab, [{"type": "domain", "value": "pinned.lab", "include_subdomains": False, "mode": "allow"}])
     assert tcp(lab, lab.ip1, 80, 2).startswith("FAIL")                     # ip rule đã bị gỡ
     assert resolve(lab, "inscope.lab").startswith("ERR")
-    # khôi phục để các test sau (nếu có) không phụ thuộc thứ tự
-    from scanner.pentest.egress_policy import compile_policy as cp
-    wide = cp(lab.rules, {}, 6, datetime.now(timezone.utc) + timedelta(hours=1), engagement_id=lab.eid)
-    assert lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": wide.to_dict()}, headers=H).status_code == 204
+    _put(lab, lab.rules)                                                   # khôi phục
     assert tcp(lab, lab.ip1, 80) == "OPEN"
-    lab.version = 6
+
+
+def test_deny_url_rule_on_ip_blocks_raw_tcp_not_only_proxy(lab):
+    """M1: scope allow ip1 (mọi cổng) + deny url http://ip1:8080 → TCP thô tới ip1:8080 phải bị drop (trước đây nft vẫn cho qua)."""
+    assert tcp(lab, lab.ip1, 8080) == "OPEN"
+    _put(lab, lab.rules + [{"type": "url", "value": f"http://{lab.ip1}:8080", "mode": "deny"}])
+    try:
+        assert tcp(lab, lab.ip1, 8080, 2).startswith("FAIL")
+        assert tcp(lab, lab.ip1, 80) == "OPEN"                             # cổng khác của cùng IP vẫn mở (scope cho phép)
+        assert "403" in via_proxy(lab, f"http://{lab.ip1}:8080/")          # proxy và nft nhất quán
+    finally:
+        _put(lab, lab.rules)
+    assert tcp(lab, lab.ip1, 8080) == "OPEN"
+
+
+def test_explicit_private_cidr_allow_cannot_reach_host_stack(lab):
+    """M2: scope cho phép TƯỜNG MINH mạng ra ngoài + mọi dải riêng → IP của host (gateway của bridge ra ngoài, IP host/VM) vẫn bị drop
+    (timeout), còn IP khác trong dải thì mở. Host phản hồi RST nếu chạm được → 'ConnectionRefusedError' = rò."""
+    import ipaddress
+    out_cfg = lab.cli.networks.get(lab.out.name).attrs["IPAM"]["Config"][0]
+    out_gw = out_cfg["Gateway"]
+    wide = [{"type": "cidr", "value": c, "mode": "allow"} for c in (out_cfg["Subnet"], "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+    _put(lab, wide)
+    try:
+        assert tcp(lab, lab.ip3, 80) == "OPEN"                             # đối chứng: dải được mở thật
+        assert tcp(lab, out_gw, 22, 3) == "FAIL TimeoutError", tcp(lab, out_gw, 22, 3)
+        host_ips = [i for i in lab.gw._host_ips(lab.cli) if ipaddress.ip_address(i) not in ipaddress.ip_network(out_cfg["Subnet"])][:4]
+        assert host_ips, "không đọc được IP host"
+        for ip in host_ips:
+            for port in (22, 111):
+                assert tcp(lab, ip, port, 2) == "FAIL TimeoutError", (ip, port)
+    finally:
+        _put(lab, lab.rules)
+    assert tcp(lab, lab.ip1, 80) == "OPEN"
 
 
 def test_policy_expiry_drops_everything(lab):
     from scanner.pentest.egress_policy import compile_policy
-    soon = datetime.now(timezone.utc) + timedelta(seconds=4)
-    p = compile_policy(lab.rules, {}, lab.version + 1, soon, engagement_id=lab.eid)
-    assert lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": p.to_dict()}, headers=H).status_code == 204
+    _put(lab, lab.rules, expiry_s=4)
     assert tcp(lab, lab.ip1, 80) == "OPEN"
     time.sleep(6)
     assert tcp(lab, lab.ip1, 80, 2).startswith("FAIL")
     assert resolve(lab, "inscope.lab").startswith("ERR")
-    lab.version += 1
-    wide = compile_policy(lab.rules, {}, lab.version + 1, datetime.now(timezone.utc) + timedelta(hours=1), engagement_id=lab.eid)   # khôi phục cho test sau
-    assert lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": wide.to_dict()}, headers=H).status_code == 204
-    lab.version += 1
+    _put(lab, lab.rules)                                                   # khôi phục cho test sau
     assert tcp(lab, lab.ip1, 80) == "OPEN"
 
 

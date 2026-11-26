@@ -285,14 +285,17 @@ def test_events_post_batches_to_ingest(tmp_path):
         def read(self, n): return b""
 
     def opener(req, timeout=0):
-        got.append((req.headers, json.loads(req.data)))
+        got.append((req.headers, json.loads(req.data), req.data))
         done.set()
         return Resp()
     ev = Events("e1", url="http://api/ingest", token="tok", opener=opener)
     ev.emit("dns_denied", name="oos.lab")
     assert done.wait(5)
-    hdr, body = got[0]
-    assert hdr["Authorization"] == "Bearer tok" and hdr["X-vg-eng"] == "e1" and body["events"][0]["name"] == "oos.lab"
+    hdr, body, raw = got[0]
+    assert "Authorization" not in hdr and hdr["X-vg-eng"] == "e1" and body["events"][0]["name"] == "oos.lab"
+    from vg_egw.events import sign
+    assert hdr["X-vg-sig"] == sign("tok", "e1", hdr["X-vg-ts"], hdr["X-vg-nonce"], raw)       # HMAC trên (eid, ts, nonce, body)
+    assert abs(int(hdr["X-vg-ts"]) - __import__("time").time()) < 5 and len(hdr["X-vg-nonce"]) == 32
 
 
 # ───────────── addon mitmproxy (mitmproxy giả) ─────────────
@@ -417,3 +420,14 @@ def test_addon_expired_policy_denies_everything(tmp_path):
     f = Flow("http", "inscope.lab", 80)
     a.requestheaders(f)
     assert f.response.status_code == 403
+
+
+def test_gateway_sign_matches_api_sign():
+    from api.routes.pentest_internal import sign as api_sign
+    from vg_egw.events import sign
+    assert sign("k", "e", "123", "n", b"body") == api_sign("k", "e", "123", "n", b"body")
+
+
+def test_mitmproxy_streams_large_bodies_instead_of_buffering():
+    src = (Path(__file__).resolve().parent.parent / "docker" / "pentest-egress" / "vg_egw" / "main.py").read_text()
+    assert "stream_large_bodies=1m" in src
