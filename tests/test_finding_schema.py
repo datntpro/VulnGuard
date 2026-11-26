@@ -187,3 +187,93 @@ def test_wstg_coverage_tested_found_not_tested():
         assert wstg.coverage(run.id, db)["WSTG-INFO-03"] == "tested"
     finally:
         db.close()
+
+
+# ── PR #66 verify follow-ups (D1–D4, non-string) ──
+def _two_runs():
+    db = SessionLocal()
+    eng = make_engagement(db, SCOPE)
+    r1, r2 = make_run(db, eng), make_run(db, eng, run_number=2)
+    mk = lambda r: agent_mod.PentestAgent(r.id, driver_factory=lambda c: ScriptedDriver([]))
+    return db, r1, r2, mk(r1), mk(r2)
+
+
+_BASE = {"title": "SQLi", "severity": "low", "target": "http://a/x?i=1", "description": "d", "evidence": "e",
+         "vuln_class": "sqli", "param": "i"}
+
+
+@pytest.mark.parametrize("status", ["FIXED"])
+def test_d1_regression_after_fixed_is_a_new_visible_finding(status):
+    db, r1, r2, a1, a2 = _two_runs()
+    try:
+        o = db.query(PentestFinding).filter(PentestFinding.id == a1._save_finding(db, r1, _BASE, None)).first()
+        o.status = status
+        db.commit()
+        n = db.query(PentestFinding).filter(PentestFinding.id == a2._save_finding(db, r2, _BASE, None)).first()
+        assert n.duplicate_of is None and n.status == "OPEN" and o.status == "FIXED"
+        # lần re-find tiếp theo gộp vào bản OPEN mới, không vào bản FIXED
+        n2 = db.query(PentestFinding).filter(PentestFinding.id == a2._save_finding(db, r2, _BASE, None)).first()
+        assert n2.duplicate_of == n.id
+    finally:
+        db.close()
+
+
+def test_d1_false_positive_only_absorbs_equal_or_lower_severity():
+    db, r1, r2, a1, a2 = _two_runs()
+    try:
+        o = db.query(PentestFinding).filter(PentestFinding.id == a1._save_finding(db, r1, _BASE, None)).first()
+        o.status = "FALSE_POSITIVE"
+        db.commit()
+        same = db.query(PentestFinding).filter(PentestFinding.id == a2._save_finding(db, r2, _BASE, None)).first()
+        assert same.duplicate_of == o.id
+        worse = db.query(PentestFinding).filter(PentestFinding.id == a2._save_finding(
+            db, r2, {**_BASE, "severity": "critical"}, None)).first()
+        assert worse.duplicate_of is None and worse.status == "OPEN"
+    finally:
+        db.close()
+
+
+def test_d2_higher_severity_refind_escalates_original_decoy_cannot_suppress():
+    db, r1, r2, a1, a2 = _two_runs()
+    try:
+        o = db.query(PentestFinding).filter(PentestFinding.id == a1._save_finding(db, r1, _BASE, None)).first()
+        assert o.severity == "low"
+        real = {**_BASE, "severity": "low", "cvss_v4_vector": B + "/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N", "evidence": "real"}
+        d = db.query(PentestFinding).filter(PentestFinding.id == a2._save_finding(db, r2, real, None)).first()
+        db.refresh(o)
+        assert d.duplicate_of == o.id
+        assert (o.severity, o.cvss_v4_score, o.cvss_v4_severity) == ("critical", 9.3, "critical")
+        assert o.status == "OPEN" and o.last_seen_run_id == r2.id
+        # re-find nhẹ hơn không hạ mức
+        a2._save_finding(db, r2, {**_BASE, "severity": "info"}, None)
+        db.refresh(o)
+        assert o.severity == "critical"
+    finally:
+        db.close()
+
+
+def test_d3_generic_class_does_not_merge_distinct_issues():
+    kw = dict(vuln_class="misconfiguration", target="http://a/", param=None, cwe=None)
+    assert fs.fingerprint("e", title="Missing HSTS", **kw) != fs.fingerprint("e", title="Directory listing", **kw)
+    assert fs.fingerprint("e", title="Missing HSTS", **kw) == fs.fingerprint("e", title="missing  hsts", **kw)
+    # lớp cụ thể vẫn gộp dù tiêu đề khác
+    k2 = dict(vuln_class="sqli", target="http://a/x", param="i", cwe="89")
+    assert fs.fingerprint("e", title="A", **k2) == fs.fingerprint("e", title="B", **k2)
+
+
+def test_d4_coverage_counts_refound_duplicates_in_this_run():
+    from api.pentest_models import PentestFinding as PF
+    db, r1, r2, a1, a2 = _two_runs()
+    try:
+        a1._save_finding(db, r1, _BASE, None)
+        a2._save_finding(db, r2, {**_BASE, "wstg_id": "WSTG-INPV-05"}, None)
+        assert wstg.coverage(r2.id, db)["WSTG-INPV-05"] == "found"
+    finally:
+        db.close()
+
+
+def test_non_string_values_do_not_crash():
+    assert try_score_cvss4(123) is None
+    out = fs.enrich({"cvss_v4_vector": 5, "vuln_class": 7, "wstg_id": 3, "param": 9, "cwe": 89})
+    assert out["needs_review"] is True and out["vuln_class"] is None and out["param"] is None
+    assert fs.fingerprint("e", vuln_class=5, target=3, param=1, cwe=89, title=None)
