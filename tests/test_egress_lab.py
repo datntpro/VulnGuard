@@ -330,6 +330,69 @@ def test_events_are_posted_to_api_ingest_with_per_engagement_hmac(lab):
     assert tcp(lab, sink_ip, 8000, 2).startswith("FAIL")
 
 
+def test_account_credentials_in_gateway_copy_never_reach_db_or_api(lab, monkeypatch):
+    """F1 (PR83): gateway ghi NGUYÊN request (kể cả header credential của tài khoản test). Chứng minh (1) secret thật sự
+    đi qua gateway tới ingest, (2) sau ingest API nó KHÔNG nằm trong DB / GET /api/pentest/traffic/{id}."""
+    import hashlib
+    import hmac as _hmac
+
+    from api.auth_models import UserRole
+    from api.database import Base, SessionLocal, engine
+    from api.pentest_models import TrafficEntry
+    from api.routes import pentest_internal as pi
+    from scanner.pentest import test_accounts
+    from scanner.pentest.settings import pentest_settings
+    from services.pentest_runner.egress import ingest_token
+    from tests._authutil import bearer, login, make_user, new_client
+    from tests.pentest_fakes import make_engagement, make_run
+    secret = "Bearer PR83-LABSECRET-" + uuid.uuid4().hex
+    code = ("import urllib.request as u, os\n"
+            "h=u.ProxyHandler({'http':os.environ['HTTP_PROXY'],'https':os.environ['HTTPS_PROXY']})\n"
+            f"o=u.build_opener(h)\nr=o.open(u.Request('http://inscope.lab/', headers={{'Authorization': {secret!r}}}), timeout=10)\nprint('STATUS', r.status)")
+    assert "STATUS 200" in py(lab, code)[1]
+
+    def wire():
+        rows = [json.loads(ln.split(" ", 1)[1]) for ln in lab.sink.logs().decode().splitlines() if ln.startswith("INGEST")]
+        evs = [e for r in rows for e in r["body"]["events"] if e["kind"] == "http" and secret in json.dumps(e.get("req_headers", {}))]
+        return evs or None
+    evs = _wait(wire, 20)
+    assert evs, "secret không xuất hiện trong bản sao gateway → test không có ý nghĩa"
+
+    monkeypatch.setattr(pentest_settings, "runner_token", TOKEN)
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        eng = make_engagement(db, [{"type": "domain", "value": "inscope.lab", "mode": "allow"}])
+        run = make_run(db, eng)
+        test_accounts.store(db, eng.id, {"a": {"label": "a", "marker": "alice@lab.test", "headers": {"Authorization": secret}},
+                                         "b": {"label": "b", "marker": "bob@lab.test", "headers": {"Authorization": "Bearer other-" + uuid.uuid4().hex}}})
+        db.commit()
+        for e in evs:
+            e["run_id"] = run.id
+        body = json.dumps({"events": evs}).encode()
+        ts, nonce = str(int(time.time())), uuid.uuid4().hex[:16]
+        sig = pi.sign(ingest_token(TOKEN, eng.id), eng.id, ts, nonce, body)
+        from api.main import app
+        c = new_client()
+        r = TestClient(app).post("/api/pentest/internal/traffic", content=body, headers={
+            "X-VG-Eng": eng.id, "X-VG-Ts": ts, "X-VG-Nonce": nonce, "X-VG-Sig": sig, "Content-Type": "application/json"})
+        assert r.status_code == 200 and r.json()["stored"] >= 1, r.text
+        db.expire_all()
+        rows = db.query(TrafficEntry).filter(TrafficEntry.engagement_id == eng.id, TrafficEntry.source == "egress").all()
+        assert rows
+        email, _ = make_user(UserRole.VIEWER)
+        hdr = bearer(login(c, email))
+        for t in rows:
+            api = c.get(f"/api/pentest/traffic/{t.id}", headers=hdr)
+            assert api.status_code == 200
+            blob = json.dumps([t.request_headers, t.request_body, t.response_headers, t.response_body]) + api.text
+            assert secret not in blob and secret.split(" ", 1)[1] not in blob
+    finally:
+        db.query(TrafficEntry).filter(TrafficEntry.engagement_id == eng.id).delete()
+        db.commit()
+        db.close()
+
+
 # ───────────── cô lập host / gateway ─────────────
 def test_sandbox_cannot_reach_bridge_gateway_or_gateway_ports(lab):
     net = lab.cli.networks.get(f"vg-eng-{lab.eid}")

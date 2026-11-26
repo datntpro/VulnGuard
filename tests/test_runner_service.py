@@ -498,3 +498,63 @@ def test_delete_network_purges_state_and_requires_managed_label():
     d.containers_.append(FakeContainer({"labels": {"vulnguard.run": "foreign", "vulnguard.eng": "e1"}}, "x"))  # không managed
     c.delete("/v1/engagements/e1/network", headers=H)
     assert not rn.execs and "e1" not in rn.policies and not d.containers_[-1].removed
+
+
+def test_exec_stdin_payload_goes_via_socket_not_argv():
+    """F2: credential (stdin_b64) đi qua stdin của docker exec (attach socket), KHÔNG xuất hiện trong cmd/argv."""
+    import socket
+    import struct
+    import threading
+
+    secret = b'{"headers": {"Authorization": "Bearer PR83-SECRET"}}'
+    got = {}
+
+    class Api:
+        def exec_create(self, cid, cmd, **kw):
+            got["cmd"], got["kw"] = cmd, kw
+            return {"Id": "x1"}
+
+        def exec_start(self, eid, socket=False):
+            a, b = _sp.socketpair()
+            got["peer"] = b
+
+            def serve():
+                buf = b""
+                while True:
+                    d = b.recv(4096)
+                    if not d:
+                        break
+                    buf += d
+                got["stdin"] = buf
+                b.sendall(struct.pack(">BxxxL", 1, 2) + b"{}")
+                b.close()
+            threading.Thread(target=serve, daemon=True).start()
+            return type("S", (), {"_sock": a, "close": lambda self: a.close()})()
+
+        def exec_inspect(self, eid):
+            return {"ExitCode": 0}
+
+    import socket as _sp
+    c, d, _ = _mk()
+    _sandbox(c)
+    cont = d.containers_[0]
+    cont.client = type("C", (), {"api": Api()})()
+    cont.files["/work/s1/result.json"] = json.dumps({"returncode": 0, "timed_out": False}).encode()
+    r = c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s1", "tool": "python3 -m vg_http", "argv": ["python3", "-m", "vg_http"],
+                                                     "timeout_s": 30, "stdin_b64": base64.b64encode(secret).decode()})
+    assert r.status_code == 200, r.text
+    st = _wait(c, "r1", r.json()["exec_id"])
+    assert st["status"] == "finished", st
+    assert got["stdin"] == secret and got["kw"]["stdin"] is True and "--stdin" in got["cmd"]
+    assert b"PR83-SECRET" not in json.dumps(got["cmd"]).encode()
+    assert not any(b"PR83-SECRET" in json.dumps(x[0]).encode() for x in cont.exec_calls)
+    bad = c.post("/v1/runs/r1/exec", headers=H, json={"step_id": "s2", "tool": "python3 -m vg_http", "argv": ["python3", "-m", "vg_http"],
+                                                       "stdin_b64": "###"})
+    assert bad.status_code == 422
+
+
+def test_sandbox_container_runs_with_init_to_reap_zombies():
+    """F4: PID 1 của sandbox là vg-exec --idle (không reap) → Docker init (tini) để Chromium zombie không cạn pids_limit."""
+    c, d, _ = _mk()
+    _sandbox(c)
+    assert d.containers_[0].kw["init"] is True

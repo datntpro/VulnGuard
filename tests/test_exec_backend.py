@@ -62,10 +62,12 @@ class FakeRunner:
     async def delete_network(self, eid):
         self._rec("delete_network", eid)
 
-    async def exec(self, rid, step_id, tool, argv, timeout_s=600, env=None):
+    async def exec(self, rid, step_id, tool, argv, timeout_s=600, env=None, stdin=None):
         self.n += 1
         xid = f"x{self.n}"
-        self.execs[xid] = {"rid": rid, "step_id": step_id, "tool": tool, "argv": list(argv), "timeout": timeout_s}
+        self.last_stdin = stdin
+        self.execs[xid] = {"rid": rid, "step_id": step_id, "tool": tool, "argv": list(argv), "timeout": timeout_s,
+                           "stdin": stdin}
         self._rec("exec", rid, step_id, tool)
         return xid
 
@@ -435,12 +437,13 @@ def _http_pair(monkeypatch, tool, inp, handler):
     lo = run_(toolbelt.get_tool(tool).runner(dict(inp), _ctx(eb.LocalBackend(), _transport=httpx.MockTransport(local_handler))))
 
     def responder(argv):
-        assert argv[:4] == ["python3", "-m", "vg_http", "--req-b64"]
-        req = json.loads(base64.b64decode(argv[4]))
+        assert argv == ["python3", "-m", "vg_http"]   # F2: request đi qua stdin, KHÔNG qua argv
+        req = json.loads(runner.last_stdin)
         r = handler(httpx.Request(req["method"], req["url"], headers=req["headers"], content=(req["body"] or "").encode()))
         return json.dumps({"status": r.status_code, "headers": dict(r.headers), "body": r.text,
                            "body_truncated": False, "elapsed_ms": 1}), "", 0
-    b, c = sandbox(FakeRunner(responder))
+    runner = FakeRunner(responder)
+    b, c = sandbox(runner)
     so = run_(toolbelt.get_tool(tool).runner(dict(inp), _ctx(b)))
     return seen, c, lo, so
 
@@ -466,7 +469,7 @@ def test_active_http_parity(monkeypatch):
     seen, c, lo, so = _http_pair(monkeypatch, "active_http", inp, handler)
     for k in ("status_code", "body_preview", "ran"):
         assert lo[k] == so[k]
-    sent = json.loads(base64.b64decode(c.execed[0]["argv"][4]))
+    sent = json.loads(c.execed[0]["stdin"])
     assert (sent["method"], sent["url"], sent["body"]) == (seen[0][0], seen[0][1], seen[0][3])
     assert sent["headers"]["X-T"] == "1"
 
@@ -626,3 +629,14 @@ def test_vg_http_accepts_request_via_argv_b64(capsys):
     assert m.main(["--req-b64", enc]) == 1                      # đọc được request → bị từ chối vì method, không phải lỗi giải mã
     assert "method not allowed" in capsys.readouterr().out
     assert m.main(["--req-b64", "!!notb64"]) == 1
+
+
+def test_http_credentials_go_via_stdin_not_argv():
+    """F2: header credential không bao giờ nằm trong argv (→ /proc/*/cmdline của sandbox)."""
+    secret = "Bearer PR83-SECRET-xyz"
+    runner = FakeRunner(lambda argv: (json.dumps({"status": 200, "headers": {}, "body": "ok"}), "", 0))
+    b, _ = sandbox(runner)
+    run_(b.http(eb.HttpSpec(method="GET", url=f"http://{IP}/x", headers=[("Authorization", secret)], body=None, timeout=5)))
+    ex = runner.execed[-1]
+    assert secret not in json.dumps(ex["argv"]) and "--req-b64" not in ex["argv"]
+    assert json.loads(ex["stdin"])["headers"]["Authorization"] == secret
