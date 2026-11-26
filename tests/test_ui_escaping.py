@@ -234,6 +234,19 @@ def test_p217_sse_uses_event_source_and_closes_on_terminal():
     assert "ptEs.close()" in _fn("stopPentestPoll")
 
 
+def test_p217_followups_static():
+    # F1: CVSS/WSTG/ATT&CK nằm trong drawer pentest, KHÔNG trong drawer web-scan
+    assert "wstg_id" in _fn("openPentestFindingDrawer") and "cvss_v4_vector" in _fn("openPentestFindingDrawer")
+    for k in ("wstg_id", "cvss_v4_vector", "attack_technique"):
+        assert k not in _fn("openFindingDrawer"), k
+    # F2: menu báo cáo không còn absolute (không bị sidebar che)
+    assert "position:absolute" not in _fn("renderReportMenu")
+    # F3: toolbar dựng một lần, SSE chỉ vẽ lại #pt-run-dyn
+    body = _fn("renderRunDetail")
+    assert "pt-run-dyn" in body and "dyn.innerHTML = `" in body and "el.dataset.run !== String(r.id)" in body
+    assert "ptEgressDenied" not in INDEX            # F5: không đoán từ output nữa
+
+
 def test_p217_arch_toggle_admin_only_and_locked():
     assert "canAdmin() && !archSel.disabled" in INDEX
     assert "archSel.disabled = !!(eng && eng.authorized)" in INDEX
@@ -274,9 +287,11 @@ def test_p217_browser_hostile_values_do_not_execute():
         page.evaluate("document.getElementById('p217').insertAdjacentHTML('beforeend','<div id=\"pt-eng-graph-body\"></div>')")
         page.evaluate(f"ptState.graph = {d(g)}; ptState.graphKind = {d(evil)}; renderEngagementGraph()")
         # step timeline egress badge
-        step = {"step_number": 1, "tool_name": evil, "outcome": "blocked_policy", "output": "egress denied " + evil, "thought": evil, "tool_input": {"u": evil}}
-        page.evaluate("html => document.getElementById('p217').insertAdjacentHTML('beforeend', html)", page.evaluate(f"renderStep({d(step)})"))
-        assert page.evaluate(f"ptEgressDenied({d(step)})") is True
+        step = {"id": "s1", "step_number": 1, "tool_name": evil, "outcome": "blocked_policy", "output": "x " + evil, "thought": evil, "tool_input": {"u": evil}}
+        den = {"count": 30, "recent": [{"id": "t1", "target": evil, "host": evil, "kind": evil, "reason": evil, "step": "s1", "created_at": evil}]}
+        page.evaluate(f"ptState.runtime = {{egress_denied: {d(den)}}}")
+        page.evaluate("html => document.getElementById('p217').insertAdjacentHTML('beforeend', html)", page.evaluate(f"renderStep({d(step)}) + renderEgressDenied(ptState.runtime)"))
+        assert page.evaluate(f"ptEgressForStep({d(step)}).length") == 1
         # click mọi nút/handler được sinh ra (replay PoC, tải báo cáo…) — không được chạy mã tiêm vào
         page.evaluate("window.api = async () => ({status_code: 200, response_preview: '<img src=x onerror=pwn(\"rp\")>'}); "
                       "document.querySelectorAll('#p217 button[onclick]').forEach(b => { try { b.click() } catch (e) {} })")
@@ -284,6 +299,30 @@ def test_p217_browser_hostile_values_do_not_execute():
         assert page.evaluate("document.getElementById('p217').children.length") >= 6   # nội dung thực sự được render
         assert page.evaluate("window.__pwn") == []
         assert page.evaluate("document.querySelectorAll('#p217 img[src=\"x\"]').length") == 0   # không có thẻ <img> do payload tạo ra
+    finally:
+        browser.close()
+        pw.stop()
+
+
+def test_p217_sse_rerender_keeps_report_menu_state():
+    pw, browser, page = _browser_page()
+    try:
+        page.evaluate("document.body.insertAdjacentHTML('beforeend', '<div id=\"pentest-run-content\"></div>')")
+        page.evaluate("""(()=>{ window.canWrite = () => true;
+          ptState.curRunId = 'r1'; ptState.curEng = null; ptState.steps = [{id:'s1', step_number: 1, tool_name:'t', outcome:'executed'}];
+          ptState.findings = []; ptState.approvals = []; ptState.tasks = []; ptState.runtime = null;
+          ptState.run = {id:'r1', run_number:1, goal:'g', targets:[], status:'RUNNING', mode:'GUIDED', progress:{}, summary:{}, steps_used:1, tokens_used:1};
+          renderRunDetail(); })()""")
+        page.evaluate("""(()=>{ const d = document.querySelector('.pt-report-menu'); d.open = true;
+          document.getElementById('pt-rep-include').value = 'all';
+          document.querySelector('details.pt-step').open = true; })()""")
+        page.evaluate("ptState.steps.push({id:'s2', step_number: 2, tool_name:'u', outcome:'executed'}); renderRunDetail()")
+        assert page.evaluate("document.querySelector('.pt-report-menu').open") is True
+        assert page.evaluate("document.getElementById('pt-rep-include').value") == "all"
+        assert page.evaluate("document.querySelectorAll('details.pt-step').length") == 2
+        assert page.evaluate("document.querySelector('details.pt-step').open") is True
+        # menu nằm trong luồng bình thường, không bị sidebar (position:fixed) che
+        assert page.evaluate("getComputedStyle(document.querySelector('.pt-report-menu .card')).position") == "static"
     finally:
         browser.close()
         pw.stop()

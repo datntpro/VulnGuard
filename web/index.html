@@ -5715,10 +5715,6 @@ function openFindingDrawer(id) {
       <dt>Host</dt><dd class="text-mono">${escHtml(f.host || '—')}</dd>
       <dt>Type</dt><dd>${escHtml(f.type || '—')}</dd>
       ${f.cve ? `<dt>CVE</dt><dd class="text-mono" style="color:var(--info)">${escHtml(f.cve)}</dd>` : ''}
-      ${f.cvss_v4_score != null ? `<dt>CVSS v4</dt><dd>${ptCvssBadge(f)}${f.cvss_v4_vector ? `<div class="text-mono text-sm" style="word-break:break-all;color:var(--text2);">${escHtml(f.cvss_v4_vector)}</div>` : ''}</dd>` : ''}
-      ${f.wstg_id ? `<dt>WSTG</dt><dd class="text-mono">${escHtml(f.wstg_id)}</dd>` : ''}
-      ${f.attack_technique ? `<dt>ATT&amp;CK</dt><dd class="text-mono">${escHtml(f.attack_technique)}</dd>` : ''}
-      ${f.vuln_class ? `<dt>Lớp lỗi</dt><dd class="text-mono">${escHtml(f.vuln_class)}${f.param ? ' · ' + escHtml(f.param) : ''}</dd>` : ''}
       ${f.cwe ? `<dt>CWE</dt><dd class="text-mono">${escHtml(f.cwe)}</dd>` : ''}
       ${f.cvss_score != null ? `<dt>CVSS</dt><dd><strong>${escHtml(f.cvss_score)}</strong></dd>` : ''}
       ${tags.length ? `<dt>Tags</dt><dd>${tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</dd>` : ''}
@@ -6306,8 +6302,8 @@ async function ptDownloadReport(fmt) {
   } catch (e) { toast('Lỗi xuất báo cáo: ' + e.message, 'error'); }
 }
 function renderReportMenu() {
-  return `<details class="pt-report-menu" style="position:relative;"><summary class="btn btn-ghost btn-sm" style="list-style:none;cursor:pointer;">⬇ Xuất báo cáo</summary>
-    <div class="card" style="position:absolute;right:0;z-index:20;min-width:220px;padding:12px;margin-top:4px;">
+  return `<details class="pt-report-menu"><summary class="btn btn-ghost btn-sm" style="list-style:none;cursor:pointer;display:inline-block;">⬇ Xuất báo cáo</summary>
+    <div class="card" style="max-width:360px;padding:12px;margin:8px 0 0;">
       <label style="margin:0 0 6px;">Finding gồm</label>
       <select id="pt-rep-include"><option value="confirmed">Đã xác nhận (mặc định)</option><option value="likely">Đã xác nhận + có khả năng</option><option value="all">Tất cả</option></select>
       <div class="flex" style="flex-wrap:wrap;margin-top:10px;">
@@ -6398,10 +6394,20 @@ async function ptReplayPoc(tid) {
     if (box) box.innerHTML = `<div class="notice" style="margin-top:8px;">✅ Replay — status <strong>${escHtml(r.status_code)}</strong></div>${r.response_preview ? ptCode(r.response_preview, 'Response preview') : ''}`;
   } catch (e) { if (box) box.innerHTML = `<div class="notice warn" style="margin-top:8px;">Lỗi replay: ${escHtml(e.message)}</div>`; }
 }
-// Egress bị chặn (gateway/sandbox) — hiện trên dòng thời gian
-function ptEgressDenied(s) {
-  if (!s || !['blocked_scope', 'blocked_unavail', 'blocked_policy', 'error'].includes(s.outcome)) return false;
-  return /egress|network policy|connection refused by gateway/i.test(ptPretty(s.output).slice(0, 4000));
+// Egress bị chặn: dữ liệu thật từ TrafficEntry(source="egress_denied") qua /runtime (gateway KHÔNG tạo AgentStep).
+function ptEgressForStep(s) {
+  const d = (ptState.runtime && ptState.runtime.egress_denied) || null;
+  if (!d || !s || !s.id) return [];
+  return (d.recent || []).filter(x => x.step && x.step === s.id);
+}
+function renderEgressDenied(rt) {
+  const d = rt && rt.egress_denied;
+  if (!d || !d.count) return '';
+  return `<div class="card" style="border-color:color-mix(in srgb,var(--critical) 40%,var(--border));">
+    <label style="margin:0 0 8px;color:var(--critical);">🚧 Egress bị chặn (${escHtml(d.count)})</label>
+    <div class="table-wrap"><table><thead><tr><th>Đích</th><th width="130">Loại</th><th>Lý do</th><th width="160">Thời gian</th></tr></thead><tbody>
+    ${(d.recent || []).map(x => `<tr><td class="text-mono text-sm" style="word-break:break-all;">${escHtml(x.target || x.host || '—')}</td><td>${ptBadge(x.kind || 'denied', 'var(--critical)')}</td><td class="text-sm" style="word-break:break-word;">${escHtml(x.reason || '—')}</td><td class="text-sm">${fmtDate(x.created_at)}</td></tr>`).join('')}
+    </tbody></table></div>${d.count > (d.recent || []).length ? `<div class="field-hint">Hiển thị ${escHtml((d.recent || []).length)}/${escHtml(d.count)} sự kiện gần nhất.</div>` : ''}</div>`;
 }
 
 // ─── P2-17: attack graph (tab của engagement) ─────────────────
@@ -6471,14 +6477,23 @@ function renderRunDetail() {
   const engTok = ptState.curEng ? ptState.curEng.max_tokens : null;
   const pending = ptState.approvals.filter(a => a.status === 'PENDING');
   const active = ptActive(r.status);
-  el.innerHTML = `
+  // F3: thanh công cụ (menu báo cáo + bộ lọc include) dựng MỘT lần mỗi run; SSE chỉ vẽ lại vùng #pt-run-dyn
+  let dyn = document.getElementById('pt-run-dyn');
+  if (!dyn || el.dataset.run !== String(r.id)) {
+    el.innerHTML = `<div id="pt-run-toolbar" class="mb-16">${renderReportMenu()}</div><div id="pt-run-dyn"></div>`;
+    el.dataset.run = String(r.id);
+    dyn = document.getElementById('pt-run-dyn');
+  }
+  const openSteps = new Set([...dyn.querySelectorAll('details.pt-step[open]')].map(d => d.dataset.step));
+  const scrollY = window.scrollY;
+  dyn.innerHTML = `
     <div class="flex-between mb-16" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">
       <div style="min-width:0;">
         <div class="pt-chips">${ptRunStatusBadge(r.status)}${active ? '<span class="vg-live-dot"></span>' : ''}<span class="tag">run #${escHtml(r.run_number)}</span>${ptBadge(r.mode || '—', 'var(--info)')}</div>
         <h1 style="margin:8px 0 0;font-size:19px;word-break:break-word;">${escHtml(r.goal)}</h1>
         <div class="text-mono text-sm" style="color:var(--text3);margin-top:4px;word-break:break-all;">🎯 ${escHtml((r.targets || []).join(', ') || 'tự tìm trong scope')}</div>
       </div>
-      <div class="flex" style="flex-wrap:wrap;align-items:flex-start;">${renderReportMenu()}${active && canWrite() ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}</div>
+      <div class="flex" style="flex-wrap:wrap;align-items:flex-start;">${active && canWrite() ? `<button class="btn btn-danger" onclick="stopRun()">⛔ Dừng (kill switch)</button>` : ''}</div>
     </div>
     ${renderRuntimeCard(ptState.runtime)}
     ${active && (prog.phase || prog.message || prog.current_tool) ? `<div class="card" style="margin-bottom:12px;">
@@ -6510,11 +6525,12 @@ function renderRunDetail() {
       </div>`).join('')}
     </div>` : ''}
 
+    ${renderEgressDenied(ptState.runtime)}
     ${renderPtg(ptState.tasks)}
 
     <div class="card">
       <label style="margin:0 0 10px;">🧭 Dòng thời gian (${ptState.steps.length} bước)</label>
-      ${ptState.steps.length ? `<div class="pt-timeline">${ptState.steps.map(renderStep).join('')}</div>`
+      ${ptState.steps.length ? `<div class="pt-timeline">${ptState.steps.map(st => renderStep(st)).join('')}</div>`
       : `<div class="empty-state" style="padding:24px;"><p>${active ? 'Agent đang khởi động — các bước sẽ xuất hiện ở đây...' : 'Chưa có bước nào'}</p></div>`}
     </div>
 
@@ -6530,6 +6546,8 @@ function renderRunDetail() {
       </tbody></table></div>
     </div>
   `;
+  dyn.querySelectorAll('details.pt-step').forEach(d => { if (openSteps.has(d.dataset.step)) { d.open = true; d.classList.remove('vg-enter'); } });
+  if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
 }
 // P2-14 sẽ điền ApprovalRequest.context {source_excerpt, injection_signals}; thiếu thì không hiện gì. Mọi giá trị là dữ liệu do target tác động → escape.
 function renderApprovalContext(c) {
@@ -6540,12 +6558,12 @@ function renderApprovalContext(c) {
     ${c.source_excerpt ? ptCode(c.source_excerpt, 'Trích đoạn nguồn (đầu ra không tin cậy)') : ''}`;
 }
 function renderStep(s) {
-  return `<details class="pt-step vg-enter">
+  return `<details class="pt-step vg-enter" data-step="${escHtml(s.step_number)}">
     <summary>
       <div class="pt-step-head">
         <span class="text-mono" style="color:var(--text3);">#${escHtml(s.step_number)}</span>
         <strong class="text-mono">${escHtml(s.tool_name || '—')}</strong>
-        <span class="pt-chips">${ptRiskBadge(s.risk_tier)}${ptDecidedBadge(s.decided_by)}${ptOutcomeBadge(s.outcome)}${ptEgressDenied(s) ? ptBadge('🚧 egress denied', 'var(--critical)') : ''}</span>
+        <span class="pt-chips">${ptRiskBadge(s.risk_tier)}${ptDecidedBadge(s.decided_by)}${ptOutcomeBadge(s.outcome)}${ptEgressForStep(s).length ? ptBadge('🚧 egress denied ×' + ptEgressForStep(s).length, 'var(--critical)') : ''}</span>
       </div>
       ${s.thought ? `<div class="text-sm" style="margin-top:6px;color:var(--text2);line-height:1.5;">💭 ${escHtml(String(s.thought).slice(0, 180))}${String(s.thought).length > 180 ? '…' : ''}</div>` : ''}
     </summary>
@@ -6594,6 +6612,10 @@ async function openPentestFindingDrawer(id) {
       <dt>Target</dt><dd class="text-mono">${escHtml(f.target || '—')}</dd>
       <dt>Trạng thái</dt><dd>${escHtml(f.status || '—')}</dd>
       <dt>Độ tin cậy</dt><dd>${ptConfBadge(f.confidence)}${f.validator ? ` <span class="text-mono text-sm">${escHtml(f.validator)}</span>` : ''}</dd>
+      ${f.cvss_v4_score != null ? `<dt>CVSS v4</dt><dd>${ptCvssBadge(f)}${f.cvss_v4_vector ? `<div class="text-mono text-sm" style="word-break:break-all;color:var(--text2);">${escHtml(f.cvss_v4_vector)}</div>` : ''}</dd>` : ''}
+      ${f.wstg_id ? `<dt>WSTG</dt><dd class="text-mono">${escHtml(f.wstg_id)}</dd>` : ''}
+      ${f.attack_technique ? `<dt>ATT&amp;CK</dt><dd class="text-mono">${escHtml(f.attack_technique)}</dd>` : ''}
+      ${f.vuln_class ? `<dt>Lớp lỗi</dt><dd class="text-mono">${escHtml(f.vuln_class)}${f.param ? ' · ' + escHtml(f.param) : ''}</dd>` : ''}
       ${f.cwe ? `<dt>CWE</dt><dd class="text-mono">${escHtml(f.cwe)}</dd>` : ''}
       ${f.cve ? `<dt>CVE</dt><dd class="text-mono" style="color:var(--info)">${escHtml(f.cve)}</dd>` : ''}
     </dl>
