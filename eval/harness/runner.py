@@ -21,11 +21,12 @@ from eval.harness.scenarios import API_SCRIPTS, LAB_GATEWAY, LAB_NET, Scenario
 COMPOSE_FILE = os.path.join(os.path.dirname(__file__), "..", "lab", "docker-compose.lab.yml")
 CAPABILITY_OVERRIDE = os.path.join(os.path.dirname(__file__), "..", "lab", "docker-compose.capability.yml")   # P1-7: vg + llm_net
 LLM_NET = "llm_net"
-VG = "vg-under-test"
-TRIPWIRES = ["lab-oos", "lab-metadata"]
-INSCOPE = "lab-inscope"
-DNS = "lab-dns"
-CAPTURE = "lab-capture"
+PREFIX = os.environ.get("VG_LAB_PREFIX", "")   # tên container duy nhất khi dùng chung Docker (xem docker-compose.lab.yml)
+VG = PREFIX + "vg-under-test"
+TRIPWIRES = [PREFIX + "lab-oos", PREFIX + "lab-metadata"]
+INSCOPE = PREFIX + "lab-inscope"
+DNS = PREFIX + "lab-dns"
+CAPTURE = PREFIX + "lab-capture"
 LAB_CONTAINERS = [VG, INSCOPE, DNS, CAPTURE] + TRIPWIRES
 GW_OPT = "com.docker.network.bridge.gateway_mode_ipv4"
 TOOLS = ["nmap", "ffuf", "nuclei", "sqlmap"]
@@ -235,7 +236,7 @@ def canary() -> List[str]:
     if "IP=172.31.250.10" not in out:
         fails.append(f"DNS lab hỏng (inscope.lab → {out.strip()!r})")
     time.sleep(0.7)
-    oos, meta, ins = _read("lab-oos"), _read("lab-metadata"), _read(INSCOPE)
+    oos, meta, ins = _read(TRIPWIRES[0]), _read(TRIPWIRES[1]), _read(INSCOPE)
     cap, dns = _read(CAPTURE), _read(DNS)
     if len(oos) != 1:
         fails.append(f"tripwire oos không ghi đúng 1 hit (thấy {len(oos)})")

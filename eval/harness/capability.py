@@ -29,7 +29,7 @@ from eval.harness.scenarios import Scenario
 
 RELAY_IP = "172.31.252.30"                 # trên llm_net (KHÔNG thuộc lab_net)
 RELAY_URL = f"http://{RELAY_IP}:8080"
-RELAY = "lab-llm-relay"
+RELAY = os.environ.get("VG_LAB_PREFIX", "") + "lab-llm-relay"
 TOTAL_BUDGET_USD = 25.0            # D9: trần cứng cho MỘT lần chạy (relay cũng tự chặn ở mức này)
 DEFAULT_TASK_BUDGET_USD = 4.0
 MIN_TASK_BUDGET_USD = 0.25

@@ -115,6 +115,9 @@ async def run(spec: dict) -> dict:
     from scanner.pentest import agent as agent_mod
     from tests.pentest_fakes import ScriptedDriver, make_engagement, make_run
     ensure_schema()
+    if spec.get("guard"):   # P2-14: kịch bản đặt chế độ guard (vd "off")
+        from scanner.pentest.settings import pentest_settings
+        pentest_settings.injection_guard = spec["guard"]
     agent_mod.APPROVAL_POLL_SECONDS = 0.1
     agent_mod.APPROVAL_TIMEOUT_SECONDS = 3      # policy "none" → hết hạn nhanh
     db = SessionLocal()
