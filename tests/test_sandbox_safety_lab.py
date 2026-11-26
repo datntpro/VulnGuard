@@ -22,7 +22,7 @@ import uuid
 import pytest
 
 try:   # dùng lại fixture/helper của lab egress (cùng thư mục tests/, pythonpath không có __init__)
-    from test_egress_lab import RUNNER_IMG, TOKEN, H, events, hits, lab  # noqa: F401  (lab = fixture)
+    from test_egress_lab import PY as PY_IMG, RUNNER_IMG, TOKEN, H, events, hits, lab  # noqa: F401  (lab = fixture)
 except Exception:  # noqa: BLE001 — module-level skip chặn lỗi import khi thiếu dependency tuỳ chọn; test không-Docker bên dưới vẫn chạy
     lab = None
 
@@ -30,7 +30,7 @@ LAB_ON = os.environ.get("VG_LAB") == "1"
 needs_lab = pytest.mark.skipif(not LAB_ON, reason="cần VG_LAB=1 + Docker + image runner/egress")
 
 ESCAPE_CLASSES = {
-    "oos_ipv4": ("test_oos_ipv4_dropped_and_tripwire_silent",),
+    "oos_ipv4": ("test_oos_ipv4_dropped_and_tripwire_silent", "test_subnet_sweep_and_hostname_probes_blocked"),
     "oos_ipv6": ("test_ipv6_has_no_path",),
     "host_gateway_lan": ("test_host_bridge_gateway_and_vm_ips_unreachable", "test_host_lan_ip_unreachable_even_with_private_ranges_allowed"),
     "dns_exfil_rebinding": ("test_dns_exfil_and_direct_resolver_blocked", "test_dns_rebinding_never_opens_dangerous_ip"),
@@ -144,7 +144,7 @@ def sresolve(c, name):
 
 def udp_probe(c, ip, port, payload_hex="00", t=2):
     code = ("import socket\ns=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(%s)\n"
-            "s.sendto(bytes.fromhex(%r),(%r,%d))\ntry: s.recvfrom(512); print('REPLY')\nexcept Exception as e: print('NOREPLY', type(e).__name__)" % (t, payload_hex, ip, port))
+            "try: s.sendto(bytes.fromhex(%r),(%r,%d)); s.recvfrom(512); print('REPLY')\nexcept Exception as e: print('NOREPLY', type(e).__name__)" % (t, payload_hex, ip, port))
     return sx(c, code)[1]
 
 
@@ -153,6 +153,15 @@ def _dns_query_hex(name):
     for lab_ in name.split("."):
         q += bytes([len(lab_)]) + lab_.encode()
     return (q + b"\x00\x00\x01\x00\x01").hex()
+
+
+def _wait_ok(fn, timeout=15, step=0.4):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if fn():
+            return True
+        time.sleep(step)
+    return False
 
 
 def denied_event_for(lab, dst, timeout=10):
@@ -178,6 +187,31 @@ def test_oos_ipv4_dropped_and_tripwire_silent(lab, sb):
     assert sproxy(sb.a, "http://inscope.lab/") == "STATUS 200"
     assert sproxy(sb.a, f"http://{lab.ip2}/") == "STATUS 403"
     assert len(hits(lab.t2)) == before
+
+
+@needs_lab
+def test_subnet_sweep_and_hostname_probes_blocked(lab, sb):
+    """Quét /24 kiểu nmap từ sandbox THẬT (qua exec của runner): chỉ IP trong scope mở; tripwire t2/t3 im lặng; hostname ngoài scope bị 403/NXDOMAIN."""
+    import ipaddress
+    out_sub = lab.cli.networks.get(lab.out.name).attrs["IPAM"]["Config"][0]["Subnet"]
+    assert ipaddress.ip_network(out_sub).prefixlen == 24
+    from test_egress_lab import _exec
+    b2 = len(hits(lab.t2))
+    st, out = _exec(lab, sb.a_rid, "sw1", "nmap", ["nmap", "-Pn", "-n", "-p", "80", "--max-retries", "0", "--max-rtt-timeout", "400ms", "--host-timeout", "90s", out_sub], wait=150)
+    hosts_open = []
+    cur = None
+    for ln in out.splitlines():
+        if ln.startswith("Nmap scan report for"):
+            cur = ln.split()[-1].strip("()")
+        elif ln.strip().startswith("80/tcp") and " open" in ln:
+            hosts_open.append(cur)
+    assert hosts_open == [lab.ip1], (hosts_open, out[-600:])                   # control: ip1 (in-scope) thấy mở; mọi host khác của /24 bị drop
+    assert len(hits(lab.t2)) == b2
+    assert sproxy(sb.a, "http://oos.lab/x") == "STATUS 403"                    # proxy tới HOSTNAME ngoài scope: từ chối cụ thể (không chỉ IP literal)
+    assert sresolve(sb.a, "oos.lab").startswith("ERR")
+    for dst in (lab.ip2, lab.ip3, "169.254.169.254"):
+        stcp(sb.a, dst, 80, 2)
+        assert denied_event_for(lab, dst), dst
 
 
 # ───────────────────────── 2. IPv6 ─────────────────────────
@@ -217,7 +251,7 @@ def test_host_bridge_gateway_and_vm_ips_unreachable(lab, sb):
             res = stcp(sb.a, ip, port, 2)
             assert blocked(res), (ip, port, res)
     for port in (22, 80, 443, 9999):                                          # chính gateway: chỉ :53/:8080 (proxy) mở
-        assert blocked(stcp(sb.a, lab.gw_ip, port, 2)) or port == 80, port
+        assert blocked(stcp(sb.a, lab.gw_ip, port, 2)), port
     # sandbox KHÔNG sửa được route/ARP để tránh gateway: không có NET_ADMIN (xem test_no_setuid_no_caps…), route mặc định = gateway
     _, route = sx(sb.a, "print(open('/proc/net/route').read())")
     default = [ln.split() for ln in route.splitlines()[1:] if ln.split()[1] == "00000000"]
@@ -285,26 +319,24 @@ def test_host_lan_ip_unreachable_even_with_private_ranges_allowed(lab, sb):
                 _put(lab, lab.rules)
         # (1) scope mặc định (không có rule dải riêng): mọi IP của host phải bị chặn
         assert leaked_ips(lab.rules, lab.ip1) == []
-        # (2) scope cho phép TƯỜNG MINH mọi dải RFC1918: IP host mà gateway phát hiện được (host netns / VM / bridge gateways) vẫn bị chặn.
-        #     Docker Desktop: IP LAN của máy Mac KHÔNG nằm trong netns của VM nên gateway không biết → lọt trừ khi operator đặt PENTEST_EGRESS_EXTRA_DENY.
-        leaked = leaked_ips(rfc1918, lab.ip3)
-        known_gap = False
-        if leaked:
-            desktop = str((lab.cli.info() or {}).get("OperatingSystem", "")).startswith("Docker Desktop")
-            assert desktop and leaked == [lan_ip], f"IP host lọt ra ngoài Docker Desktop hoặc ngoài IP LAN: {leaked}"
-            known_gap = True
-            # biện pháp bắt buộc đã tài liệu hoá: EXTRA_DENY (CIDR /32 của IP LAN host) phải đóng lỗ hổng này
-            lab.gw.extra_deny = (f"{lan_ip}/32",)
-            try:
-                assert leaked_ips(rfc1918, lab.ip3) == [], "EXTRA_DENY không chặn được IP LAN của host"
-            finally:
-                lab.gw.extra_deny = ()
+        # (2) scope cho phép TƯỜNG MINH mọi dải RFC1918. Docker Desktop: IP LAN của máy Mac không nằm trong netns của VM nên gateway không tự
+        #     phát hiện được → runner FAIL-CLOSED (422) cho tới khi có PENTEST_EGRESS_EXTRA_DENY (scripts/pentest_host_ips.sh); sau đó phải chặn.
+        desktop = str((lab.cli.info() or {}).get("OperatingSystem", "")).startswith("Docker Desktop")
+        if desktop:
+            lab.version += 1
+            from scanner.pentest.egress_policy import compile_policy
+            from datetime import datetime, timedelta, timezone
+            pol = compile_policy(rfc1918, {}, lab.version, datetime.now(timezone.utc) + timedelta(hours=1), engagement_id=lab.eid)
+            r = lab.http.put(f"/v1/engagements/{lab.eid}/policy", json={"policy": pol.to_dict()}, headers=H)
+            assert r.status_code == 422 and "EXTRA_DENY" in r.text, (r.status_code, r.text)     # fail-closed, policy cũ vẫn hiệu lực
+            assert stcp(sb.a, lab.ip1, 80) == "OPEN"
+            lab.gw.extra_deny = tuple(f"{i}/32" for i in sorted(host_ips))                      # = kết quả scripts/pentest_host_ips.sh trên host
+        try:
+            assert leaked_ips(rfc1918, lab.ip3) == [], "IP host lọt ra ngoài"
+        finally:
+            lab.gw.extra_deny = ()
         time.sleep(0.5)
-        if not known_gap:
-            assert len(accepted) == n_ctl, accepted                              # tripwire: listener host KHÔNG thấy thêm kết nối nào sau control
-        if known_gap:
-            pytest.xfail(f"KNOWN GAP (P2-3 follow-up, Docker Desktop): scope cho phép tường minh 192.168.0.0/16 thì IP LAN của Mac ({lan_ip}) "
-                         "với tới được; gateway không phát hiện được IP đó từ VM. Đã xác nhận PENTEST_EGRESS_EXTRA_DENY đóng được — bắt buộc cho private scope.")
+        assert len(accepted) == n_ctl, accepted                                  # tripwire: listener host KHÔNG thấy thêm kết nối nào sau control
     finally:
         stop.set()
         t.join(2)
@@ -367,15 +399,35 @@ def test_dot_doh_quic_udp_icmp_blocked(lab, sb):
         assert blocked(stcp(sb.a, lab.ip2, port, 3)) and not stcp(sb.a, lab.ip2, port, 3) == "OPEN", port
     # DoH qua proxy: CONNECT tới đích ngoài scope bị từ chối; control: HTTP in-scope qua cùng proxy OK
     assert sproxy(sb.a, "http://inscope.lab/") == "STATUS 200"
-    code = ("import http.client,os\nc=http.client.HTTPConnection(%r,8080,timeout=8)\nc.set_tunnel(%r,443)\n"
-            "try:\n c.request('GET','/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB'); print('STATUS',c.getresponse().status)\n"
-            "except Exception as e: print('ERR',type(e).__name__)" % (lab.gw_ip, lab.ip2))
-    assert sx(sb.a, code)[1] != "STATUS 200"
+    def tunnel(host, port, path):
+        code = ("import http.client\nc=http.client.HTTPConnection(%r,8080,timeout=8)\nc.set_tunnel(%r,%d)\n"
+                "try:\n c.request('GET',%r); r=c.getresponse(); print('STATUS',r.status,r.read(20))\n"
+                "except Exception as e: print('ERR',type(e).__name__,e)" % (lab.gw_ip, host, port, path))
+        return sx(sb.a, code)[1]
+    assert tunnel(lab.ip1, 80, "/").startswith("STATUS 200")                 # control: CONNECT tunnel tới đích trong scope hoạt động
+    before = len(hits(lab.t2))
+    out = tunnel(lab.ip2, 443, "/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB")
+    assert out.startswith("ERR") and "403" in out, out                       # từ chối CỤ THỂ bởi gateway (Tunnel connection failed: 403), không phải lỗi mạng chung
+    assert len(hits(lab.t2)) == before
     # QUIC/UDP: control = UDP tới gateway :53 có hồi đáp; UDP 443 (QUIC) / 53 / 123 / tuỳ ý tới IP trong scope và ngoài scope = im lặng
     assert udp_probe(sb.a, lab.gw_ip, 53, _dns_query_hex("inscope.lab")) == "REPLY"
-    for ip in (lab.ip1, lab.ip2):
-        for port in (443, 53, 123, 9):
-            assert udp_probe(sb.a, ip, port, "c3000000010000") .startswith("NOREPLY"), (ip, port)
+    # control: target t1/t2 THỰC SỰ có UDP echo (container thường trên mạng "Internet" của lab nhận được echo) → NOREPLY từ sandbox mới có nghĩa
+    def udp_from_plain(ip, port):
+        c = lab.cli.containers.run(PY_IMG, command=["python3", "-c", "import socket\ns=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3)\n"
+                                                    "s.sendto(b'ping',(%r,%d))\ntry: print(s.recvfrom(100)[0])\nexcept Exception: print('NOREPLY')" % (ip, port)],
+                                   network=lab.out.name, detach=True, labels={"vgt": lab.uid})
+        try:
+            c.wait(timeout=30)
+            return c.logs().decode().strip()
+        finally:
+            c.remove(force=True)
+    for ip, tgt in ((lab.ip1, lab.t1), (lab.ip2, lab.t2)):
+        assert udp_from_plain(ip, 80) == "b'echo:ping'", ip
+    for ip, tgt in ((lab.ip1, lab.t1), (lab.ip2, lab.t2)):
+        n0 = len([ln for ln in tgt.logs().decode().splitlines() if ln.startswith("UDP")])
+        for port in (80, 443, 53, 123, 9):
+            assert udp_probe(sb.a, ip, port, "c3000000010000").startswith("NOREPLY"), (ip, port)
+        assert len([ln for ln in tgt.logs().decode().splitlines() if ln.startswith("UDP")]) == n0   # tripwire: không datagram nào tới đích
     # ICMP: (a) không có raw/ping socket vì cap_drop ALL; (b) kể cả khi có NET_RAW trong netns của sandbox, gateway drop ICMP ra ngoài
     rc, out = sx(sb.a, "import socket\ntry: socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_ICMP); print('RAW-OK')\nexcept Exception as e: print('RAW-DENIED', type(e).__name__)")
     assert out.startswith("RAW-DENIED")
@@ -384,15 +436,17 @@ def test_dot_doh_quic_udp_icmp_blocked(lab, sb):
                   "p=struct.pack('!BBHHH',8,0,c,1,1)+b'x'*8\ns.sendto(p,(sys.argv[1],0))\n"
                   "try:\n d=s.recvfrom(256)[0]; print('REPLY')\nexcept Exception: print('NOREPLY')")
 
-    def icmp(dst):
-        c = lab.cli.containers.run(image=RUNNER_IMG, entrypoint=["python3", "-c", probe_code, dst], network_mode=f"container:{sb.a.id}", cap_drop=["ALL"],
-                                   cap_add=["NET_RAW"], user="0:0", detach=True, labels={"vgt": lab.uid})
+    def icmp(dst, netmode=None):
+        kw = {"network_mode": netmode or f"container:{sb.a.id}"}
+        c = lab.cli.containers.run(image=RUNNER_IMG, entrypoint=["python3", "-c", probe_code, dst], cap_drop=["ALL"],
+                                   cap_add=["NET_RAW"], user="0:0", detach=True, labels={"vgt": lab.uid}, **kw)
         try:
             c.wait(timeout=30)
             return c.logs().decode().strip()
         finally:
             c.remove(force=True)
-    assert icmp(sb.a_ip) == "REPLY"                                          # control: ICMP echo tới chính mình hoạt động
+    assert icmp(lab.ip1, lab.out.name) == "REPLY"                            # control: container THƯỜNG trên mạng "Internet" ping được t1/t2 (đích có trả lời ICMP thật)
+    assert icmp(lab.ip2, lab.out.name) == "REPLY"
     assert icmp(lab.ip1) == "NOREPLY"                                        # kể cả IP in-scope: gateway chỉ cho TCP
     assert icmp(lab.ip2) == "NOREPLY"
 
@@ -418,7 +472,6 @@ def test_docker_socket_absent_and_api_ports_closed(lab, sb):
         for port in (2375, 2376):
             res = stcp(sb.a, ip, port, 2)
             assert res != "OPEN", (ip, port)                                  # TCP API của docker daemon không với tới được
-    assert blocked(stcp(sb.a, lab.gw_ip, 2375, 2))
 
 
 # ───────────────────────── 7. metadata IPs ─────────────────────────
@@ -653,12 +706,14 @@ def test_cross_engagement_sandbox_unreachable(lab, sb):
         listener.reload()
         lip = listener.attrs["NetworkSettings"]["Networks"][f"vg-eng-{sb.eid2}"]["IPAddress"]
         time.sleep(1)
-        assert sx(sb.c, "import socket\ns=socket.socket(); s.settimeout(3); s.connect(('%s',7777)); print('OPEN')" % lip)[1] == "OPEN"   # control: cùng mạng chạm được
+        # control: listener sống (kết nối từ CHÍNH container đó qua loopback; sandbox khác cùng engagement giờ cũng bị cô lập)
+        assert _wait_ok(lambda: listener.exec_run(["python3", "-c", "import socket; socket.create_connection(('127.0.0.1',7777),2); print('OPEN')"]).output.decode().strip() == "OPEN", 15)
+        n_ctl = listener.logs().decode().count("CONN")
         for target in (lip, sb.c_ip):
             for port in (7777, 22, 8080):
                 assert blocked(stcp(sb.a, target, port, 3)), (target, port)
         time.sleep(0.5)
-        assert listener.logs().decode().count("CONN") == 1                      # chỉ kết nối control của C; A không bao giờ tới
+        assert listener.logs().decode().count("CONN") == n_ctl                  # chỉ kết nối control; A không bao giờ tới
     finally:
         listener.remove(force=True)
     assert blocked(stcp(sb.c, sb.a_ip, 22, 3))                                  # chiều ngược lại cũng bị chặn
@@ -685,13 +740,27 @@ def test_other_sandbox_filesystem_and_processes_invisible(lab, sb):
 
 @needs_lab
 def test_same_engagement_sandbox_to_sandbox(lab, sb):
-    """Hai sandbox của CÙNG engagement dùng chung một bridge. Docker cho L2 giữa chúng đi thẳng, không qua gateway/nft. Ghi nhận rõ hành vi
-    hiện tại để eval KHÔNG im lặng: nếu runner đóng đường này (vd. mỗi sandbox một /32 + isolation) test này sẽ yêu cầu cập nhật."""
+    """Hai sandbox của CÙNG engagement dùng chung một bridge (L2 không qua gateway). `attach` nạp nft vào netns của TỪNG sandbox (từ container phụ
+    NET_ADMIN): chỉ gateway được nói chuyện trong subnet engagement. Sandbox cap_drop ALL nên không gỡ được bảng này."""
     listener = ("import socket,threading,time\ns=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',7788)); s.listen(8)\n"
-                "threading.Thread(target=lambda: [s.accept()[0].close() for _ in range(5)], daemon=True).start(); time.sleep(8)")
+                "threading.Thread(target=lambda: [s.accept()[0].close() for _ in range(50)], daemon=True).start(); time.sleep(40)")
     sb.b.exec_run(["python3", "-c", listener], user=UID, detach=True)
-    time.sleep(1)
-    res = stcp(sb.a, sb.b_ip, 7788, 3)
-    # Ngoài scope? sandbox B nằm trong cùng engagement (cùng scope) nên không phải leo thang quyền scope, nhưng B không phải mục tiêu: ghi nhận
-    pytest.xfail(f"KNOWN GAP (follow-up): sandbox↔sandbox cùng engagement qua bridge chung = {res}") if res == "OPEN" else None
-    assert blocked(res)
+    assert _wait_ok(lambda: stcp(sb.b, "127.0.0.1", 7788, 2) == "OPEN", 15)   # control 1: listener của B sống (qua loopback của chính B — nft cho phép lo)
+    assert stcp(sb.a, lab.ip1, 80) == "OPEN"                                   # control 2: A vẫn ra được qua gateway
+    assert sproxy(sb.a, "http://inscope.lab/") == "STATUS 200"                 # control 3: A vẫn nói chuyện được với gateway (DNS + proxy)
+    for src, dst_ip in ((sb.a, sb.b_ip), (sb.b, sb.a_ip)):
+        for port in (7788, 22, 80, 8080):
+            assert blocked(stcp(src, dst_ip, port, 2)), (dst_ip, port)
+    assert udp_probe(sb.a, sb.b_ip, 7788).startswith("NOREPLY")
+    # sandbox không gỡ được rule (cap_drop ALL): nft/flush đều bị từ chối, và vẫn chặn sau đó
+    res = sx(sb.a, "import subprocess\nr=subprocess.run(['nft','flush','ruleset'],capture_output=True,text=True)\nprint(r.returncode)")[1]
+    assert res != "0", res
+    assert blocked(stcp(sb.a, sb.b_ip, 7788, 2))
+    # sandbox mới tạo sau cũng được cô lập (rule nạp ở attach)
+    rid = "sd" + lab.uid
+    d = _create_sandbox(lab, rid)
+    try:
+        assert blocked(stcp(d, sb.b_ip, 7788, 2)) and blocked(stcp(sb.b, _ip(d, lab.eid), 7788, 2))
+        assert stcp(d, lab.ip1, 80) == "OPEN"
+    finally:
+        lab.http.delete(f"/v1/runs/{rid}/sandbox", headers=H)
