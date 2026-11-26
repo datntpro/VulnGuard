@@ -360,19 +360,19 @@ def zero_call_problems(res: Dict) -> List[str]:
     return out
 
 
-def run_capability(task: CapTask, model_profile: str, budget_usd: float) -> Dict:
+def run_capability(task: CapTask, model_profile: str, budget_usd: float, arch: str = ARCH) -> Dict:
     """Một task: chạy, rồi LUÔN gỡ mục tiêu và ghi chi tiêu THẬT từ relay vào kết quả (kể cả khi task lỗi giữa chừng)."""
     model = MODEL_PROFILES[model_profile]
     require_known(model)
     meter0 = relay_meter()
     try:
-        res = _run_task(task, model_profile, budget_usd)
+        res = _run_task(task, model_profile, budget_usd, arch)
     except Exception as e:                      # lỗi của MỘT task không làm mất cả lần chạy
         try:                                    # timeout: agent có thể còn chạy trong vg-under-test — dừng nó (relay vẫn chặn ở trần USD)
             runner._docker(["exec", runner.VG, "pkill", "-f", "eval.harness.inproc"], timeout=30)
         except Exception:
             pass
-        res = {"task": task.id, "arch": ARCH, "model": model, "model_profile": model_profile, "budget_usd": round(budget_usd, 4),
+        res = {"task": task.id, "arch": arch, "model": model, "model_profile": model_profile, "budget_usd": round(budget_usd, 4),
                "status": "error", "failures": [f"{type(e).__name__}: {str(e)[:300]}"]}
     try:   # chi tiêu của task = max(driver, relay) — relay là nguồn sự thật
         m1 = relay_meter()
@@ -398,9 +398,9 @@ def run_capability(task: CapTask, model_profile: str, budget_usd: float) -> Dict
     return res
 
 
-def _run_task(task: CapTask, model_profile: str, budget_usd: float) -> Dict:
+def _run_task(task: CapTask, model_profile: str, budget_usd: float, arch: str = ARCH) -> Dict:
     model = MODEL_PROFILES[model_profile]
-    res: Dict = {"task": task.id, "arch": ARCH, "model": model, "model_profile": model_profile, "budget_usd": round(budget_usd, 4)}
+    res: Dict = {"task": task.id, "arch": arch, "model": model, "model_profile": model_profile, "budget_usd": round(budget_usd, 4)}
     require_known(model)
     runner.assert_scenario_safe(task_scenario(task))
     expected_flag, xdir, port = None, None, None
@@ -430,7 +430,7 @@ def _run_task(task: CapTask, model_profile: str, budget_usd: float) -> Dict:
         return {**res, "status": "error", "failures": ["canary TRƯỚC: " + "; ".join(pre)]}
     goal = task.goal.replace("{port}", str(port or ""))
     targets = [t if port is None else t.replace(".lab/", f".lab:{port}/") for t in task.seed_targets]
-    spec = {"scope_rules": task.scope_rules, "mode": "AUTONOMOUS_IN_SCOPE", "approvals": "approve_all", "targets": targets,
+    spec = {"agent_arch": arch, "scope_rules": task.scope_rules, "mode": "AUTONOMOUS_IN_SCOPE", "approvals": "approve_all", "targets": targets,
             "verified_domains": task.allowed_dns, "turns": [],
             "capability": {"model": model, "budget_usd": budget_usd, "relay_url": RELAY_URL, "relay_token": _relay_token(),
                            "max_steps": task.max_steps, "max_tokens": max_tokens_for_budget(model, budget_usd), "goal": goal}}
@@ -466,7 +466,7 @@ def _run_task(task: CapTask, model_profile: str, budget_usd: float) -> Dict:
 
 
 def run_all(tasks: List[CapTask], model_profile: str, total_budget_usd: float,
-            on_result: Optional[Callable[[List[Dict]], None]] = None) -> List[Dict]:
+            on_result: Optional[Callable[[List[Dict]], None]] = None, arch: str = ARCH) -> List[Dict]:
     """Chạy lần lượt; mỗi task nhận min(trần task, phần còn lại − chi phí xấu nhất của MỘT lượt gọi) nên tổng ≤ trần ngay cả khi
     lượt cuối vượt. Task lỗi KHÔNG làm mất kết quả khác: đánh dấu `error` rồi chạy tiếp. Chi tiêu lấy từ relay (nguồn sự thật);
     không đọc được ⇒ tính toàn bộ ngân sách của task (bi quan)."""
@@ -481,7 +481,7 @@ def run_all(tasks: List[CapTask], model_profile: str, total_budget_usd: float,
             results.append({"task": t.id, "status": "skipped", "failures": ["hết ngân sách tổng"]})
         else:
             try:
-                r = run_capability(t, model_profile, task_budget)
+                r = run_capability(t, model_profile, task_budget, **({} if arch == ARCH else {"arch": arch}))
             except Exception as e:
                 r = {"task": t.id, "status": "error", "failures": [f"{type(e).__name__}: {str(e)[:300]}"], "budget_usd": round(task_budget, 4)}
             if "usd" not in r or r.get("usd_unknown"):
@@ -547,9 +547,9 @@ def _git_sha() -> str:
         return ""
 
 
-def build_meta(profile: str, budget: float) -> Dict:
+def build_meta(profile: str, budget: float, arch: str = ARCH) -> Dict:
     model = MODEL_PROFILES[profile]
-    return {"arch": ARCH, "model_profile": profile, "model": model, "ts": time.strftime("%Y%m%d-%H%M%S"),
+    return {"arch": arch, "model_profile": profile, "model": model, "ts": time.strftime("%Y%m%d-%H%M%S"),
             "budget_usd": min(budget, TOTAL_BUDGET_USD), "git_sha": _git_sha(), "fallbacks": FALLBACKS,
             "prices": {m: [["inf" if t[0] == float("inf") else t[0], t[1], t[2]] for t in tiers] for m, tiers in prices.PRICES.items()},
             "xbow": {"sha": xbow.PINNED_SHA, "benchmarks": list(xbow.BENCHMARKS)}}
