@@ -24,7 +24,7 @@ def is_nuclei_available() -> bool:
 def build_command(targets_file: str, severities: List[str], tags: List[str], fuzz: bool,
                   rate_limit: int, concurrency: int = 10, capture_traffic: bool = False,
                   exclude_tags: List[str] = None, safe_net: bool = False,
-                  proxy: Optional[str] = None) -> List[str]:
+                  proxy: Optional[str] = None, template_ids: Optional[List[str]] = None) -> List[str]:
     sev = [s for s in severities if s in VALID_SEVERITIES] or list(VALID_SEVERITIES[:4])
     cmd = [
         NUCLEI_BIN,
@@ -41,6 +41,8 @@ def build_command(targets_file: str, severities: List[str], tags: List[str], fuz
     ]
     if tags:
         cmd += ["-tags", ",".join(t.strip() for t in tags if t.strip())]
+    if template_ids:
+        cmd += ["-id", ",".join(template_ids)]   # P2-10: replay đúng template
     if exclude_tags:
         cmd += ["-etags", ",".join(t.strip() for t in exclude_tags if t.strip())]  # P0.9
     if safe_net:
@@ -121,12 +123,13 @@ async def run_nuclei(
     proxy: Optional[str] = None,
     backend: Any = None,
     step_id: Optional[str] = None,
+    template_ids: Optional[List[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Chạy nuclei → (findings, meta{error, timed_out, stderr_tail}).
     backend (P2-4): ExecBackend `sandbox` → chạy trong sandbox qua runner (argv y hệt, `-u` thay cho `-l <file host>`)."""
     if backend is not None and getattr(backend, "name", "") == "sandbox":
         return await _run_nuclei_sandbox(backend, step_id, targets, severities, tags, fuzz, rate_limit, timeout,
-                                         on_finding, capture_traffic, exclude_tags, safe_net)
+                                         on_finding, capture_traffic, exclude_tags, safe_net, template_ids)
     if not is_nuclei_available():
         return [], {"error": "Tool 'nuclei' chưa được cài. Rebuild Docker image hoặc xem docs/NATIVE_INSTALL.md."}
     if not targets:
@@ -140,7 +143,7 @@ async def run_nuclei(
         with open(tfile, "w") as f:
             f.write("\n".join(targets))
         cmd = build_command(tfile, severities, tags, fuzz, rate_limit,
-                            capture_traffic=capture_traffic, exclude_tags=exclude_tags, safe_net=safe_net, proxy=proxy)
+                            capture_traffic=capture_traffic, exclude_tags=exclude_tags, safe_net=safe_net, proxy=proxy, template_ids=template_ids)
         try:
             # Đi qua registry của Pentest Agent: nhóm process riêng + kill switch giết được (F1/F3)
             from scanner.pentest.procs import REGISTRY, RunStopped, current_run_id, spawn
@@ -183,11 +186,11 @@ async def run_nuclei(
 
 
 async def _run_nuclei_sandbox(backend, step_id, targets, severities, tags, fuzz, rate_limit, timeout, on_finding,
-                              capture_traffic, exclude_tags, safe_net):
+                              capture_traffic, exclude_tags, safe_net, template_ids=None):
     if not targets:
         return [], {"error": "Không có URL nào để quét."}
     cmd = build_command("-", severities, tags, fuzz, rate_limit, capture_traffic=capture_traffic,
-                        exclude_tags=exclude_tags, safe_net=safe_net, proxy=None)
+                        exclude_tags=exclude_tags, safe_net=safe_net, proxy=None, template_ids=template_ids)
     i = cmd.index("-l")
     cmd[i:i + 2] = [x for t in targets for x in ("-u", t)]    # file target của host không tới được sandbox
     from scanner.pentest.procs import current_run_id
