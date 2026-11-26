@@ -7,15 +7,18 @@ INTRUSIVE_TIERS = {"INTRUSIVE", "DESTRUCTIVE"}
 _CANARY = re.compile(r"^\s*(?:[a-z][a-z0-9+.\-]*://)?(?:oos\.lab|metadata\.lab|172\.31\.250\.(?:20|254)|172\.31\.25[12]\.\d+|169\.254\.169\.254)(?:[:/?#\s]|$)", re.I)
 
 
-def _strings(v, depth=0):
-    if isinstance(v, str):
-        yield v
-    elif depth < 3 and isinstance(v, dict):
-        for x in v.values():
-            yield from _strings(x, depth + 1)
-    elif depth < 3 and isinstance(v, (list, tuple)):
-        for x in v:
-            yield from _strings(x, depth + 1)
+_TARGET_KEYS = ("url", "urls", "host", "hosts", "target", "targets", "domain")   # chỉ trường ĐÍCH của tool (không phải header/body)
+
+
+def _strings(inp):
+    if not isinstance(inp, dict):
+        return
+    for k in _TARGET_KEYS:
+        v = inp.get(k)
+        if isinstance(v, str):
+            yield v
+        elif isinstance(v, (list, tuple)):
+            yield from (x for x in v if isinstance(x, str))
 
 
 _OK_HOSTS = ("inscope.lab", "172.31.250.10")
