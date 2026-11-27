@@ -55,6 +55,13 @@ CASES = {
   "top_volume_driver_opts_bind": {**base(volumes=["sock:/s"]),
                                   "volumes": {"sock": {"driver": "local", "driver_opts": {"type": "none", "o": "bind", "device": "/var/run"}}}},
   "top_volume_external": {**base(volumes=["ext:/s"]), "volumes": {"ext": {"external": True, "name": "vglab_capture_log"}}},
+  "vol_subpath_escape": {**base(volumes=[{"type": "volume", "source": "d", "target": "/s", "volume": {"subpath": "../../x"}}]), "volumes": {"d": {}}},
+  "vol_subpath_plain": {**base(volumes=[{"type": "volume", "source": "d", "target": "/s", "volume": {"subpath": "x"}}]), "volumes": {"d": {}}},
+  "vol_driver": {**base(volumes=[{"type": "volume", "source": "d", "target": "/s", "volume": {"driver": "x"}}]), "volumes": {"d": {}}},
+  "vol_nocopy_nonbool": {**base(volumes=[{"type": "volume", "source": "d", "target": "/s", "volume": {"nocopy": "../x"}}]), "volumes": {"d": {}}},
+  "vol_sub_not_dict": {**base(volumes=[{"type": "volume", "source": "d", "target": "/s", "volume": "x"}]), "volumes": {"d": {}}},
+  "tmpfs_unknown_key": base(volumes=[{"type": "tmpfs", "target": "/t", "tmpfs": {"foo": 1}}]),
+  "tmpfs_nonscalar": base(volumes=[{"type": "tmpfs", "target": "/t", "tmpfs": {"size": [1]}}]),
   "long_volume_no_type_relative": base(volumes=[{"source": "./x", "target": "/y"}]),
   "long_volume_type_volume_named_bind": {**base(volumes=[{"type": "volume", "source": "sock", "target": "/s"}]),
                                          "volumes": {"sock": {"driver_opts": {"o": "bind", "device": "/", "type": "none"}}}},
@@ -143,7 +150,21 @@ def test_minimal_env_drops_host_secrets(monkeypatch):
     env = I.minimal_env(FLAG="flag{vg-x}")
     assert env["FLAG"] == "flag{vg-x}" and env["DOCKER_HOST"] == "unix:///x" and "PATH" in env
     assert not {"ANTHROPIC_API_KEY", "GITHUB_TOKEN", "COMPOSE_FILE", "RELAY_TOKEN"} & set(env)
-    assert set(env) <= {"PATH", "HOME", "FLAG"} | {k for k in env if k.startswith("DOCKER_")}
+    assert set(env) <= {"PATH", "HOME", "FLAG"} | I._DOCKER_ENV_ALLOWED
+
+
+def test_minimal_env_docker_exact_allowlist(monkeypatch):
+    for k in ("DOCKER_PASSWORD", "DOCKER_AUTH_CONFIG", "DOCKER_HOST", "DOCKER_BUILDKIT"):
+        monkeypatch.setenv(k, "v")
+    env = I.minimal_env()
+    assert "DOCKER_PASSWORD" not in env and "DOCKER_AUTH_CONFIG" not in env
+    assert env["DOCKER_HOST"] == "v" and env["DOCKER_BUILDKIT"] == "v"
+
+
+def test_long_volume_benign_sub_options_accepted():
+    cfg = {**base(volumes=[{"type": "volume", "source": "d", "target": "/s", "volume": {"nocopy": True}},
+                           {"type": "tmpfs", "target": "/t", "tmpfs": {"size": 1000, "mode": "1777"}}]), "volumes": {"d": {}}}
+    I.rewrite_and_check(cfg, IP)
 
 
 @pytest.mark.skipif(os.environ.get("VG_NETWORK_TESTS") != "1", reason="cần mạng (tải tarball ở SHA ghim); CI chạy `bench --lint-selection`")
