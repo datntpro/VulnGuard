@@ -4,12 +4,16 @@ SCA Scanners — Software Composition Analysis:
 - PipAuditScanner: Python pip packages (thay thế Safety v3 đã bị deprecated)
 """
 import json
+import logging
 import glob
 import os
 import tempfile
 from typing import List, Dict, Any
 
-from scanner.scanners.base import BaseScanner, run_command, normalize_severity, make_fingerprint
+from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, normalize_severity,
+                                   make_fingerprint, classify_failed_run)
+
+logger = logging.getLogger(__name__)
 
 
 def _trivy_err(stderr: str, rc: int) -> str:
@@ -47,7 +51,7 @@ class TrivySCAScanner(BaseScanner):
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
         if not os.path.exists(self.scan_path):
-            raise RuntimeError(f"Đường dẫn quét không tồn tại: {self.scan_path}")
+            raise ScannerRunError(f"Đường dẫn quét không tồn tại: {self.scan_path}")
         skip_args = []
         for d in ("node_modules", ".git", "venv", ".venv", "site-packages", "dist", "build", "vendor"):
             skip_args += ["--skip-dirs", f"**/{d}/**"]
@@ -63,19 +67,24 @@ class TrivySCAScanner(BaseScanner):
 
         rc, stdout, stderr = await run_command(cmd, timeout=300, env=trivy_env())
 
-        if not stdout.strip():
-            # rc != 0 và không có JSON → lỗi thật (tải DB, cache, path…). KHÔNG im lặng
-            # trả 0 lỗi — nêu rõ để orchestrator ghi status "error".
-            if rc != 0:
-                raise RuntimeError(_trivy_err(stderr, rc))
+        kind = classify_failed_run(rc, stderr)
+        if kind == "missing":
+            logger.info("trivy chưa cài — bỏ qua SCA")
             return []
-
+        if kind == "timeout":
+            raise ScannerRunError(f"trivy timeout: {stderr[-300:]}")
+        # rc != 0 (không dùng --exit-code) = lỗi thật (tải DB, cache, path…): nêu rõ để
+        # orchestrator ghi status "error", KHÔNG báo "0 findings".
+        if rc != 0:
+            raise ScannerRunError(_trivy_err(stderr, rc))
+        if not stdout.strip():
+            return []
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
-            if rc != 0:
-                raise RuntimeError(_trivy_err(stderr, rc))
-            return []
+            raise ScannerRunError(f"trivy output không phải JSON: {stderr[-500:]}") from None
+        if not isinstance(data, dict):
+            raise ScannerRunError("trivy output không phải object JSON")
 
         for result in data.get("Results", []):
             target = result.get("Target", "")
@@ -140,6 +149,7 @@ class PipAuditScanner(BaseScanner):
         # Dedup
         req_files = list(set(req_files))
 
+        errors: list = []
         for req_file in req_files:
             cmd = [
                 "pip-audit",
@@ -151,19 +161,25 @@ class PipAuditScanner(BaseScanner):
 
             rc, stdout, stderr = await run_command(cmd, timeout=120)
 
-            # pip-audit trả về exit code 1 nếu có vulnerabilities — bình thường
-            raw_output = stdout.strip() or stderr.strip()
-            if not raw_output:
+            kind = classify_failed_run(rc, stderr)
+            if kind == "missing":
+                logger.info("pip-audit chưa cài — bỏ qua")
+                return []
+            if kind == "timeout":
+                errors.append(f"{req_file}: timeout")
                 continue
-
+            # pip-audit: exit 0 = sạch, 1 = có vulnerabilities (bình thường); khác = hỏng.
+            if rc not in (0, 1):
+                errors.append(f"{req_file}: exit {rc}: {stderr[-200:]}")
+                continue
             try:
-                data = json.loads(raw_output)
+                data = json.loads(stdout.strip())
             except json.JSONDecodeError:
-                # Thử parse từ stdout nếu stderr có non-JSON warnings
-                try:
-                    data = json.loads(stdout.strip())
-                except json.JSONDecodeError:
-                    continue
+                errors.append(f"{req_file}: output không phải JSON (exit {rc})")
+                continue
+            if not isinstance(data, dict):
+                errors.append(f"{req_file}: output không phải object JSON")
+                continue
 
             for dep in data.get("dependencies", []):
                 pkg_name = dep.get("name", "")
@@ -208,4 +224,9 @@ class PipAuditScanner(BaseScanner):
                         "raw": vuln,
                     })
 
+        # Hỏng một vài file vẫn giữ findings của file còn lại; hỏng TẤT CẢ → báo lỗi.
+        if errors and len(errors) == len(req_files):
+            raise ScannerRunError("pip-audit thất bại: " + "; ".join(errors[:3]))
+        if errors:
+            logger.warning("pip-audit lỗi một phần: %s", "; ".join(errors[:3]))
         return findings

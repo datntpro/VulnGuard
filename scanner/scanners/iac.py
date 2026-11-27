@@ -5,9 +5,14 @@ IaC Scanners:
 - Trivy IaC: Terraform, K8s manifests
 """
 import json
+import logging
 from typing import List, Dict, Any
 
-from scanner.scanners.base import BaseScanner, run_command, normalize_severity, make_fingerprint
+from scanner.scanners.sca import _trivy_err, trivy_env
+from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, normalize_severity,
+                                   make_fingerprint, classify_failed_run)
+
+logger = logging.getLogger(__name__)
 
 
 class CheckovScanner(BaseScanner):
@@ -28,23 +33,33 @@ class CheckovScanner(BaseScanner):
 
         rc, stdout, stderr = await run_command(cmd, timeout=300)
 
+        kind = classify_failed_run(rc, stderr)
+        if kind == "missing":
+            logger.info("checkov chưa cài — bỏ qua")
+            return []
+        if kind == "timeout":
+            raise ScannerRunError(f"checkov timeout: {stderr[-300:]}")
+        # checkov: exit 0 = sạch, 1 = có failed checks; mọi mã khác = tool hỏng.
+        if rc not in (0, 1):
+            raise ScannerRunError(f"checkov thất bại (exit {rc}): {stderr[-500:]}")
+
         if not stdout.strip():
+            if rc != 0:
+                raise ScannerRunError(f"checkov không in output (exit {rc}): {stderr[-500:]}")
             return []
 
-        # Checkov có thể trả về nhiều JSON objects
+        # Checkov có thể in tiền tố/nhiều JSON objects
         try:
-            # Thử parse toàn bộ stdout
             data = json.loads(stdout)
         except json.JSONDecodeError:
-            # Thử tìm JSON object đầu tiên
+            start = stdout.find("{")
             try:
-                start = stdout.find("{")
-                if start >= 0:
-                    data = json.loads(stdout[start:])
-                else:
-                    return []
-            except:
-                return []
+                data = json.loads(stdout[start:]) if start >= 0 else None
+            except json.JSONDecodeError:
+                data = None
+            if data is None:
+                raise ScannerRunError(
+                    f"checkov output không phải JSON (exit {rc}): {stderr[-500:]}") from None
 
         # Checkov có thể trả về dict hoặc list
         results_list = data if isinstance(data, list) else [data]
@@ -105,15 +120,24 @@ class TrivyIaCScanner(BaseScanner):
             self.scan_path,
         ]
 
-        rc, stdout, stderr = await run_command(cmd, timeout=300)
+        rc, stdout, stderr = await run_command(cmd, timeout=300, env=trivy_env())
 
+        kind = classify_failed_run(rc, stderr)
+        if kind == "missing":
+            logger.info("trivy chưa cài — bỏ qua IaC")
+            return []
+        if kind == "timeout":
+            raise ScannerRunError(f"trivy-iac timeout: {stderr[-300:]}")
+        if rc != 0:
+            raise ScannerRunError(_trivy_err(stderr, rc))
         if not stdout.strip():
             return []
-
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError:
-            return []
+            raise ScannerRunError(f"trivy-iac output không phải JSON: {stderr[-500:]}") from None
+        if not isinstance(data, dict):
+            raise ScannerRunError("trivy-iac output không phải object JSON")
 
         for result in data.get("Results", []):
             target = result.get("Target", "")
@@ -154,16 +178,34 @@ class HadolintScanner(BaseScanner):
         dockerfiles = glob.glob(f"{self.scan_path}/**/Dockerfile*", recursive=True)
         dockerfiles += glob.glob(f"{self.scan_path}/**/dockerfile*", recursive=True)
 
+        errors: list = []
         for dockerfile in dockerfiles:
             cmd = ["hadolint", "--format", "json", dockerfile]
             rc, stdout, stderr = await run_command(cmd, timeout=30)
 
+            kind = classify_failed_run(rc, stderr)
+            if kind == "missing":
+                logger.info("hadolint chưa cài — bỏ qua")
+                return []
+            if kind == "timeout":
+                errors.append(f"{dockerfile}: timeout")
+                continue
+            # hadolint: exit 0 = sạch, 1 = có findings; khác = hỏng.
+            if rc not in (0, 1):
+                errors.append(f"{dockerfile}: exit {rc}: {stderr[-200:]}")
+                continue
             if not stdout.strip():
+                if rc != 0:
+                    errors.append(f"{dockerfile}: không có output (exit {rc})")
                 continue
 
             try:
                 issues = json.loads(stdout)
             except json.JSONDecodeError:
+                errors.append(f"{dockerfile}: output không phải JSON")
+                continue
+            if not isinstance(issues, list):
+                errors.append(f"{dockerfile}: output không phải list")
                 continue
 
             for issue in issues:
@@ -185,4 +227,9 @@ class HadolintScanner(BaseScanner):
                     "raw": issue,
                 })
 
+        # Một vài file hỏng vẫn giữ findings của file còn lại; hỏng TẤT CẢ → báo lỗi.
+        if errors and len(errors) == len(dockerfiles):
+            raise ScannerRunError("hadolint thất bại: " + "; ".join(errors[:3]))
+        if errors:
+            logger.warning("hadolint lỗi một phần: %s", "; ".join(errors[:3]))
         return findings

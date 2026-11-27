@@ -124,3 +124,12 @@ class BaseScanner(ABC):
 
 class ScannerRunError(RuntimeError):
     """Tool đã chạy nhưng thất bại: KHÔNG được báo cáo như "0 findings"."""
+
+
+def classify_failed_run(rc: int, stderr: str) -> str:
+    """"missing" = tool absent (not applicable → caller returns []); "timeout"; else ""."""
+    if rc == -1 and (stderr or "").startswith("Tool not found"):
+        return "missing"
+    if rc == -1 and "timeout" in (stderr or ""):
+        return "timeout"
+    return ""
