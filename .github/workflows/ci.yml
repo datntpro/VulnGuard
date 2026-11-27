@@ -16,6 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # #101 PR-A: semgrep từ lock (venv cô lập, Python 3.11 như image) để test rule bundled CHẠY thật.
+      # Đặt TRƯỚC setup-python 3.12 (cái cuối thắng cho `python`/`pip`).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        id: py311
+        with:
+          python-version: "3.11"
+      - name: Install semgrep from the scanner lock (isolated venv, same as the image)
+        run: |
+          "${{ steps.py311.outputs.python-path }}" -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install -q --require-hashes -r docker/scanners/semgrep.txt
+          echo "$RUNNER_TEMP/semgrep/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
@@ -36,6 +47,7 @@ jobs:
       - name: Run tests
         env:
           AUTH_ENABLED: "true"
+          VG_REQUIRE_SEMGREP: "1"
         run: pytest tests/ -q
       - name: Bandit gate (fail on HIGH severity, HIGH confidence)
         run: bandit -r api scanner mcp_server scripts -lll -ii -q

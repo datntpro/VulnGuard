@@ -41,3 +41,23 @@ def test_orchestrator_reports_ok_not_empty():
     findings, logs = _run(Orchestrator(FIXTURE, ["SAST"]).run())
     assert "bandit" in logs
     assert logs["bandit"]["status"] == "ok" and logs["bandit"]["count"] > 0
+
+
+def test_semgrep_finds_known_issues(tmp_path, monkeypatch):
+    """PR-A #101: semgrep (bundled rules) phải thấy lỗi đã biết trên fixture.
+
+    Copy fixture ra tmp: semgrep mặc định (.semgrepignore built-in) bỏ qua mọi thư mục `tests/`
+    khi target là thư mục, nên quét thẳng tests/fixtures/vulnerable cho 0 finding (vô nghĩa).
+    """
+    if not shutil.which("semgrep"):
+        if os.environ.get("VG_REQUIRE_SEMGREP") == "1":
+            pytest.fail("VG_REQUIRE_SEMGREP=1 nhưng không tìm thấy semgrep")
+        pytest.skip("semgrep chưa cài")
+    from scanner.scanners.sast import SemgrepScanner
+    tmp = tmp_path / "vuln"
+    shutil.copytree(FIXTURE, tmp)
+    monkeypatch.setattr("scanner.scanners.sast._has_internet", lambda *a, **k: False)
+    findings = _run(SemgrepScanner(str(tmp)).scan())
+    ids = {str(f.get("rule_id", "")).split(".")[-1] for f in findings}
+    for rid in ("hardcoded-password-variable", "subprocess-shell-true"):
+        assert rid in ids, f"thiếu {rid}; có {sorted(ids)}"

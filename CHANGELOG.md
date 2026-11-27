@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed — #101 PR-A: sửa 12/13 bundled semgrep rule
+- 8 rule không bao giờ khớp (`sql-injection-format`, `subprocess-shell-true`, `pickle-loads`, `yaml-unsafe-load`, `weak-hash-md5`, `weak-hash-sha1`, `open-with-user-input`, `requests-with-user-url`) vì các `pattern` thay thế bị AND thay vì `pattern-either`; 4 rule khớp thiếu/thừa (`sql-injection-string-concat` bỏ sót `"…'" + x + "'"`, `hardcoded-password-variable` bỏ sót `DB_PASSWORD = "…"` và báo nhầm tên biến môi trường/URL, `flask-debug-true` bỏ sót `app.run(host=…, debug=True)`, `os-system-injection` báo nhầm lệnh hằng). `django-debug-true` giữ nguyên.
+- Thêm 13 fixture chú thích `tests/fixtures/semgrep_rules/<rule-id>.py` (`# ruleid:` / `# ok:`) và `tests/test_semgrep_bundled_rules.py` (validate YAML, mỗi rule phải có fixture, khớp chính xác không thiếu/thừa, mỗi rule ≥1 true positive). Job `test` của CI cài semgrep từ `docker/scanners/semgrep.txt` và đặt `VG_REQUIRE_SEMGREP=1` để test không bị skip âm thầm.
+- Lưu ý: semgrep mặc định bỏ qua thư mục `tests/` khi quét thư mục, nên test copy fixture ra thư mục tạm.
+
 ### Fixed — AI PR-6 verify (S1/S2)
 - **S1**: khoá Azure OpenAI định dạng mới (84 ký tự base62, `…JQQJ99…`) được che ở mọi đường dùng chung `_SECRET_PATTERNS` (prompt triage/pentest/Co-work, log, thông điệp lỗi, transcript Pentest): pattern cấu trúc `52+JQQJ99+26` và `api-key`/`AZURE_OPENAI_API_KEY` + 80–90 ký tự base62 (đều tuyến tính).
 - **S2 giá**: `ai_prices` khớp model id CHÍNH XÁC (sau chuẩn hoá tiền tố provider/hậu tố phiên bản-ngày), không khớp chuỗi con/tiền tố nữa — `o3-pro` ($20/$80) và `o3-deep-research` ($10/$40) không còn bị tính như `o3`. Model lạ → mức đắt nhất của họ provider (anthropic/bedrock $5/$25, openai-family $20/$80, gemini/vertex $5/$30); không rõ provider → đắt nhất toàn bảng.
