@@ -88,17 +88,25 @@ def check_fonts(pdf: bytes) -> None:
         raise SelfTestError("no fonts embedded")
 
 
-def check_no_network() -> None:
-    from .engine import run_worker
-    from .errors import PdfEngineError
+_BLOCKED_RE = re.compile(r"failed to download package.*(refused|connect error: )", re.I)
+
+
+def check_no_network(proxy: str | None = None) -> None:
+    """The package fetch must fail *because the network is unreachable* (dead proxy refusing
+    the connection). Success, or any other error (e.g. a download that worked and then failed to
+    decompress, a 404, an unrelated worker error), means the kill-switch is not proven -> FAIL."""
+    from .engine import DEAD_PROXY, run_worker
+    from .errors import PdfCompileError
     from .root import build_workspace
 
     src = b'#import "@preview/tablex:0.0.9": tablex\nok'
     try:
         with build_workspace(extra_files={"t.typ": src}) as ws:
-            run_worker(ws, {}, entry="t.typ", timeout_s=30)
-    except PdfEngineError:
-        return
+            run_worker(ws, {}, entry="t.typ", timeout_s=30, proxy=proxy if proxy is not None else DEAD_PROXY)
+    except PdfCompileError as e:
+        if _BLOCKED_RE.search(str(e)):
+            return
+        raise SelfTestError(f"package probe failed for the wrong reason (network may be reachable): {str(e)[:160]}") from e
     except Exception as e:  # noqa: BLE001
         raise SelfTestError(f"unexpected error in package probe: {type(e).__name__}") from e
     raise SelfTestError("@preview import succeeded: network/package kill-switch NOT active")

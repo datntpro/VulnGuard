@@ -91,3 +91,5 @@ Chế độ `--http` bắt buộc `VULNGUARD_MCP_TOKEN` và header `Authorizatio
 ## PDF không xuất được
 
 Chạy `python -m scanner.pdf.selftest` (hoặc `python3 scripts/setup.py --check`): lệnh in từng bước đạt/lỗi và cách sửa. Nguyên nhân thường gặp: wheel `typst` chưa cài (cài lại lockfile: `pip install --require-hashes -r api/requirements.txt`), Windows ARM64 (không có wheel; dùng Python x64 hoặc Docker), hoặc thiếu thư mục font `scanner/assets/fonts` (kiểm tra bản `git pull` đầy đủ). Không cần Chromium/trình duyệt.
+
+Ghi chú: bước `@preview import blocked` của self-test chỉ đạt khi việc tải package bị **từ chối kết nối** (proxy chết, không có mạng). Nếu tải được hoặc lỗi vì lý do khác, self-test báo FAIL (mạng chưa bị chặn thật). `run.ps1` chạy self-test với `$ErrorActionPreference="Continue"` cục bộ để Windows PowerShell 5.1 không coi stderr là lỗi dừng script.
