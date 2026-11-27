@@ -321,6 +321,7 @@ _OLLAMA_URL_PAT = re.compile(r"runtime_settings\.ollama_(url|model|vision_model)
 # Ollama admin API (/api/ollama*) là nơi CẤU HÌNH endpoint → được đọc runtime_settings trực tiếp.
 _OLLAMA_ALLOWED = {"api/services/llm_resolver.py", "api/services/runtime_settings.py", "api/routes/ollama.py",
                    "api/config.py"}
+# Miễn trừ có chủ đích: eval/harness/inproc.py dựng client SDK với relay token (không phải key provider) → ngoài phạm vi.
 _SCAN_DIRS = ("api", "scanner", "mcp_server", "coworker_host", "services")
 
 
@@ -398,19 +399,65 @@ def test_legacy_conversation_visible_to_admin_only_when_owner_null():
     assert ca._may_access(row, _Req()) is False
 
 
-# ── 7. Migration m0013 (idempotent backfill) ─────────────────────────────────
-def test_m0013_adds_column_and_backfills_idempotently():
+# ── 7. Migration m0013 (backfill đúng một lần) ───────────────────────────────
+def _boot(db, mod):
+    for ddl in mod.DDL:
+        try:
+            db.execute(ddl)
+        except sqlite3.OperationalError as e:
+            assert "duplicate column" in str(e)
+
+
+def test_m0013_backfills_once_and_never_reassigns_on_email_reuse():
     mod = importlib.import_module("api.pentest_migrations.m0013_run_owner")
     db = sqlite3.connect(":memory:")
     db.execute("CREATE TABLE users (id TEXT, email TEXT)")
     db.execute("CREATE TABLE pentest_runs (id TEXT, started_by TEXT)")
-    db.execute("INSERT INTO users VALUES ('u1','Alice@x.io')")
+    db.execute("INSERT INTO users VALUES ('u1','Alice@x.io'), ('u0','alice@x.io')")   # email trùng hoa/thường
     db.executemany("INSERT INTO pentest_runs VALUES (?,?)", [("r1", "alice@x.io"), ("r2", "ghost@x.io"), ("r3", None)])
-    for _ in range(2):   # chạy lại mỗi lần boot
-        for ddl in mod.DDL:
-            try:
-                db.execute(ddl)
-            except sqlite3.OperationalError as e:
-                assert "duplicate column" in str(e)
+    _boot(db, mod)
     rows = dict(db.execute("SELECT id, started_by_user_id FROM pentest_runs").fetchall())
-    assert rows == {"r1": "u1", "r2": None, "r3": None}
+    assert rows == {"r1": "u0", "r2": None, "r3": None}          # đúng 1 dòng, không lỗi subquery
+    # boot lại sau khi user "ghost" mới đăng ký bằng email cũ → KHÔNG thừa hưởng run cũ
+    db.execute("INSERT INTO users VALUES ('u9','ghost@x.io')")
+    for _ in range(2):
+        _boot(db, mod)
+    rows = dict(db.execute("SELECT id, started_by_user_id FROM pentest_runs").fetchall())
+    assert rows["r2"] is None and rows["r1"] == "u0"
+    assert db.execute("SELECT count(*) FROM pentest_schema_migrations").fetchone()[0] == 1
+
+
+def test_list_conversations_filters_owner_in_sql_before_limit():
+    from api.agent_conversation_models import AgentConversation
+    from api.auth_models import UserRole
+    from api.database import Base, SessionLocal, engine
+    from tests._authutil import bearer, login, make_user, new_client
+    Base.metadata.create_all(bind=engine)
+    c = new_client()
+    e, uid = make_user(UserRole.ADMIN)
+    _, other = make_user(UserRole.ADMIN)
+    db = SessionLocal()
+    try:
+        mine = AgentConversation(title="mine", messages=[], owner_user_id=uid)
+        db.add(mine); db.commit()
+        mine_id = mine.id
+        db.add_all([AgentConversation(title=f"o{i}", messages=[], owner_user_id=other) for i in range(210)])
+        db.commit()   # mới hơn hội thoại của mình
+    finally:
+        db.close()
+    r = c.get("/api/coworker/agent/conversations", headers=bearer(login(c, e)))
+    ids = [x["id"] for x in r.json()["conversations"]]
+    assert mine_id in ids
+    assert all(x["title"] != "o0" for x in r.json()["conversations"])
+
+
+def test_credential_hint_decrypted_once(ai, monkeypatch):
+    import api.security as sec
+    from api.services.llm_resolver import resolve
+    _save(ai, mode="cloud_only")
+    r = resolve(_ctx("test"))
+    calls = []
+    real = sec.decrypt_secret
+    monkeypatch.setattr(sec, "decrypt_secret", lambda v: calls.append(1) or real(v))
+    repr(r.credential); repr(r.credential); str(r)
+    assert len(calls) == 1

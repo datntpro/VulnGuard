@@ -62,13 +62,14 @@ class RouteRefused(RuntimeError):
 
 class ResolvedCredential:
     """Credential đã chọn cho MỘT lần gọi. Không có getter plaintext; không serialise được."""
-    __slots__ = ("_provider", "_section", "_scope", "_cid")
+    __slots__ = ("_provider", "_section", "_scope", "_cid", "_hint_cache")
 
     def __init__(self, provider: str, section: Dict[str, Any], scope: str = "org", cid: Optional[str] = None):
         object.__setattr__(self, "_provider", provider)
         object.__setattr__(self, "_section", section)   # section cấu hình provider (secret còn ở dạng Fernet)
         object.__setattr__(self, "_scope", scope)
         object.__setattr__(self, "_cid", cid)
+        object.__setattr__(self, "_hint_cache", None)
 
     def __setattr__(self, k, v):
         raise AttributeError("ResolvedCredential là bất biến")
@@ -82,12 +83,21 @@ class ResolvedCredential:
         return self._scope
 
     def _hint(self) -> str:
-        try:
-            from api.security import decrypt_secret
-            tok = decrypt_secret(self._section.get("api_key_enc")) if self._section.get("api_key_enc") else None
-            return f"…{tok[-4:]}" if tok and len(tok) >= 8 else ("keyless" if not self._section.get("api_key_enc") else "…")
-        except Exception:
-            return "…"
+        """Hint cuối key (…abcd), tính MỘT lần rồi nhớ — repr không giải mã lại mỗi lần."""
+        if self._hint_cache is None:
+            h = "…"
+            try:
+                enc = self._section.get("api_key_enc")
+                if not enc:
+                    h = "keyless"
+                else:
+                    from api.security import decrypt_secret
+                    tok = decrypt_secret(enc)
+                    h = f"…{tok[-4:]}" if tok and len(tok) >= 8 else "…"
+            except Exception:
+                pass
+            object.__setattr__(self, "_hint_cache", h)
+        return self._hint_cache
 
     def __repr__(self) -> str:
         return f"<cred {self._hint()} {self._provider} {self._scope}>"

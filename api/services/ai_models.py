@@ -4,6 +4,9 @@ Liệt kê model mà license/API key của provider hỗ trợ — để UI cho 
 Gọi API provider bằng key đã lưu; nếu không có key hoặc API lỗi/offline → trả danh
 sách static (những model phổ biến đã biết) kèm source="static" để UI vẫn dùng được.
 Không bao giờ ném lỗi ra ngoài.
+
+TODO(AI PR-4): đọc key trực tiếp từ cấu hình org (không qua llm_resolver) vì liệt kê model theo provider tuỳ chọn;
+chuyển sang credential của resolver + url_guard khi có probe/SSRF guard.
 """
 import logging
 from typing import Any, Dict, List

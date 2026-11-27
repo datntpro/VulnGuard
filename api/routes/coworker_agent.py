@@ -605,6 +605,10 @@ def _uid(request: Request) -> Optional[str]:
     return getattr(getattr(request.state, "user", None), "id", None)
 
 
+def _is_admin(user) -> bool:
+    return str(getattr(getattr(user, "role", ""), "value", getattr(user, "role", ""))) == "ADMIN"
+
+
 def _may_access(row, request: Request) -> bool:
     """[AI PR-1] Hội thoại thuộc chủ sở hữu. Hàng cũ (owner NULL) chỉ ADMIN thấy.
     AUTH tắt (không có user) → một người dùng duy nhất, thấy hết."""
@@ -613,7 +617,7 @@ def _may_access(row, request: Request) -> bool:
         return True
     owner = getattr(row, "owner_user_id", None)
     if owner is None:
-        return str(getattr(getattr(user, "role", ""), "value", getattr(user, "role", ""))) == "ADMIN"
+        return _is_admin(user)
     return owner == user.id
 
 
@@ -654,8 +658,15 @@ async def save_conversation(req: SaveConversationRequest, request: Request, db: 
 @router.get("/conversations")
 async def list_conversations(request: Request, db: Session = Depends(get_db)):
     from api.agent_conversation_models import AgentConversation
-    rows = db.query(AgentConversation).order_by(AgentConversation.updated_at.desc()).limit(200).all()
-    rows = [r for r in rows if _may_access(r, request)]
+    q = db.query(AgentConversation)
+    user = getattr(request.state, "user", None)
+    if user is not None:   # lọc theo chủ sở hữu TRONG SQL, rồi mới limit (không để hội thoại người khác chiếm 200 dòng)
+        from sqlalchemy import or_
+        cond = AgentConversation.owner_user_id == user.id
+        if _is_admin(user):
+            cond = or_(cond, AgentConversation.owner_user_id.is_(None))
+        q = q.filter(cond)
+    rows = q.order_by(AgentConversation.updated_at.desc()).limit(200).all()
     return {"conversations": [
         {"id": r.id, "title": r.title, "skill_id": r.skill_id, "folder_id": r.folder_id,
          "updated_at": r.updated_at.isoformat() if r.updated_at else None}
