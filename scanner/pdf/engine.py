@@ -30,6 +30,8 @@ from .errors import (
 )
 from .root import Workspace, build_workspace
 from .sanitize import sanitize
+from .charts import severity_donut
+from .model import normalize_doc
 
 Kind = Literal["scan", "pentest", "webscan", "docreview"]
 KINDS = ("scan", "pentest", "webscan", "docreview")
@@ -54,6 +56,25 @@ MAX_TITLE = 300
 MAX_TEXT = 8192
 MAX_CODE_LINES = 200
 _CODE_KEYS = frozenset({"code", "evidence", "snippet", "request", "response"})
+MAX_EXTRA_LINES = 40            # traffic/PoC/extra sections per finding (target-controlled, newline-dense)
+MAX_EXTRA_ITEMS = 8
+MAX_BODY_LINES_TOTAL = int(os.environ.get("VG_PDF_MAX_BODY_LINES", 15000))  # whole-document budget (~200 pages of code)
+TRUNC_MARK = "… [truncated]"
+
+
+def _cap_lines(s: str, max_lines: int, max_chars: int) -> str:
+    lines = s.split("\n")
+    cut = len(lines) > max_lines
+    if cut:
+        lines = lines[:max_lines]
+    out = "\n".join(lines)
+    if len(out) > max_chars:
+        out, cut = out[:max_chars], True
+    return out + ("\n" + TRUNC_MARK if cut else "")
+
+
+def _ell(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: max(0, n - 1)] + "…"
 
 # Dead proxy: Typst's only network feature is package download (probe F4/F5).
 DEAD_PROXY = "http://127.0.0.1:9"
@@ -281,7 +302,8 @@ def validate_chart_svg(svg: str) -> str:
     if len(svg.encode("utf-8")) > MAX_CHART_BYTES:
         raise PdfInputTooLarge("chart svg too large")
     s = svg.lstrip()
-    if not s.startswith("<svg") or _SVG_FORBIDDEN.search(s):
+    probe = s.replace('xmlns="http://www.w3.org/2000/svg"', "", 1)  # the one namespace URI every SVG needs
+    if not s.startswith("<svg") or _SVG_FORBIDDEN.search(probe):
         raise PdfInvalidInput("chart svg rejected")
     return svg
 
@@ -295,6 +317,15 @@ def apply_caps(doc: Mapping[str, Any]) -> dict[str, Any]:
             out["findings_truncated_from"] = len(fs)
             fs = fs[:MAX_FINDINGS]
         capped = []
+        budget = [MAX_BODY_LINES_TOTAL]
+
+        def body(v: str, max_lines: int, max_chars: int) -> str:
+            if budget[0] <= 0:
+                return TRUNC_MARK
+            v = _cap_lines(v, min(max_lines, budget[0]), max_chars)
+            budget[0] -= v.count("\n") + 1
+            return v
+
         for f in fs:
             if not isinstance(f, Mapping):
                 capped.append(f)
@@ -304,14 +335,23 @@ def apply_caps(doc: Mapping[str, Any]) -> dict[str, Any]:
                 if not isinstance(v, str):
                     continue
                 if k == "title":
-                    g[k] = v[:MAX_TITLE]
+                    g[k] = _ell(v, MAX_TITLE)
                 elif k in _CODE_KEYS:
-                    lines = v.split("\n")
-                    if len(lines) > MAX_CODE_LINES:
-                        lines = lines[:MAX_CODE_LINES] + ["…"]
-                    g[k] = "\n".join(lines)[:MAX_TEXT]
+                    g[k] = body(v, MAX_CODE_LINES, MAX_TEXT)
                 else:
                     g[k] = v[:MAX_TEXT]
+            ex = g.get("extra")
+            if isinstance(ex, list):
+                new_ex = []
+                for x in ex[:MAX_EXTRA_ITEMS]:
+                    if isinstance(x, Mapping):
+                        x = dict(x)
+                        if isinstance(x.get("body"), str):
+                            x["body"] = body(x["body"], MAX_EXTRA_LINES, MAX_TEXT)
+                        if isinstance(x.get("label"), str):
+                            x["label"] = x["label"][:200]
+                    new_ex.append(x)
+                g["extra"] = new_ex
             capped.append(g)
         out["findings"] = capped
     return out
@@ -333,16 +373,16 @@ def render(
     if kind not in KINDS:
         raise PdfInvalidInput("unknown report kind")
     try:
-        clean = sanitize(apply_caps(doc))
+        clean = sanitize(normalize_doc(apply_caps(doc)))
     except (TypeError, ValueError) as e:
         raise PdfInvalidInput(str(e)) from e
     clean["kind"] = kind
     data = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
     if len(data.encode("utf-8")) > MAX_DATA_BYTES:
         raise PdfInputTooLarge("report data exceeds size cap")
-    inputs = {"data": data}
-    if chart_svg is not None:
-        inputs["chart_svg"] = validate_chart_svg(chart_svg)
+    if chart_svg is None:  # integers-only SVG built from the (trusted) per-severity counts
+        chart_svg = severity_donut(clean["summary"]["counts"], str(clean["labels"].get("chart_center", "")))
+    inputs = {"data": data, "chart_svg": validate_chart_svg(chart_svg)}
     if not _SEM.acquire(timeout=BUSY_WAIT_S):
         raise PdfBusy("pdf renderer busy; retry shortly")
     try:

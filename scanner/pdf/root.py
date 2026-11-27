@@ -71,7 +71,7 @@ def verify_root(root: Path, *, allowed_suffixes=ALLOWED_SUFFIXES) -> int:
     return total
 
 
-def _copy_tree_plain(src: Path, dst: Path, *, allowed_suffixes, skip_others: bool = False) -> None:
+def _copy_tree_plain(src: Path, dst: Path, *, allowed_suffixes, skip_others: bool = False, skip_dirs: tuple = ()) -> None:
     """Copy regular files only; refuse symlinks in the *source* too. With ``skip_others``
     non-whitelisted regular files (e.g. OFL.txt next to fonts) are silently left behind."""
     if not src.exists():
@@ -80,6 +80,8 @@ def _copy_tree_plain(src: Path, dst: Path, *, allowed_suffixes, skip_others: boo
         raise UnsafeRoot(f"symlinked source: {src.name}")
     for dp, dns, fns in os.walk(src, followlinks=False):
         rel = Path(dp).relative_to(src)
+        if skip_dirs and Path(dp) == src:
+            dns[:] = [n for n in dns if n not in skip_dirs]  # fonts/ is copied separately (with licence texts skipped)
         (dst / rel).mkdir(parents=True, exist_ok=True)
         for name in dns:
             if os.path.islink(Path(dp, name)):
@@ -113,7 +115,7 @@ def build_workspace(
         root, home, pk, pc = (base / n for n in ("root", "home", "packages", "pkg-cache"))
         for d in (root, home, pk, pc):
             d.mkdir(mode=0o700)
-        _copy_tree_plain(template_dir, root, allowed_suffixes=allowed_suffixes)
+        _copy_tree_plain(template_dir, root, allowed_suffixes=allowed_suffixes, skip_dirs=("fonts",))
         fonts_out = root / "fonts"
         fonts_out.mkdir(exist_ok=True)
         if font_dirs is None:

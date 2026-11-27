@@ -1,0 +1,131 @@
+VulnGuard · Công ty ABC
+B Á O C Á O K I Ể M T H Ử B Ả O M Ậ T
+Báo cáo quét bảo mật mã nguồn &
+thành phần
+core-banking-api · Lần quét #12
+Đối tượng kiểm thử core-banking-api
+Nguồn mã / phạm vi git: main @ 3f9c2e1
+Loại đánh giá Hạ tầng as code (IaC), Phân tích mã tĩnh (SAST), Thành phần phụ thuộc (SCA),
+Lộ bí mật (Secrets)
+Thời điểm quét —
+Công cụ sử dụng semgrep, gitleaks, trivy, grype, checkov, bandit
+Tiêu chuẩn tham chiếu OWASP Top 10 (2021) · TT 09/2020/TT-NHNN · TCVN 11930:2017 · ISO/IEC
+27001:2022
+Trạng thái COMPLETED
+Tổng số phát hiện 8
+K Ế T L U Ậ N Đ Á N H G I Á
+Có lỗ hổng nghiêm trọng — cần khắc phục trước khi đưa lên production
+Điểm rủi ro tổng hợp 100/100
+Tài liệu tạo tự động bởi VulnGuard. Kết quả cần kiểm chứng thủ công trước khi ra quyết định. Thời
+điểm tạo: 27/11/2026 10:30 (GMT+7). B Ả O M ẬT
+Báo cáo quét bảo mật mã nguồn & thành phần
+Mục lục
+Tóm tắt điều hành . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+Phân bố theo loại quét . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+Chi tiết phát hiện . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+VG-001 · SQL Injection tại POST /api/transfer (tham số accountNo) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+VG-002 · SQL Injection tại POST /api/transfer (tham số accountNo) #6 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+VG-003 · Lộ AWS access key trong mã nguồn . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+VG-004 · Lộ AWS access key trong mã nguồn #7 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+VG-005 · jackson-databind 2.13.1 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+VG-006 · S3 bucket không bật mã hoá . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+Phát hiện mức Thấp / Thông tin . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+Phụ lục . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+Phương pháp chấm điểm . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+Văn bản & tiêu chuẩn tham chiếu . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+Công cụ sử dụng . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+Miễn trừ & sử dụng hợp pháp . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+BẢO M ẬT / C O N F I D E N T I A L · C ông ty A BC Trang 2 / 7
+Báo cáo quét bảo mật mã nguồn & thành phần Tóm tắt điều hành
+Tóm tắt điều hành
+4
+NGHIÊM TRỌNG
+1
+CAO
+1
+TRUNG BÌNH
+1
+THẤP
+1
+THÔNG TIN
+8
+phát hiện
+Hình 1: Phân bố theo mức độ
+Kết luận: Hệ thống chưa đạt điều kiện đưa lên production: có 4 lỗ
+hổng nghiêm trọng và 1 lỗ hổng mức cao.
+Ưu tiên khắc phục (7 ngày)
+• VG-001 — SQL Injection tại POST /api/transfer (tham số
+accountNo)
+• VG-002 — SQL Injection tại POST /api/transfer (tham số
+accountNo) #6
+• VG-003 — Lộ AWS access key trong mã nguồn
+Phân bố theo loại quét
+Loại quét Phát hiện Mức nặng nhất Công cụ
+Phân tích mã tĩnh (SAST) 4 NGHIÊM TRỌNG semgrep, bandit
+Lộ bí mật (Secrets) 2 NGHIÊM TRỌNG gitleaks
+Thành phần phụ thuộc (SCA) 1 CAO trivy, grype
+Hạ tầng as code (IaC) 1 TRUNG BÌNH checkov
+BẢO M ẬT / C O N F I D E N T I A L · C ông ty A BC Trang 3 / 7
+Báo cáo quét bảo mật mã nguồn & thành phần Chi tiết phát hiện
+Chi tiết phát hiện
+NGHIÊM TRỌNG VG-001 · SQL Injection tại POST /api/transfer (tham số accountNo)
+CVSS
+CVSS 3.x 9.3
+CWE / OWASP
+CWE-89 · A03
+TRẠNG THÁI
+Mở
+CÔNG CỤ
+semgrep
+M Ô TẢ
+Giá trị accountNo được nối chuỗi trực tiếp vào câu lệnh SQL. Kẻ tấn công không cần đăng nhập có thể đọc toàn
+bộ bảng customers.
+V Ị T R Í
+src/main/java/vn/abc/bank/repository/TransferRepository.java:118
+M Ã N G U Ồ N
+▶118 String sql = "SELECT * FROM accounts WHERE account_no = '"
+119 + req.getAccountNo() + "' AND status = 'ACTIVE'";
+120 return jdbc.queryForList(sql);
+K H ẮC P H Ụ C
+Dùng PreparedStatement/named parameters; kiểm tra định dạng số tài khoản; giới hạn quyền tài khoản DB.
+CWE-89
+NGHIÊM TRỌNG VG-002 · SQL Injection tại POST /api/transfer (tham số accountNo) #6
+CVSS
+CVSS 3.x 9.3
+CWE / OWASP
+CWE-89 · A03
+TRẠNG THÁI
+Mở
+CÔNG CỤ
+semgrep
+M Ô TẢ
+Giá trị accountNo được nối chuỗi trực tiếp vào câu lệnh SQL. Kẻ tấn công không cần đăng nhập có thể đọc toàn
+bộ bảng customers.
+V Ị T R Í
+src/main/java/vn/abc/bank/repository/TransferRepository.java:118
+M Ã N G U Ồ N
+▶118 String sql = "SELECT * FROM accounts WHERE account_no = '"
+119 + req.getAccountNo() + "' AND status = 'ACTIVE'";
+120 return jdbc.queryForList(sql);
+K H ẮC P H Ụ C
+Dùng PreparedStatement/named parameters; kiểm tra định dạng số tài khoản; giới hạn quyền tài khoản DB.
+CWE-89
+NGHIÊM TRỌNG VG-003 · Lộ AWS access key trong mã nguồn
+CVSS
+—
+CWE / OWASP
+CWE-798 · A07
+TRẠNG THÁI
+Mở
+CÔNG CỤ
+gitleaks
+M Ô TẢ
+Khoá truy cập AWS dạng thật nằm trong file cấu hình production được commit vào Git.
+V Ị T R Í
+config/application-prod.yml:42
+M Ã N G U Ồ N
+▶42 aws.accessKeyId: AKI…[REDACTED 20 ký tự] (đã che)
+K H ẮC P H Ụ C
+Thu hồi khoá trên AWS IAM, xoay vòng, chuyển sang Secrets Manager; xoá khỏi lịch sử Git.
+CWE-798
+BẢO M ẬT / C O N F I D E N T I A L · C ông ty A BC Trang 4 / 7

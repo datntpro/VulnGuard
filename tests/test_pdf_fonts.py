@@ -21,7 +21,7 @@ def _fonts(pdf):
 def test_only_bundled_type0_truetype_fonts_embedded():
     pdf = engine.render(
         "scan",
-        {"title": "Đối tượng kiểm thử", "findings": [{"title": "Ư Ơ ỹ ặ ẫ", "description": "d", "code": "=> != ->"}]},
+        {"title": "Đối tượng kiểm thử", "findings": [{"title": "Ư Ơ ỹ ặ ẫ", "severity": "HIGH", "description": "d", "code": "=> != ->"}]},
         generated_at=0,
     )
     fonts = _fonts(pdf)
