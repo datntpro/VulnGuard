@@ -39,6 +39,7 @@ SWEEP_INTERVAL_S = float(os.environ.get("VG_PDF_SWEEP_INTERVAL_S", "300"))
 MAX_BYTES_PER_USER = int(os.environ.get("VG_PDF_JOBS_MAX_BYTES_PER_USER", str(200 * 1024 * 1024)))
 MAX_BYTES_TOTAL = int(os.environ.get("VG_PDF_JOBS_MAX_BYTES", str(1024 * 1024 * 1024)))
 _JOBFILE = re.compile(r"[0-9a-f]{32}\.pdf")
+_INSTANCE_DIR = re.compile(r"w[0-9]+-[0-9a-f]{8}")
 MAX_JOBS_PER_USER = 3
 RATE_PER_MIN = int(os.environ.get("VG_PDF_RATE_PER_MIN", "10"))
 RETRY_AFTER_S = "10"
@@ -64,7 +65,12 @@ def _utf8_stem(s: Any, max_len: int = 80) -> str:
     t = _CTRL.sub("", t)
     t = re.sub(r"\s+", "_", t)
     t = re.sub(r'[\\/:*?"<>|;,%\']+', "_", t).strip(" ._")
-    return t[:max_len] or "report"
+    if len(t) > max_len:
+        # keep the trailing ``_YYYYMMDD`` (or ``_YYYYMMDD`` after a version) so a long name never loses its date
+        m = re.search(r"_\d{8}$", t)
+        tail = m.group(0) if m else ""
+        t = (t[: max(1, max_len - len(tail))].rstrip(" ._") + tail)
+    return t or "report"
 
 
 def content_disposition(ascii_stem: str, utf8_stem: Optional[str] = None) -> str:
@@ -317,9 +323,28 @@ _Q: "queue.Queue[str]" = queue.Queue()
 _WORKER: Optional[threading.Thread] = None
 
 
-def jobs_dir() -> Path:
+_INSTANCE: Dict[int, str] = {}
+
+
+def instance_id() -> str:
+    """Per-process id (``w<pid>-<rand>``): every worker/instance writes ONLY into its own subdir, so the
+    sweeper of one process can never delete the job files of another (multi-worker / multi-container)."""
+    pid = os.getpid()
+    iid = _INSTANCE.get(pid)
+    if iid is None:
+        iid = _INSTANCE[pid] = f"w{pid}-{uuid.uuid4().hex[:8]}"
+    return iid
+
+
+def jobs_root() -> Path:
     from api.config import settings
     d = Path(settings.storage_dir) / "reports" / "pdf-jobs"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d
+
+
+def jobs_dir() -> Path:
+    d = jobs_root() / instance_id()
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     return d
 
@@ -332,7 +357,12 @@ def _unlink(p: Path) -> None:
 
 
 def _sweep(now: Optional[float] = None) -> None:
-    """Drop expired jobs (memory + file) and delete expired/orphaned ``<32hex>.pdf`` files on disk."""
+    """Drop expired jobs (memory + file); delete expired/orphaned ``<32hex>.pdf`` files in OUR subdir.
+
+    Other instances' subdirs (and legacy flat files) are never touched while they could be alive: only
+    files older than 2×TTL (their owner would have removed them at TTL) are reclaimed, and empty foreign
+    dirs are removed. No pid probing: pids are meaningless across containers sharing ``storage/``.
+    """
     now = now or time.time()
     with _JOBS_LOCK:
         old = [j for j in _JOBS.values() if j.status in ("done", "failed") and now - (j.finished or j.created) > JOB_TTL_S]
@@ -343,16 +373,38 @@ def _sweep(now: Optional[float] = None) -> None:
         if j.path:
             _unlink(j.path)
     try:
-        d = jobs_dir()
-        for p in d.iterdir():
-            if not _JOBFILE.fullmatch(p.name) or p.is_symlink():
+        root = jobs_root()
+        mine = instance_id()
+        for p in root.iterdir():
+            if p.is_symlink():
                 continue
-            try:
-                age = now - p.stat().st_mtime
-            except OSError:
-                continue
-            if p.stem not in known or age > JOB_TTL_S:   # orphan (e.g. left by a restart) or expired
-                _unlink(p)
+            if p.is_dir():
+                if not _INSTANCE_DIR.fullmatch(p.name):
+                    continue
+                own = p.name == mine
+                for f in p.iterdir():
+                    if not _JOBFILE.fullmatch(f.name) or f.is_symlink():
+                        continue
+                    try:
+                        age = now - f.stat().st_mtime
+                    except OSError:
+                        continue
+                    if own:
+                        if f.stem not in known or age > JOB_TTL_S:   # orphan (left by a restart) or expired
+                            _unlink(f)
+                    elif age > 2 * JOB_TTL_S:
+                        _unlink(f)
+                if not own:
+                    try:
+                        p.rmdir()          # only succeeds when empty
+                    except OSError:
+                        pass
+            elif _JOBFILE.fullmatch(p.name):   # legacy flat layout (pre-instance dirs): owner unknown
+                try:
+                    if now - p.stat().st_mtime > 2 * JOB_TTL_S:
+                        _unlink(p)
+                except OSError:
+                    pass
     except OSError:
         pass
 

@@ -18,6 +18,14 @@ _SEV_RANK = {s: i for i, s in enumerate(SEV_ORDER)}
 _TZ = timezone(timedelta(hours=7))
 STANDARDS = "OWASP Top 10 (2021) · TT 09/2020/TT-NHNN · TCVN 11930:2017 · ISO/IEC 27001:2022"
 MAX_LOCATIONS = 3
+MAX_FIELD = 8192            # same budget the engine applies per text field (engine.MAX_TEXT)
+MAX_LOCATION = 600          # file paths / URLs / package names
+
+
+def _cap(s: Any, n: int = MAX_FIELD) -> str:
+    """Hard cap a (possibly hostile, 100k+ char) field BEFORE any regex/layout work touches it."""
+    t = "" if s is None else str(s)
+    return t if len(t) <= n else t[: max(0, n - 1)] + "…"
 
 
 def _scrub(s: Any) -> str:
@@ -26,12 +34,22 @@ def _scrub(s: Any) -> str:
     t = _s(s)
     if not t:
         return t
+    t = t[: 2 * MAX_FIELD]  # bound the redactor's input; the field is capped to MAX_FIELD afterwards
     try:
         from scanner.pentest.redaction import _redact_secrets
 
         return _redact_secrets(t)
     except Exception:  # noqa: BLE001
         return "[REDACTED]"
+
+
+def _prose(s: Any, n: int = MAX_FIELD) -> str:
+    """Free text (description / remediation / location): secret-scrubbed, then capped."""
+    return _cap(_scrub(s), n)
+
+
+def _loc(s: Any) -> str:
+    return _prose(s, MAX_LOCATION)
 
 
 def fmt_score(x: Any) -> str:
@@ -227,8 +245,8 @@ def scan_doc(
                 [L["m_status"], _status(L, first.get("status", "OPEN"))],
                 [L["m_tools"], tools or "—"],
             ],
-            "cwe": cwe, "description": _s(desc), "location": _scan_location(g), "code": code,
-            "remediation": _s(rem), "refs": refs, "detail": sev in DETAIL_SEVS,
+            "cwe": cwe, "description": _prose(desc), "location": _loc(_scan_location(g)), "code": code,
+            "remediation": _prose(rem), "refs": refs, "detail": sev in DETAIL_SEVS,
         })
     counts = {s: int(severity_counts.get(s, 0)) for s in SEV_ORDER}
     score = risk_score(counts)
@@ -329,9 +347,9 @@ def pentest_doc(model: Mapping[str, Any], *, lang: str = "vi", org: str = "VulnG
                 [L["m_verify"], _s(ver.get("label")) or (L["badge_verified"] if ver.get("verified") else L["badge_unverified"])],
                 [L["m_status"], _status(L, f.get("status", "OPEN"))],
             ],
-            "cwe": _s(f.get("cwe")), "description": _s(f.get("description")),
-            "location": " ".join(x for x in (_s(f.get("target")), f"({_s(f['param'])})" if f.get("param") else "") if x),
-            "evidence": _scrub(f.get("evidence")), "extra": extra, "remediation": _s(f.get("remediation")),
+            "cwe": _s(f.get("cwe")), "description": _prose(f.get("description")),
+            "location": _loc(" ".join(x for x in (_s(f.get("target")), f"({_s(f['param'])})" if f.get("param") else "") if x)),
+            "evidence": _scrub(f.get("evidence")), "extra": extra, "remediation": _prose(f.get("remediation")),
             "refs": refs, "detail": sev in DETAIL_SEVS,
         })
     worst = es.get("overall_risk")
@@ -395,9 +413,9 @@ def webscan_doc(scan: Any, findings_in: Iterable[Mapping[str, Any]], *, lang: st
                 [L["m_template"], _s(f.get("template_id")) or "—"],
                 [L["m_status"], _status(L, f.get("status", "OPEN"))],
             ],
-            "cwe": _s(f.get("cwe")), "description": _scrub(f.get("description")),
-            "location": _s(f.get("matched_at") or f.get("host")),
-            "remediation": _s(f.get("remediation")), "refs": [_s(r) for r in (f.get("reference") or [])[:8]],
+            "cwe": _s(f.get("cwe")), "description": _prose(f.get("description")),
+            "location": _loc(f.get("matched_at") or f.get("host")),
+            "remediation": _prose(f.get("remediation")), "refs": [_s(r) for r in (f.get("reference") or [])[:8]],
             "detail": sev in DETAIL_SEVS,
         })
     counts = _counts(f["severity"] for f in findings)
@@ -440,11 +458,11 @@ def docreview_doc(document: Any, version: Any, review_findings: Iterable[Any], s
         key = _val(_g(r, "status")).upper()
         sev = _DR_SEV.get(key, "INFO")
         findings.append({
-            "id": f"VG-{i:03d}", "severity": sev, "title": f"{_s(_g(r, 'criteria_id'))} — {_s(_g(r, 'criteria_text'))[:200]}",
+            "id": f"VG-{i:03d}", "severity": sev, "title": f"{_s(_g(r, 'criteria_id'))} — {_scrub(_cap(_g(r, 'criteria_text'), 200))}",
             "meta": [[L["m_criteria"], _s(_g(r, "criteria_id"))], [L["m_category"], _s(_g(r, "category"))],
                      [L["m_status"], st_label.get(key, key)]],
-            "description": _s(_g(r, "criteria_text")), "evidence": _scrub(_g(r, "evidence")),
-            "remediation": _s(_g(r, "recommendation")), "location": _s(_g(r, "category")),
+            "description": _prose(_g(r, "criteria_text")), "evidence": _scrub(_g(r, "evidence")),
+            "remediation": _prose(_g(r, "recommendation")), "location": _loc(_g(r, "category")),
             "detail": sev in DETAIL_SEVS,
         })
     counts = _counts(f["severity"] for f in findings)

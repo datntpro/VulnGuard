@@ -4,6 +4,7 @@ sau đó tuỳ chọn gửi báo cáo cho owner.
 
 Dùng cho: scan tay ("scan now") và scan theo lịch (scheduler).
 """
+import asyncio
 import logging
 import os
 import shutil
@@ -111,7 +112,7 @@ async def run_repo_scan(repo_id: str, email_report: bool = False,
         if email_report and repo.owner_email:
             try:
                 from api.services.mailer import send_scan_report
-                send_scan_report(db, scan_id, repo.owner_email, project.name)
+                await asyncio.to_thread(send_scan_report, db, scan_id, repo.owner_email, project.name)  # PDF render blocks
             except Exception as e:
                 logger.warning(f"[scm] gửi report lỗi: {e}")
 

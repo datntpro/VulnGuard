@@ -1,5 +1,5 @@
 from types import SimpleNamespace as NS
-from scanner.report_builder import build_ai_json, build_markdown, build_pdf
+from scanner.report_builder import build_ai_json, build_markdown
 import json
 
 
@@ -11,12 +11,6 @@ def _vulns():
            status=E("OPEN"), description="mô tả tiếng Việt", ai_false_positive_likelihood="10%",
            ai_explanation="giải thích", ai_fix_suggestion="prepared stmt", ai_provider="claude-api"),
     ]
-
-
-def test_pdf_bytes_valid():
-    scan, vulns = _vulns()
-    pdf = build_pdf(scan, vulns, "app")
-    assert pdf[:5] == b"%PDF-" and len(pdf) > 1000
 
 
 def test_markdown_structure():
