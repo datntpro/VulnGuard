@@ -178,6 +178,9 @@ def create_schedule(body: ScheduleUpsert, request: Request, db: Session = Depend
     if body.interval_minutes < 5:
         raise HTTPException(422, "interval_minutes tối thiểu 5 phút")
     _check_sched_policy(body.ai_credential_policy)
+    _uid = getattr(getattr(request.state, "user", None), "id", None)
+    if body.ai_credential_policy == "owner" and not _uid:
+        raise HTTPException(403, "Cần tài khoản thật để dùng khoá AI cá nhân")
     s = ScanSchedule(repo_id=body.repo_id, interval_minutes=body.interval_minutes,
                      email_report=body.email_report, enabled=body.enabled,
                      created_by_user_id=getattr(getattr(request.state, "user", None), "id", None),
@@ -187,14 +190,32 @@ def create_schedule(body: ScheduleUpsert, request: Request, db: Session = Depend
     return _sch_public(s)
 
 
+def _effective_owner_policy(s: ScanSchedule) -> bool:
+    """Lịch này sẽ chạy bằng key CÁ NHÂN của chủ lịch? (policy 'owner' riêng, hoặc 'inherit' + policy toàn cục 'owner')."""
+    from api.services import ai_policy
+    p = s.ai_credential_policy or "inherit"
+    return p == "owner" or (p == "inherit" and ai_policy.get_policy()["scheduled_jobs_credential"] == "owner")
+
+
 @router.put("/schedules/{sch_id}")
-def update_schedule(sch_id: str, body: ScheduleUpsert, db: Session = Depends(get_db)):
+def update_schedule(sch_id: str, body: ScheduleUpsert, request: Request, db: Session = Depends(get_db)):
     s = db.query(ScanSchedule).filter(ScanSchedule.id == sch_id).first()
     if not s:
         raise HTTPException(404, "Lịch không tồn tại")
     if body.interval_minutes < 5:
         raise HTTPException(422, "interval_minutes tối thiểu 5 phút")
     _check_sched_policy(body.ai_credential_policy)
+    uid = getattr(getattr(request.state, "user", None), "id", None)
+    is_creator = bool(uid) and s.created_by_user_id == uid
+    # [AI PR-3 / verify B1] chỉ CHỦ lịch được đặt/giữ policy 'owner' (key cá nhân của họ) — kể cả ADMIN không thể đặt cho người khác
+    if body.ai_credential_policy == "owner" and not is_creator:
+        raise HTTPException(403, "Chỉ người tạo lịch mới được dùng khoá AI cá nhân cho lịch này")
+    if _effective_owner_policy(s) and not is_creator:
+        # lịch đang chạy bằng key cá nhân của người khác: chỉ được TẮT, hoặc chuyển sang org/local_only — không đổi tần suất/bật lại
+        switching_away = body.ai_credential_policy in ("org", "local_only")
+        only_disable = (not body.enabled) and body.interval_minutes == s.interval_minutes
+        if not (switching_away or only_disable):
+            raise HTTPException(403, "Lịch này chạy bằng khoá AI cá nhân của người khác — chỉ chủ lịch được sửa")
     s.ai_credential_policy = body.ai_credential_policy
     s.interval_minutes = body.interval_minutes
     s.email_report = body.email_report

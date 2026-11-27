@@ -256,8 +256,9 @@ class CloudAnalyzer:
 
     async def _create(self, system: str, user: str, schema: dict, max_tokens: int = 8000) -> str:
         m = self.meter
+        tok = None
         if m is not None:
-            m.pre()       # RouteRefused (credential bị thu hồi / hết hạn mức) → analyze_cloud trả fallback + error code
+            tok = m.pre()       # RouteRefused (credential bị thu hồi / hết hạn mức) → analyze_cloud trả fallback + error code
         t0 = time.monotonic()
         try:
             if self.family == "openai":
@@ -266,10 +267,10 @@ class CloudAnalyzer:
                 out = await self._create_anthropic(system, user, schema, max_tokens)
         except Exception:
             if m is not None:
-                m.post(error_code="PROVIDER_ERROR", started=t0)
+                m.post(error_code="PROVIDER_ERROR", started=t0, token=tok)
             raise
         if m is not None:
-            m.post(self._raw, started=t0)
+            m.post(self._raw, started=t0, token=tok)
         return out
 
     async def _create_anthropic(self, system: str, user: str, schema: dict, max_tokens: int) -> str:

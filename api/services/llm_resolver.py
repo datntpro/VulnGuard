@@ -259,6 +259,10 @@ def _user_cloud(db, row, ctx: LLMContext, policy: Dict[str, Any], *, act_as: Opt
     from api.services import ai_policy
     if not ai_policy.is_allowed(policy, row.provider, model):
         return Refuse(deny_code, "ai.error.cred_revoked" if deny_code == AI_CRED_REVOKED else "ai.error.not_allowed")
+    from api.auth_models import User
+    owner = db.get(User, row.owner_user_id)
+    if owner is not None and (not owner.is_active or owner.role.value == "VIEWER"):   # chủ bị vô hiệu hoá/hạ VIEWER
+        return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
     cctx = replace(ctx, user_id=act_as) if act_as else ctx
     try:
         cred = ai_credentials.open_for_call(db, row.id, cctx)

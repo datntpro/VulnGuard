@@ -209,11 +209,117 @@ def test_unlimited_by_default(env):
     assert isinstance(resolve(_ctx("u1")), Cloud)
 
 
-def test_rpm_bucket(env):
-    assert all(ai_usage.rpm_take("k", 3, now=100.0 + i) for i in range(3))
-    assert not ai_usage.rpm_take("k", 3, now=110.0)
-    assert ai_usage.rpm_take("k", 3, now=161.0)                       # cửa sổ 60 s trượt
-    assert ai_usage.rpm_take("k", None) and ai_usage.rpm_take("k", 0)  # không giới hạn
+def test_reserve_is_atomic_under_concurrency(env):
+    """N luồng cùng reserve: số reservation thành công KHÔNG vượt rpm, và tổng USD không vượt trần quá một lượt."""
+    import threading
+    _policy(org_quota={"usd_per_user_month": None, "rpm_per_user": 5})
+    m, _ = _meter("u1")
+    ok, blocked = [], []
+
+    def go():
+        try:
+            ok.append(m.pre())
+        except RouteRefused as e:
+            blocked.append(e.code)
+    ts = [threading.Thread(target=go) for _ in range(16)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(ok) == 5 and blocked == ["AI_RATE_LIMIT"] * 11
+
+
+def test_reserve_counts_inflight_usd_so_parallel_calls_cannot_overshoot(env):
+    est = __import__("api.services.ai_prices", fromlist=["x"]).est_cost_usd("claude-opus-5-5", 4000, 2000)
+    _policy(org_quota={"usd_per_user_month": est * 2.5, "rpm_per_user": None})   # chỗ cho đúng 3 reservation (sum < limit)
+    m, _ = _meter("u1")
+    toks = []
+    blocked = 0
+    for _ in range(6):
+        try:
+            toks.append(m.pre())
+        except RouteRefused as e:
+            assert e.code == AI_QUOTA
+            blocked += 1
+    assert len(toks) == 3 and blocked == 3
+    # settle theo usage thật → giải phóng phần đã reserve thừa
+    class U:
+        input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens = 10, 10, 0, 0
+
+    class Raw:
+        usage = U()
+    for t in toks:
+        m.post(Raw(), token=t)
+    assert ai_usage.spent_usd(env, "u1") < est
+    m.pre()
+
+
+def test_stale_reservation_expires(env):
+    from api.ai_cred_models import AiUsageEvent as E
+    _policy(org_quota={"usd_per_user_month": 1.0, "rpm_per_user": None})
+    env.add(E(user_id="u1", credential_scope="org", est_cost_usd=5.0, outcome="reserved",
+              ts=datetime.utcnow() - timedelta(minutes=30)))
+    env.commit()
+    assert ai_usage.spent_usd(env, "u1") == 0.0
+    m, _ = _meter("u1")
+    m.pre()
+
+
+def test_meter_prices_and_polices_the_effective_model_not_route_model(env):
+    """Pentest planner/executor có thể đắt hơn route.model: usage + policy theo model hiệu lực."""
+    from scanner.pentest.llm import make_driver
+    r = resolve(_ctx("u1", "pentest"))
+    drv = make_driver(r, "claude-opus-5-5")
+    assert drv.meter.model == "claude-opus-5-5"
+    cheap = ai_usage.meter_for(r, "claude-haiku-5-5")
+    assert cheap.model == "claude-haiku-5-5"
+
+    class U:
+        input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens = 1_000_000, 0, 0, 0
+
+    class Raw:
+        usage = U()
+    cheap.post(Raw())
+    ev = env.query(AiUsageEvent).one()
+    assert ev.model == "claude-haiku-5-5" and ev.est_cost_usd == pytest.approx(0.5)
+    # policy chặn model hiệu lực dù route.model được phép
+    _policy(allowed=["anthropic:claude-haiku-*"])
+    with pytest.raises(RouteRefused):
+        ai_usage.meter_for(resolve(_ctx("u1", "pentest")) if False else r, "claude-opus-5-5").pre()
+
+
+def test_owner_policy_system_job_is_metered_against_the_owner(env):
+    """Job lịch dùng key CÁ NHÂN của chủ lịch (user_id=None) vẫn bị rpm của chủ lịch."""
+    _mk(env, "u1")
+    _policy(user_quota_own_keys={"rpm_per_user": 2})
+    r = resolve(LLMContext(feature="triage", user_id=None, job_kind="schedule", sched_policy="owner", sched_owner_id="u1"))
+    assert r.credential.scope == "user"
+    m = ai_usage.meter_for(r)
+    m.pre(); m.pre()
+    with pytest.raises(RouteRefused) as e:
+        m.pre()
+    assert e.value.code == "AI_RATE_LIMIT"
+    ev = env.query(AiUsageEvent).filter_by(outcome="reserved").first()
+    assert ev.user_id == "u1"
+
+
+def test_deactivated_owner_blocks_resolver_and_meter_even_if_disable_failed(env):
+    from api.auth_models import User, UserRole
+    from api.security import hash_password
+    u = User(email="x-%s@t.local" % datetime.utcnow().timestamp(), name="x", password_hash=hash_password("correct-horse-1"),
+             role=UserRole.ANALYST)
+    env.add(u)
+    env.commit()
+    cid = _mk(env, u.id)
+    m, r = _meter(u.id)
+    assert r.credential.scope == "user"
+    u.is_active = False                                   # giả lập: credential CHƯA kịp bị disable
+    env.commit()
+    assert resolve(_ctx(u.id)).code == AI_CRED_REVOKED or _key(resolve(_ctx(u.id))) == ORG_KEY
+    with pytest.raises(RouteRefused):
+        m.pre()
+    r2 = resolve(_ctx(u.id, pinned_credential_id=cid))
+    assert isinstance(r2, Refuse) and r2.code == AI_CRED_REVOKED
+    env.delete(u)
+    env.commit()
 
 
 # ── allowed providers/models ─────────────────────────────────────────────────
@@ -341,7 +447,7 @@ def test_meter_blocks_after_revoke_mid_job_and_never_switches_key(env):
     with pytest.raises(RouteRefused) as e:
         m.pre()
     assert e.value.code == AI_CRED_REVOKED
-    ev = env.query(AiUsageEvent).order_by(AiUsageEvent.ts.desc()).first()
+    ev = env.query(AiUsageEvent).filter_by(outcome="refused").one()
     assert ev.outcome == "refused" and ev.credential_id == cid and ev.error_code == AI_CRED_REVOKED
 
 

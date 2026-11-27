@@ -22,8 +22,6 @@ ORG_KEY = "sk-ant-api03-ORGORGORGORGORG-0rg1"
 def clean(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_CONFIG_FILE", str(tmp_path / "ai.json"))
     Base.metadata.create_all(bind=engine)
-    from api.services import ai_usage
-    ai_usage.reset_rpm()
     db = SessionLocal()
     db.query(AiUsageEvent).delete()
     db.query(AiCredential).delete()
@@ -526,3 +524,133 @@ def test_schedule_records_creator_and_validates_policy(probe):
     assert bad.status_code == 422
     up = c.put(f"/api/scm/schedules/{s.id}", json={"repo_id": repo.id, "interval_minutes": 60}, headers=h)
     assert up.json()["ai_credential_policy"] == "inherit"
+
+
+# ── verify B1: lịch + ghim — RBAC matrix ─────────────────────────────────────
+def _repo(d):
+    from api.scm_models import ScmConnection, ScmProvider, ScmRepo
+    conn = ScmConnection(name="c" + uuid4().hex, provider=list(ScmProvider)[0], base_url="https://x.example", token_enc="x")
+    d.add(conn)
+    d.commit()
+    repo = ScmRepo(connection_id=conn.id, repo_full_name="o/r")
+    d.add(repo)
+    d.commit()
+    return repo.id
+
+
+def test_b1_poc_other_user_cannot_flip_schedule_to_owner_and_spend_victims_key(probe):
+    """PoC của verify: A (ANALYST) hoặc ADMIN đặt lịch của B sang policy=owner + 5 phút → phải 403, key của B không bị ghim."""
+    from api.scm_models import ScanSchedule
+    from api.services.llm_resolver import LLMContext, resolve, schedule_pin
+    cb, hb, ub, _ = who()
+    add(cb, hb, key=KEY_B)
+    repo = _repo(db())
+    sid = cb.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60}, headers=hb).json()["id"]
+    ca, ha, ua, _ = who()
+    ad, had, uadm, _ = who(UserRole.ADMIN)
+    for c, h in ((ca, ha), (ad, had)):
+        r = c.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 5, "ai_credential_policy": "owner"}, headers=h)
+        assert r.status_code == 403, r.text
+    s = db().get(ScanSchedule, sid)
+    assert s.ai_credential_policy in (None, "inherit") and s.interval_minutes == 60
+    pol, owner, pin = schedule_pin(s.created_by_user_id, s.ai_credential_policy)
+    assert pol == "org" and owner is None and pin is None
+    r = resolve(LLMContext(feature="triage", user_id=None, job_kind="schedule", sched_policy=pol, sched_owner_id=owner,
+                           pinned_credential_id=pin))
+    assert r.credential.scope == "org"
+
+
+def test_b1_schedule_matrix(probe):
+    from api.scm_models import ScanSchedule
+    co, ho, uo, _ = who()
+    add(co, ho, key=KEY_B)
+    repo = _repo(db())
+    # chủ đặt owner: OK
+    sid = co.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60, "ai_credential_policy": "owner"}, headers=ho).json()["id"]
+    cx, hx, ux, _ = who()
+    ad, had, *_ = who(UserRole.ADMIN)
+    for c, h in ((cx, hx), (ad, had)):
+        body = {"repo_id": repo, "interval_minutes": 5, "ai_credential_policy": "owner"}
+        assert c.put(f"/api/scm/schedules/{sid}", json=body, headers=h).status_code == 403               # giữ owner
+        assert c.put(f"/api/scm/schedules/{sid}", json={**body, "ai_credential_policy": "inherit"}, headers=h).status_code == 403  # đổi tần suất
+        assert db().get(ScanSchedule, sid).interval_minutes == 60
+    # người khác chỉ được TẮT hoặc chuyển sang org/local_only
+    assert cx.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 60, "enabled": False,
+                                                     "ai_credential_policy": "owner"}, headers=hx).status_code == 403
+    assert cx.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 60, "enabled": False,
+                                                     "ai_credential_policy": "inherit"}, headers=hx).status_code == 200
+    assert ad.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 15, "ai_credential_policy": "org"},
+                  headers=had).status_code == 200
+    assert db().get(ScanSchedule, sid).ai_credential_policy == "org"
+    # chủ vẫn đặt lại owner được; ANALYST khác tạo lịch riêng với owner (của chính mình) OK
+    assert co.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 30, "ai_credential_policy": "owner"},
+                  headers=ho).status_code == 200
+    assert cx.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60, "ai_credential_policy": "owner"},
+                   headers=hx).status_code == 201
+
+
+def test_b1_global_owner_policy_protects_inherit_schedules(probe):
+    from api.services import ai_config
+    co, ho, *_ = who()
+    repo = _repo(db())
+    sid = co.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60}, headers=ho).json()["id"]
+    ai_config.validate_and_save({"policy": {"scheduled_jobs_credential": "owner"}})
+    ad, had, *_ = who(UserRole.ADMIN)
+    assert ad.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 5}, headers=had).status_code == 403
+    assert ad.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 5, "ai_credential_policy": "org"},
+                  headers=had).status_code == 200
+
+
+def test_pin_endpoints_ignore_client_supplied_credentials(probe, monkeypatch):
+    """scan/pentest: ghim chỉ do server suy ra từ người gọi; body không nhận credential id."""
+    from api.schemas import ScanCreate
+    from api.routes.pentest import RepinIn
+    assert not [f for f in ScanCreate.model_fields if "cred" in f or "ai_" in f.replace("ai_analysis", "")]
+    assert set(RepinIn.model_fields) == {"credential_id"}
+    from api.routes.ai_credentials import CredCreate, CredPatch
+    for m in (CredCreate, CredPatch):
+        assert not {"owner_user_id", "scope", "status", "auth_mode", "base_url", "aws_profile"} & set(m.model_fields)
+
+
+def test_scan_now_pins_requester_default_only(probe, monkeypatch):
+    from api.services.llm_resolver import pin_for_user
+    c1, h1, u1, _ = who()
+    c2, h2, u2, _ = who()
+    k = add(c1, h1).json()
+    assert pin_for_user(u1) == k["id"] and pin_for_user(u2) is None
+
+
+def test_coworker_step_accepts_no_client_route_or_credential():
+    """S5: Co-work conversation pinning (columns + server wiring) is PR-3b. Guard: PR-3 never trusts client route/cred."""
+    from api.routes.coworker_agent import AgentStepRequest
+    bad = {"provider", "model", "credential", "credential_id", "ai_credential_id", "route", "route_kind", "pinned_route_kind",
+           "pinned_credential_id", "transcript"}
+    assert not bad & set(AgentStepRequest.model_fields)
+
+
+# ── verify S3/S4 ─────────────────────────────────────────────────────────────
+def test_s3_disable_failure_rolls_back_user_deactivation(probe, monkeypatch):
+    from api.auth_models import User
+    cu, hu, uu, _ = who()
+    add(cu, hu)
+    ad, had, *_ = who(UserRole.ADMIN)
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(creds, "disable_for_user", boom)
+    from fastapi.testclient import TestClient
+    from api.main import app
+    bad = TestClient(app, raise_server_exceptions=False)
+    r = bad.patch(f"/api/auth/users/{uu}", json={"is_active": False}, headers=had)
+    assert r.status_code == 500
+    assert db().get(User, uu).is_active is True            # không deactivate nửa vời
+    assert db().query(AiCredential).filter_by(owner_user_id=uu).one().status == "valid"
+
+
+def test_s4_custom_base_url_off_enforced_on_legacy_put(probe):
+    ad, had, *_ = who(UserRole.ADMIN)
+    assert ad.put("/api/ai/settings", json={"policy": {"custom_base_url": "off"}}, headers=had).status_code == 200
+    for path in ("/api/ai/config", "/api/ai/settings"):
+        r = ad.put(path, json={"openai": {"base_url": "https://llm.example.com/v1"}}, headers=had)
+        assert r.status_code == 422 and "BAD_BASE_URL" in r.text, path
+    assert ad.put("/api/ai/config", json={"openai": {"model": "gpt-4o"}}, headers=had).status_code == 200

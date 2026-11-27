@@ -188,6 +188,9 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("hybrid.tasks.coworker phải là local | cloud")
         from api.services import ai_policy   # [AI PR-3]
         cfg["policy"] = ai_policy.normalize(cfg.get("policy"))
+        oa_url = ((update.get("openai") or {}).get("base_url") if isinstance(update.get("openai"), dict) else None)
+        if cfg["policy"]["custom_base_url"] == "off" and isinstance(oa_url, str) and oa_url.strip():
+            raise ValueError("BAD_BASE_URL: custom base_url bị policy tắt")   # áp cho MỌI đường lưu (cả PUT /api/ai/config cũ)
         cfg["privacy"]["context_lines"] = max(0, min(int(cfg["privacy"]["context_lines"]), 80))
         for k in ("send_code_context", "redact_secrets"):
             cfg["privacy"][k] = bool(cfg["privacy"][k])
