@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added — #101 PR-B: smoke scanner trong image CI
+- `python -m scanner.scanners.selftest` chạy từng scanner đóng gói (semgrep bundled rules, bandit, checkov, hadolint, gitleaks, detect-secrets, trivy-iac + `--version` của trivy/grype/pip-audit) trên fixture có lỗi đã biết và đòi số finding tối thiểu; bước mới trong job `pdf-docker` (amd64 + arm64, non-root, rootfs read-only, không mạng). Tool hỏng im lặng (vd gitleaks 8.18.4 từ chối `--quiet`) làm CI đỏ.
+- gitleaks và trivy-iac tạm `--xfail` (TODO #120); trivy SCA/pip-audit cần tải DB nên chỉ kiểm `--version`.
+
 ### Fixed — #101 PR-A: sửa 12/13 bundled semgrep rule
 - 8 rule không bao giờ khớp (`sql-injection-format`, `subprocess-shell-true`, `pickle-loads`, `yaml-unsafe-load`, `weak-hash-md5`, `weak-hash-sha1`, `open-with-user-input`, `requests-with-user-url`) vì các `pattern` thay thế bị AND thay vì `pattern-either`; 4 rule khớp thiếu/thừa (`sql-injection-string-concat` bỏ sót `"…'" + x + "'"`, `hardcoded-password-variable` bỏ sót `DB_PASSWORD = "…"` và báo nhầm tên biến môi trường/URL, `flask-debug-true` bỏ sót `app.run(host=…, debug=True)`, `os-system-injection` báo nhầm lệnh hằng). `django-debug-true` giữ nguyên.
 - Thêm 13 fixture chú thích `tests/fixtures/semgrep_rules/<rule-id>.py` (`# ruleid:` / `# ok:`) và `tests/test_semgrep_bundled_rules.py` (validate YAML, mỗi rule phải có fixture, khớp chính xác không thiếu/thừa, mỗi rule ≥1 true positive). Job `test` của CI cài semgrep từ `docker/scanners/semgrep.txt` và đặt `VG_REQUIRE_SEMGREP=1` để test không bị skip âm thầm.
