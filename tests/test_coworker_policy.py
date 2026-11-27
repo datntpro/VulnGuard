@@ -283,7 +283,8 @@ def test_run_command_scrubs_secrets(monkeypatch):
     monkeypatch.setenv("VULNGUARD_COWORKER_TOKEN", "zzz-secret")
     monkeypatch.setenv("KEEP_ME", "yes")
     rc, out, _ = _run(run_command(["env"]))
-    assert "zzz-secret" not in out and "KEEP_ME=yes" in out
+    assert "zzz-secret" not in out and "PATH=" in out   # allowlist: biến lạ (KEEP_ME) không được kế thừa
+    assert "KEEP_ME" not in out
     rc, out, _ = _run(run_command(["env"], env={"X": "1", "VULNGUARD_COWORKER_TOKEN": "explicit"}))
     assert "X=1" in out and "VULNGUARD_COWORKER_TOKEN=explicit" in out
 
