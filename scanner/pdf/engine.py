@@ -30,6 +30,8 @@ from .errors import (
 )
 from .root import Workspace, build_workspace
 from .sanitize import sanitize
+from .charts import severity_donut
+from .model import normalize_doc
 
 Kind = Literal["scan", "pentest", "webscan", "docreview"]
 KINDS = ("scan", "pentest", "webscan", "docreview")
@@ -281,7 +283,8 @@ def validate_chart_svg(svg: str) -> str:
     if len(svg.encode("utf-8")) > MAX_CHART_BYTES:
         raise PdfInputTooLarge("chart svg too large")
     s = svg.lstrip()
-    if not s.startswith("<svg") or _SVG_FORBIDDEN.search(s):
+    probe = s.replace('xmlns="http://www.w3.org/2000/svg"', "", 1)  # the one namespace URI every SVG needs
+    if not s.startswith("<svg") or _SVG_FORBIDDEN.search(probe):
         raise PdfInvalidInput("chart svg rejected")
     return svg
 
@@ -333,16 +336,16 @@ def render(
     if kind not in KINDS:
         raise PdfInvalidInput("unknown report kind")
     try:
-        clean = sanitize(apply_caps(doc))
+        clean = sanitize(normalize_doc(apply_caps(doc)))
     except (TypeError, ValueError) as e:
         raise PdfInvalidInput(str(e)) from e
     clean["kind"] = kind
     data = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
     if len(data.encode("utf-8")) > MAX_DATA_BYTES:
         raise PdfInputTooLarge("report data exceeds size cap")
-    inputs = {"data": data}
-    if chart_svg is not None:
-        inputs["chart_svg"] = validate_chart_svg(chart_svg)
+    if chart_svg is None:  # integers-only SVG built from the (trusted) per-severity counts
+        chart_svg = severity_donut(clean["summary"]["counts"], str(clean["labels"].get("chart_center", "")))
+    inputs = {"data": data, "chart_svg": validate_chart_svg(chart_svg)}
     if not _SEM.acquire(timeout=BUSY_WAIT_S):
         raise PdfBusy("pdf renderer busy; retry shortly")
     try:

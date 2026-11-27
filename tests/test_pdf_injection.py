@@ -33,7 +33,7 @@ FIELDS = ("title", "description", "code", "evidence")
 
 def _doc(canary_path: str):
     items = CORPUS + [f'#read("{canary_path}")', f'#image("{canary_path}")']
-    return {"title": "Injection", "findings": [{f: t for f in FIELDS} for t in items]}
+    return {"title": "Injection", "findings": [{**{f: t for f in FIELDS}, "severity": "HIGH"} for t in items]}
 
 
 def test_corpus_renders_literally_in_every_field(tmp_path):
@@ -75,3 +75,38 @@ def test_value_channel_never_leaks_in_root_file(item):
     src = '#let d = json(bytes(sys.inputs.at("data")))\n#d.t'
     pdf = compile_src(src, data_inputs({"t": item}), extra={"inroot.typ": b"IN-ROOT-FILE-CONTENT"})
     assert "IN-ROOT-FILE-CONTENT" not in pdf_text(pdf)
+
+
+def test_adapter_fields_render_literally_end_to_end(tmp_path):
+    """Hostile strings in every adapter-fed field (scan, pentest, webscan) stay literal text."""
+    from types import SimpleNamespace as NS
+
+    from scanner.pdf import adapters
+    from tests._pdf_fixtures import NOW, make_pentest_model, make_scan
+    from tests._pdf_helpers import norm, pdf_text
+
+    canary = tmp_path / "secret.txt"
+    canary.write_text("SECRET-OUTSIDE-CANARY")
+    evil = f'#read("{canary}") #image("{canary}") #eval("1+1") ] #show: x => "PWNED" ['
+    p, s, g, c = make_scan(4, hostile=True)
+    p.name = evil
+    for grp in g.values():
+        for gg in grp:
+            gg["items"][0]["file_path"] = evil
+            gg["items"][0]["code_snippet"] = evil
+            gg["ai_fix_suggestion"] = evil
+    pdf = engine.render("scan", adapters.scan_doc(p, s, g, c, now=NOW, branding={"org_name": evil}), generated_at=0)
+    t = pdf_text(pdf)
+    assert "SECRET-OUTSIDE-CANARY" not in t and "localhost" not in t
+    assert norm('#eval("1+1")') in norm(t)
+    m = make_pentest_model()
+    m["findings"][0]["title"] = evil
+    m["findings"][0]["evidence_traffic"]["request_body"] = evil
+    m["run"]["engagement"] = evil
+    t = pdf_text(engine.render("pentest", adapters.pentest_doc(m), generated_at=0))
+    assert "SECRET-OUTSIDE-CANARY" not in t and norm('#eval("1+1")') in norm(t)
+    scan = NS(id="x", started_at=None, status=None, authorized_by=evil)
+    fs = [{"name": evil, "severity": "high", "matched_at": evil, "description": evil, "remediation": evil,
+           "curl_command": evil, "reference": [evil], "extracted": [evil]}]
+    t = pdf_text(engine.render("webscan", adapters.webscan_doc(scan, fs), generated_at=0))
+    assert "SECRET-OUTSIDE-CANARY" not in t and norm('#eval("1+1")') in norm(t)
