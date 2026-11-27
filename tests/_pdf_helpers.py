@@ -8,7 +8,7 @@ from pypdf import PdfReader
 from scanner.pdf.engine import run_worker
 from scanner.pdf.root import build_workspace
 
-_STRIP = re.compile(r"[\s​‎‏‪-‮⁦-⁩﻿\u0000-\u001f]")
+_STRIP = re.compile(r"[\s\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff\u0000-\u001f]")
 
 
 def norm(s: str) -> str:

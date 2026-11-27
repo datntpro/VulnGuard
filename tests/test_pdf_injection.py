@@ -24,7 +24,7 @@ CORPUS = [
     '```typ\n#panic("PWNED-RAW")\n```',
     '\\u{41} \\ #"str" #{ panic("x") }',
     "Đối tượng Ưu Ơn ỹ ặ ẫ",
-    "RTL ‮ override, NUL \u0000, BOM ﻿ end",
+    "RTL \u202e override, NUL \u0000, BOM \ufeff end",
     "A" * 3000,
 ]
 
@@ -55,9 +55,9 @@ def test_corpus_renders_literally_in_every_field(tmp_path):
 
 
 def test_sanitizer_strips_controls_and_bidi():
-    s = clean_text("a‮b\u0000c﻿d⁦e")
+    s = clean_text("a\u202eb\u0000c\ufeffd\u2066e")
     assert s == "abcde"
-    assert clean_text("x" * 130, wrap=True).count("​") == 2
+    assert clean_text("x" * 130, wrap=True).count("\u200b") == 2
 
 
 def test_negative_control_splice_and_eval_would_leak(tmp_path):

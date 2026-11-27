@@ -10,17 +10,17 @@ from __future__ import annotations
 import re
 from typing import Any
 
-ZWSP = "​"
+ZWSP = "\u200b"
 WRAP_EVERY = 60
 MAX_DEPTH = 12
 
 # C0 except \t \n ; DEL; C1; bidi embeddings/overrides/isolates; BOM; zero-width joiners of
 # the attack kind are left alone (needed for some scripts) but U+200B is normalised below.
 _CONTROLS = re.compile(
-    "[\u0000-\u0008\u000b-\u001f\u007f-\u009f‪-‮⁦-⁩﻿‎‏؜]"
+    r"[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069\ufeff\u200e\u200f\u061c]"
 )
 _ZWSP = re.compile(ZWSP)
-_LONG_RUN = re.compile(r"[^\s​]{%d,}" % (WRAP_EVERY + 1))
+_LONG_RUN = re.compile(r"[^\s\u200b]{%d,}" % (WRAP_EVERY + 1))
 
 
 def _wrap_run(m: "re.Match[str]") -> str:
