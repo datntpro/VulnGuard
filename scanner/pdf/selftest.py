@@ -20,7 +20,8 @@ FIX_HINT = (
     "Windows ARM64 has no typst wheel: use x64 Python or Docker."
 )
 ALLOWED_FONT = re.compile(r"^(DejaVuSans(-Bold)?|DejaVuSansMono|BeVietnamPro-.*|JetBrainsMono-.*)$")
-_STRIP = re.compile(r"[\s​‎‏‪-‮⁦-⁩﻿]")
+# built from code points so no bidi-control literal appears in source (bandit B613)
+_STRIP = re.compile("[\\s" + "".join(chr(c) for c in (0x200B, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A), 0xFEFF)) + "]")
 PHRASE = "Đối tượng kiểm thử"
 
 
