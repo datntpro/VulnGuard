@@ -7,6 +7,7 @@
 - Lỗi provider không còn trả nguyên văn: `/api/ai/test` và `run.error_message` dùng mã chuẩn hoá + chi tiết đã che. Thêm mẫu che `ABSK…`, `ksk_…`, `sk-or-v1-…`, Bearer/query token.
 - Co-work, Document Review, File Assistant dùng Ollama URL cấu hình trong UI. Thẻ trạng thái báo "model đã cấu hình chưa cài" thay vì lặng lẽ đổi model.
 - Sửa nhãn sai "kiro-cli login tạo AWS profile" (UI + docs).
+- Verify round 3: allowlist env giữ cấu hình tool tài liệu hoá (`SEMGREP_HOME`, `TRIVY_*`, `GRYPE_*`, `NUCLEI_*`, `CHECKOV_*`…) nhưng vẫn loại tên chứa TOKEN/SECRET/PASSWORD/KEY/CREDENTIAL; lỗi LLM trong vòng lặp pentest giờ được commit (run FAILED + error_message đã sanitise) thay vì bị `db.refresh` huỷ.
 - Verify round 2: lỗi LLM trong vòng lặp pentest, ai_analyzer, scans, domains đều qua `sanitize_error`; log chỉ ghi bản đã che. Env tiến trình con (spawn/run_command/git clone/tool check/which) là ALLOWLIST — `GITHUB_TOKEN`, `DATABASE_URL`, `*_TOKEN/_SECRET/_KEY` không bao giờ lọt; `spawn(env=…)` thay thế thay vì trộn.
 
 ### Changed — PDF PR-5: mailer + dọn dẹp fpdf2 (closes #102)

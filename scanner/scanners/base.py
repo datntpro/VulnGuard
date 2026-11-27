@@ -23,10 +23,15 @@ _ENV_ALLOW = frozenset({
     "PYTHONPATH", "PYTHONHOME", "PYTHONUTF8", "VIRTUAL_ENV", "JAVA_HOME",
     "GOPATH", "GOCACHE", "GOFLAGS", "GOMODCACHE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
     "DOCKER_HOST", "VULNGUARD_WORDLIST_DIRS",
+    # cấu hình tool được tài liệu hoá (không phải secret):
+    "SEMGREP_HOME",                                  # install/run.sh đặt $PROJECT_DIR/.semgrep (cache rule pre-seeded)
+    "LD_LIBRARY_PATH", "JAVA_TOOL_OPTIONS",          # native libs / JVM của sonar-scanner
 })
-_ENV_ALLOW_PREFIXES = ("LC_",)
+# Tiền tố cấu hình theo tool (DB mirror/air-gap, skip-update, cache…). Tên chứa TOKEN/SECRET/PASSWORD/KEY/
+# CREDENTIAL (vd TRIVY_PASSWORD, GRYPE_REGISTRY_AUTH_TOKEN, SEMGREP_APP_TOKEN) VẪN bị _SECRET_NAME loại.
+_ENV_ALLOW_PREFIXES = ("LC_", "TRIVY_", "GRYPE_", "SEMGREP_", "NUCLEI_", "CHECKOV_", "GITLEAKS_", "KATANA_")
 # Phòng thủ chiều sâu: biến trong allowlist mà tên có dạng secret vẫn bị loại.
-_SECRET_NAME = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_?KEY|_KEY$|DATABASE_URL)", re.I)
+_SECRET_NAME = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH_?KEY|API_?KEY|PRIVATE_?KEY|_KEY$|DATABASE_URL)", re.I)
 
 
 def scrubbed_env(base=None, extra=None) -> dict:

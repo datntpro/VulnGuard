@@ -280,3 +280,61 @@ def test_bad_request_bucket():
     class E(Exception):
         status_code = 400
     assert "bad_request" in sanitize_error(E("model foo: prompt too long sk-ant-aaaaaaaaaaaaa"))
+
+
+# ───────────── PR-0 round 3 ─────────────
+def test_tool_config_env_passes_but_secrets_do_not(monkeypatch):
+    from scanner.scanners.base import scrubbed_env
+    ok = {"SEMGREP_HOME": "/p/.semgrep", "TRIVY_DB_REPOSITORY": "mirror.local/trivy-db", "TRIVY_SKIP_DB_UPDATE": "true",
+          "GRYPE_DB_AUTO_UPDATE": "false", "NUCLEI_TEMPLATES_DIR": "/t", "LD_LIBRARY_PATH": "/lib"}
+    bad = {"TRIVY_PASSWORD": "p", "TRIVY_REGISTRY_TOKEN": "t", "GRYPE_REGISTRY_AUTH_PASSWORD": "p",
+           "SEMGREP_APP_TOKEN": "t", "NUCLEI_API_KEY": "k", "TRIVY_GITHUB_TOKEN": "g", "CHECKOV_API_KEY": "k"}
+    env = scrubbed_env(base={**ok, **bad, "PATH": "/bin"})
+    for k, v in ok.items():
+        assert env.get(k) == v, k
+    for k in bad:
+        assert k not in env, k
+
+
+def test_tool_config_env_reaches_real_child(monkeypatch):
+    monkeypatch.setenv("SEMGREP_HOME", "/p/.semgrep")
+    monkeypatch.setenv("TRIVY_DB_REPOSITORY", "mirror.local/db")
+    monkeypatch.setenv("TRIVY_PASSWORD", "pw-secret-xyz")
+    from scanner.scanners.base import run_command
+    rc, out, _ = _run(run_command([sys.executable, "-c", DUMP]))
+    assert "SEMGREP_HOME" in out and "TRIVY_DB_REPOSITORY" in out and "pw-secret-xyz" not in out
+
+
+def test_in_loop_llm_failure_persisted_failed_and_sanitised():
+    """Lỗi LLM trong vòng lặp: run phải FAILED + error_message đã sanitise được COMMIT (không bị refresh huỷ)."""
+    from api.database import Base, SessionLocal, engine
+    from api.pentest_models import PentestRun, RunStatus
+    from scanner.pentest import agent as agent_mod
+    from scanner.pentest.agent import PentestAgent
+    from tests.pentest_fakes import ScriptedDriver, make_engagement, make_run
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        eng = make_engagement(db, [{"type": "ip", "value": "10.0.0.5", "mode": "allow"}])
+        rid = make_run(db, eng).id
+    finally:
+        db.close()
+
+    class Boom(ScriptedDriver):
+        async def create(self, *a, **k):
+            raise _E401("Incorrect API key provided: sk-ant-api03-FAKEKEYFAKEKEY1234 https://evil.example/v1?token=TOK123")
+
+    drv = Boom([])
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(asyncio.wait_for(PentestAgent(rid, driver_factory=lambda cfg: drv).run(), 30))
+    finally:
+        loop.close()
+    db = SessionLocal()
+    try:
+        run = db.query(PentestRun).filter(PentestRun.id == rid).first()
+        assert run.status == RunStatus.FAILED
+        assert "[auth_failed]" in (run.error_message or "")
+        assert "sk-ant" not in run.error_message and "evil.example" not in run.error_message and "TOK123" not in run.error_message
+    finally:
+        db.close()
