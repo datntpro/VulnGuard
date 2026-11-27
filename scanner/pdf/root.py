@@ -18,7 +18,6 @@ from .errors import UnsafeRoot
 
 PKG_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PKG_DIR / "templates"
-LEGACY_FONTS_DIR = PKG_DIR.parent / "assets" / "fonts"  # DejaVu; PR-2 moves fonts into templates/fonts
 FONT_SUFFIXES = {".ttf", ".otf", ".ttc", ".woff2"}
 ALLOWED_SUFFIXES = {".typ", ".png"} | FONT_SUFFIXES
 MAX_ROOT_BYTES = 64 * 1024 * 1024
@@ -120,7 +119,7 @@ def build_workspace(
         fonts_out.mkdir(exist_ok=True)
         if font_dirs is None:
             tf = template_dir / "fonts"
-            font_dirs = (tf,) if tf.is_dir() and any(tf.glob("*.ttf")) else (LEGACY_FONTS_DIR,)
+            font_dirs = (tf,) if tf.is_dir() else ()
         for fd in font_dirs:
             _copy_tree_plain(Path(fd), fonts_out, allowed_suffixes=FONT_SUFFIXES, skip_others=True)
         for rel, data in (extra_files or {}).items():

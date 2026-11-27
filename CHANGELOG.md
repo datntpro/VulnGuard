@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed — PDF PR-5: mailer + dọn dẹp fpdf2 (closes #102)
+- Email báo cáo định kỳ đính kèm PDF do engine Typst dựng (cùng builder với nút tải); engine lỗi/bận → gửi email không đính kèm, ghi log. Việc dựng PDF chạy trong thread, không chặn event loop.
+- Gỡ `fpdf2`/`Pillow`/`fonttools` khỏi lockfile, `report_builder.build_pdf`, `pentest.report.to_pdf/pdf_lines`, font DejaVu cũ (`scanner/assets/fonts`) và bước cài `fonts-dejavu` trong Dockerfile.
+- Trường văn bản tự do (description/remediation/matched_at/vị trí) được che secret (cùng redactor) và cắt độ dài **trước** khi dàn trang.
+- Job PDF: mỗi worker/instance dùng thư mục con riêng; sweeper không còn xoá file của worker khác. `filename*` quá dài giữ lại đuôi `_YYYYMMDD`.
+- `/export?format=pdf` bỏ qua bộ lọc severity/status/scan_type/diff/scope (có tài liệu + header `X-VG-Filters-Ignored`).
+
 ### Added — PDF PR-3: tải PDF trực tiếp (Typst)
 - `format=pdf` cho scan / pentest / web scan / doc review dựng bằng engine Typst và trả file đính kèm (tên file an toàn + `filename*` RFC 5987); job nền `POST|GET /api/reports/pdf-jobs` cho báo cáo > 300 phát hiện; `503 pdf_busy` + `Retry-After`; rate-limit + audit log.
 - UI: một nút "⬇ Xuất PDF" tải file; gỡ `window.print`, nút "In/Lưu PDF", "PDF nhanh" và ghi chú Ctrl/Cmd+P.

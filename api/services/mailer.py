@@ -5,6 +5,7 @@ Cấu hình SMTP lưu ở runtime_settings (mật khẩu mã hoá Fernet).
 import logging
 import smtplib
 import ssl
+import time
 from email.message import EmailMessage
 from typing import Dict, List
 
@@ -56,10 +57,33 @@ def send_email(to_addr: str, subject: str, body: str,
             s.send_message(msg)
 
 
+def _scan_pdf(db: Session, scan_id: str):
+    """Typst PDF for a scan via the SAME engine/builder as the download endpoint (PDF PR-5).
+
+    Returns ``(bytes, ascii_stem)`` or ``None`` when the engine is unavailable/fails: the mail is then
+    sent WITHOUT an attachment (and says so) rather than falling back to any other renderer.
+    """
+    from api.services import pdf_export
+    from scanner.pdf.errors import PdfBusy, PdfEngineError
+    try:
+        pre = pdf_export.prepare("scan", scan_id, db, None, {})
+        for attempt in range(6):          # all render slots busy -> wait our turn
+            try:
+                data, stem, _ = pdf_export.render_pdf("scan", pre)
+                return bytes(data), stem
+            except PdfBusy:
+                time.sleep(2)
+        logger.warning("[mailer] PDF engine busy, gửi không kèm PDF (scan %s)", scan_id)
+    except PdfEngineError as e:
+        logger.warning("[mailer] không tạo được PDF (scan %s): %s", scan_id, getattr(e, "code", type(e).__name__))
+    except Exception as e:  # noqa: BLE001 - mail must still go out
+        logger.warning("[mailer] lỗi tạo PDF (scan %s): %s", scan_id, type(e).__name__)
+    return None
+
+
 def send_scan_report(db: Session, scan_id: str, to_addr: str, project_name: str) -> None:
-    """Dựng PDF báo cáo + tóm tắt rồi gửi cho owner."""
+    """Dựng PDF báo cáo (Typst) + tóm tắt rồi gửi cho owner."""
     from api.models import Scan, Vulnerability, ACTIVE_VULN_STATUS_VALUES
-    from scanner import report_builder as rb
 
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
@@ -67,12 +91,14 @@ def send_scan_report(db: Session, scan_id: str, to_addr: str, project_name: str)
     vulns = db.query(Vulnerability).filter(Vulnerability.scan_id == scan_id).all()
     active = [v for v in vulns if (v.status.value if hasattr(v.status, "value") else v.status) in ACTIVE_VULN_STATUS_VALUES]
     c = _counts(active)
-    pdf = rb.build_pdf(scan, vulns, project_name)
+    pdf = _scan_pdf(db, scan_id)
 
     verdict = ("CÓ lỗ hổng NGHIÊM TRỌNG — cần xử lý ngay" if c["CRITICAL"] else
                "Có lỗ hổng mức CAO — cần xử lý" if c["HIGH"] else
                "Có lỗ hổng mức trung bình/thấp" if (c["MEDIUM"] or c["LOW"]) else
                "Không phát hiện lỗ hổng mở")
+    attach_note = ("Báo cáo chi tiết (PDF) được đính kèm." if pdf else
+                   "Không tạo được PDF đính kèm (engine PDF không khả dụng) — hãy tải báo cáo từ VulnGuard.")
     body = (
         f"Xin chào,\n\n"
         f"Báo cáo quét bảo mật tự động cho repository: {project_name} (scan #{scan.scan_number}).\n\n"
@@ -83,10 +109,9 @@ def send_scan_report(db: Session, scan_id: str, to_addr: str, project_name: str)
         f"  - Trung bình:   {c['MEDIUM']}\n"
         f"  - Thấp:         {c['LOW']}\n"
         f"  - Thông tin:    {c['INFO']}\n\n"
-        f"Báo cáo chi tiết (PDF) được đính kèm. Vui lòng xử lý các lỗ hổng theo thứ tự ưu tiên.\n\n"
+        f"{attach_note} Vui lòng xử lý các lỗ hổng theo thứ tự ưu tiên.\n\n"
         f"— VulnGuard DevSecOps Platform"
     )
-    send_email(to_addr, f"[VulnGuard] Báo cáo bảo mật: {project_name} (#{scan.scan_number})",
-               body, [{"filename": f"vulnguard_{project_name}_{scan.scan_number}.pdf",
-                       "content": bytes(pdf), "mime": "application/pdf"}])
-    logger.info(f"[mailer] đã gửi report scan {scan_id} tới {to_addr}")
+    attachments = ([{"filename": f"{pdf[1]}.pdf", "content": pdf[0], "mime": "application/pdf"}] if pdf else [])
+    send_email(to_addr, f"[VulnGuard] Báo cáo bảo mật: {project_name} (#{scan.scan_number})", body, attachments)
+    logger.info(f"[mailer] đã gửi report scan {scan_id} tới {to_addr} (pdf={'có' if pdf else 'không'})")

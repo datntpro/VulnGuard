@@ -751,8 +751,15 @@ def export_scan(
     db: Session = Depends(get_db)
 ):
     if format == "pdf":   # PDF PR-3: Typst engine, cùng builder với /report?format=pdf
+        # PDF PR-5 (quyết định): PDF luôn là báo cáo ĐẦY ĐỦ của scan — severity/status/scan_type/diff/scope
+        # KHÔNG áp dụng (chỉ json/csv/md/sarif/ai lọc). Báo bằng header để client không hiểu nhầm.
         from api.services import pdf_export
-        return pdf_export.pdf_response("scan", scan_id, request, db, {}, want_async=async_)
+        resp = pdf_export.pdf_response("scan", scan_id, request, db, {}, want_async=async_)
+        ignored = [k for k, v in (("severity", severity), ("status", status), ("scan_type", scan_type),
+                                  ("diff", diff if diff != "all" else None), ("scope", scope if scope != "all" else None)) if v]
+        if ignored:
+            resp.headers["X-VG-Filters-Ignored"] = ",".join(ignored)
+        return resp
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan không tồn tại")

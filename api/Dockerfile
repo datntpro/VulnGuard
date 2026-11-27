@@ -128,10 +128,8 @@ ARG SECLISTS_TAG=2026.2
 RUN git clone --depth 1 --branch "${SECLISTS_TAG}" https://github.com/danielmiessler/SecLists.git /usr/share/seclists 2>/dev/null \
     || echo "⚠ SecLists clone failed — content_discovery cần chỉ định wordlist thủ công"
 
-# 9. Fonts (DejaVu phủ tiếng Việt cho fpdf2). KHÔNG cài Chromium trong ảnh API (PR-0: gỡ renderer PDF SSRF/LFI).
-RUN (apt-get update && apt-get install -y --no-install-recommends fonts-dejavu \
-     && rm -rf /var/lib/apt/lists/*) \
-    || echo "⚠ fonts-dejavu install failed"
+# 9. (PDF PR-5) Không còn cài font hệ thống: engine Typst chỉ dùng font đóng gói trong scanner/pdf/templates/fonts.
+#    KHÔNG cài Chromium trong ảnh API (PR-0: gỡ renderer PDF SSRF/LFI).
 
 # ─────────────────────────────────────────────
 # Python dependencies
