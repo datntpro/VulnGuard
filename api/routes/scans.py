@@ -266,7 +266,10 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
         logger.info(f"[AI] Bắt đầu phân tích {total} vulnerabilities cho scan {scan_id}")
 
         _uid = getattr(_scan_row, "triggered_by_user_id", None) if _scan_row else None
-        analyzer = AIAnalyzer(user_id=_uid, job_kind="scan" if _uid else "schedule", job_id=scan_id)
+        analyzer = AIAnalyzer(user_id=_uid, job_kind="scan" if _uid else "schedule", job_id=scan_id,
+                              pinned_credential_id=getattr(_scan_row, "ai_credential_id", None),
+                              sched_policy=getattr(_scan_row, "ai_sched_policy", None),
+                              sched_owner_id=getattr(_scan_row, "ai_sched_owner_id", None))
         done_count = 0
         semaphore = _asyncio.Semaphore(3)  # Tối đa 3 vuln song song
 
@@ -433,8 +436,14 @@ async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, ba
             _remove_upload_dir(db, scans[0])
             db.delete(scans[0]); db.commit(); scans = scans[1:]
         next_number = (scans[-1].scan_number + 1) if scans else 1
+        from api.services.llm_resolver import pin_for_user, schedule_pin
+        # [AI PR-3] ghim credential của người khởi chạy lúc tạo scan (không có → chọn lúc phân tích theo policy)
+        pin, sp, so = pin_for_user(user_id), None, None
+        if not user_id:      # scan hệ thống (API không user)
+            sp, so, pin = schedule_pin(None, None)
         scan = Scan(project_id=project_id, scan_number=next_number, scan_path=scan_path,
-                    scan_types=scan_types, status=ScanStatus.PENDING, triggered_by_user_id=user_id)
+                    scan_types=scan_types, status=ScanStatus.PENDING, triggered_by_user_id=user_id,
+                    ai_credential_id=pin, ai_sched_policy=sp, ai_sched_owner_id=so)
         db.add(scan); db.commit(); db.refresh(scan)
     background_tasks.add_task(_run_scan_background, scan.id, scan_path, scan_types, run_ai)
     return scan

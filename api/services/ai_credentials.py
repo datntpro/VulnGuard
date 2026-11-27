@@ -248,6 +248,43 @@ def update_params(db, cred_id: str, params: Dict[str, Any], actor: Optional[str]
     return _meta(row)
 
 
+_CODE_STATUS = {"VALID": "valid", "INVALID_KEY": "invalid", "NO_MODEL_ACCESS": "forbidden", "RATE_LIMITED": "rate_limited"}
+
+
+def record_validation(db, cred_id: str, code: str, actor: Optional[str] = None) -> Dict[str, Any]:
+    """Ghi kết quả test/validate (mã chuẩn hoá, KHÔNG văn bản provider). Không đụng credential đã thu hồi."""
+    row = _get(db, cred_id)
+    if row.status in ("revoked", "disabled"):
+        return _meta(row)
+    row.last_validated_at = datetime.utcnow()
+    row.last_error_code = None if code == "VALID" else (code or "UNKNOWN")[:40]
+    if code in _CODE_STATUS:                  # NETWORK/TIMEOUT/BAD_BASE_URL: không kết luận key hỏng → giữ status
+        row.status = _CODE_STATUS[code]
+    db.flush()
+    _audit("test", actor, row, outcome=code or "UNKNOWN")
+    return _meta(row)
+
+
+def set_default(db, owner_user_id: str, cred_id: Optional[str]) -> None:
+    """Đặt credential mặc định của user (hoặc bỏ mặc định nếu None). Tối đa MỘT (partial unique index)."""
+    from api.ai_cred_models import AiCredential
+    db.query(AiCredential).filter(AiCredential.owner_user_id == owner_user_id,
+                                  AiCredential.is_default.is_(True)).update({"is_default": False})
+    db.flush()
+    if cred_id:
+        row = _get(db, cred_id)
+        if row.owner_user_id != owner_user_id or row.status in ("revoked", "disabled"):
+            raise CredentialError("AI_CRED_FORBIDDEN")
+        row.is_default = True
+        db.flush()
+
+
+def count_active(db, owner_user_id: str) -> int:
+    from api.ai_cred_models import AiCredential
+    return (db.query(AiCredential).filter(AiCredential.owner_user_id == owner_user_id,
+                                          AiCredential.status.notin_(("revoked", "disabled"))).count())
+
+
 def list_meta(db, *, owner_user_id: Optional[str] = None, scope: Optional[str] = None) -> List[Dict[str, Any]]:
     from api.ai_cred_models import AiCredential
     q = db.query(AiCredential)
@@ -430,3 +467,14 @@ def startup() -> None:
         migrate_org_config()
     except Exception:
         logger.error("[ai-cred] startup migration lỗi (app vẫn chạy với cấu hình cũ)")
+    try:   # [AI PR-3] purge tombstone quá hạn lúc boot (scheduler chỉ chạy ở production)
+        from api.services import ai_usage
+        db, _ = _open_session(None)
+        try:
+            purge_expired(db)
+            ai_usage.purge_old(db)
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.error("[ai-cred] purge lúc khởi động lỗi")

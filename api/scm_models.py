@@ -68,6 +68,9 @@ class ScanSchedule(Base):
     last_error = Column(String(1000), nullable=True)
     next_run_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+    created_by_user_id = Column(String(64), nullable=True)           # [AI PR-3] chủ lịch (cho policy 'owner')
+    ai_owner_consent = Column(Boolean, nullable=True)                # [AI PR-3] False = lần sửa cuối do người KHÁC chủ lịch → không dùng key cá nhân của chủ
+    ai_credential_policy = Column(String(16), nullable=True)         # [AI PR-3] org | owner | local_only | inherit (null = inherit)
 
     def compute_next(self, base: datetime = None) -> datetime:
         from datetime import timedelta

@@ -240,6 +240,9 @@ class CloudAnalyzer:
         route = route or resolve(LLMContext(feature="test"))
         self.route = route
         self.client, self.model, self.family = open_client(route)
+        from api.services.ai_usage import meter_for   # [AI PR-3] usage + hạn mức mỗi lần gọi
+        self.meter = meter_for(route)
+        self._raw = None
         self.first_party = self.family == "anthropic_first"
 
     @property
@@ -252,9 +255,23 @@ class CloudAnalyzer:
         return f"{base}:{self.model}"
 
     async def _create(self, system: str, user: str, schema: dict, max_tokens: int = 8000) -> str:
-        if self.family == "openai":
-            return await self._create_openai(system, user, schema, max_tokens)
-        return await self._create_anthropic(system, user, schema, max_tokens)
+        m = self.meter
+        tok = None
+        if m is not None:
+            tok = m.pre()       # RouteRefused (credential bị thu hồi / hết hạn mức) → analyze_cloud trả fallback + error code
+        t0 = time.monotonic()
+        try:
+            if self.family == "openai":
+                out = await self._create_openai(system, user, schema, max_tokens)
+            else:
+                out = await self._create_anthropic(system, user, schema, max_tokens)
+        except Exception:
+            if m is not None:
+                m.post(error_code="PROVIDER_ERROR", started=t0, token=tok)
+            raise
+        if m is not None:
+            m.post(self._raw, started=t0, token=tok)
+        return out
 
     async def _create_anthropic(self, system: str, user: str, schema: dict, max_tokens: int) -> str:
         kwargs = dict(
@@ -270,6 +287,7 @@ class CloudAnalyzer:
             kwargs["betas"] = ["server-side-fallback-2026-07-01"]
             kwargs["fallbacks"] = "default"
         resp = await self.client.beta.messages.create(**kwargs)
+        self._raw = resp
         if resp.stop_reason == "refusal":
             cat = getattr(getattr(resp, "stop_details", None), "category", None)
             raise RuntimeError(f"Model từ chối phân tích (category={cat})")
@@ -291,6 +309,7 @@ class CloudAnalyzer:
             resp = await self.client.chat.completions.create(
                 model=self.model, messages=messages,
                 max_completion_tokens=max_tokens, response_format=rf_schema)
+            self._raw = resp
             return resp.choices[0].message.content or ""
         except Exception as e:
             msg = str(e).lower()
@@ -302,6 +321,7 @@ class CloudAnalyzer:
             resp = await self.client.chat.completions.create(
                 model=self.model, messages=messages,
                 max_completion_tokens=max_tokens, response_format={"type": "json_object"})
+            self._raw = resp
             return resp.choices[0].message.content or ""
 
     async def analyze_finding(self, vuln: Dict[str, Any], local_opinion: Optional[dict] = None) -> Dict[str, Any]:

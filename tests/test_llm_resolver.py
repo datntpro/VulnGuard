@@ -63,13 +63,19 @@ def test_routing_matrix_matches_legacy(ai, mode, feature, escalate, expected):
     assert resolve(_ctx(feature, escalate=escalate)).kind == expected
 
 
-def test_coworker_is_local_in_every_mode_and_uses_runtime_ollama(ai):
+def test_coworker_is_local_in_local_and_default_hybrid_and_uses_runtime_ollama(ai):
+    """[AI PR-3] A1: Co-work đi theo Settings › AI. Local và Hybrid (dòng Co-work mặc định local) → Ollama; cloud xem
+    tests/test_ai_policy_precedence.py."""
     from api.services.llm_resolver import LocalOllama, resolve
-    for mode in ("local_only", "hybrid", "cloud_only"):
+    for mode in ("local_only", "hybrid"):
         _save(ai, mode=mode)
         r = resolve(_ctx("coworker", user_id="u1", job_kind="coworker_conversation", needs_tools=True))
         assert isinstance(r, LocalOllama)
         assert (r.url, r.model, r.vision_model) == ("http://10.9.8.7:11434", "qwen2.5:7b", "llava")
+    # suggest / vision / health: luôn Ollama kể cả cloud_only (D15)
+    _save(ai, mode="cloud_only")
+    for jk in ("coworker_suggest", "coworker_vision", "coworker_health"):
+        assert isinstance(resolve(_ctx("coworker", user_id="u1", job_kind=jk)), LocalOllama)
 
 
 @pytest.mark.parametrize("provider,sec,model,family", [

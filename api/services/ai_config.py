@@ -66,6 +66,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "escalate_min_severity": "HIGH",
         "fp_band_low": 15,
         "fp_band_high": 85,
+        "tasks": {"coworker": "local"},   # [AI PR-3] A1: dòng Co-work của bảng Hybrid (local mặc định; chỉ ADMIN sửa)
+    },
+    "policy": {                       # [AI PR-3] xem api/services/ai_policy.py — mặc định = hành vi không đổi
+        "byok": "allowed",
+        "fallback_to_org": True,
+        "allowed": [],
+        "org_quota": {"usd_per_user_month": None, "rpm_per_user": None},
+        "user_quota_own_keys": {"rpm_per_user": 120},
+        "scheduled_jobs_credential": "org",
+        "custom_base_url": "admin_only",
+        "base_url_allowlist": [],
     },
     "privacy": {
         "send_code_context": True,
@@ -112,6 +123,9 @@ def get_anthropic_api_key(cfg: Optional[dict] = None) -> Optional[str]:
 def public_config(cfg: Optional[dict] = None) -> Dict[str, Any]:
     """Config an toàn để trả về UI — bỏ secret mọi provider, chỉ để lại hint."""
     cfg = copy.deepcopy(cfg or load_config())
+    # [AI PR-3] policy chỉ ADMIN thấy (qua /api/ai/settings); id credential org / cờ migrate / kết quả probe là nội bộ
+    for k in ("policy", "org_credential_id", "migrations", "probe"):
+        cfg.pop(k, None)
     for sec in _KEYED_SECTIONS:
         if not isinstance(cfg.get(sec), dict):
             continue
@@ -139,7 +153,10 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
     """Merge update vào config hiện tại, validate, mã hoá api_key mới (nếu có), ghi file."""
     with _lock:
         cfg = load_config()
+        old_base_url = str((cfg.get("openai") or {}).get("base_url") or "").strip()
         update = copy.deepcopy(update or {})
+        for k in ("migrations", "org_credential_id", "probe"):   # [AI PR-3] nội bộ — không nhận từ client
+            update.pop(k, None)
         # Tách api_key (write-only) của MỌI provider section trước khi merge
         new_keys: Dict[str, Optional[str]] = {}
         for sec in _KEYED_SECTIONS:
@@ -167,6 +184,15 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
         if not (0 <= lo <= hi <= 100):
             raise ValueError("fp_band phải thoả 0 ≤ low ≤ high ≤ 100")
         cfg["hybrid"]["fp_band_low"], cfg["hybrid"]["fp_band_high"] = lo, hi
+        tasks = cfg["hybrid"].get("tasks")
+        if not isinstance(tasks, dict) or tasks.get("coworker", "local") not in ("local", "cloud"):
+            raise ValueError("hybrid.tasks.coworker phải là local | cloud")
+        from api.services import ai_policy   # [AI PR-3]
+        cfg["policy"] = ai_policy.normalize(cfg.get("policy"))
+        oa_url = ((update.get("openai") or {}).get("base_url") if isinstance(update.get("openai"), dict) else None)
+        if cfg["policy"]["custom_base_url"] == "off" and isinstance(oa_url, str) and oa_url.strip() \
+                and oa_url.strip() != old_base_url:       # lưu lại đúng URL cũ không đổi thì được
+            raise ValueError("BAD_BASE_URL: custom base_url bị policy tắt")   # áp cho MỌI đường lưu (cả PUT /api/ai/config cũ)
         cfg["privacy"]["context_lines"] = max(0, min(int(cfg["privacy"]["context_lines"]), 80))
         for k in ("send_code_context", "redact_secrets"):
             cfg["privacy"][k] = bool(cfg["privacy"][k])

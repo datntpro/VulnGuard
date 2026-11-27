@@ -68,7 +68,7 @@ def _ensure_project(db: Session, repo: ScmRepo) -> Project:
 
 
 async def run_repo_scan(repo_id: str, email_report: bool = False,
-                        schedule_id: Optional[str] = None) -> Optional[str]:
+                        schedule_id: Optional[str] = None, user_id: Optional[str] = None) -> Optional[str]:
     """Pipeline đầy đủ: clone → tạo scan → chạy → (tuỳ chọn) gửi report. Trả scan_id."""
     from api.config import settings as _settings
     from api.routes.scans import _run_scan_background
@@ -100,8 +100,19 @@ async def run_repo_scan(repo_id: str, email_report: bool = False,
             db.delete(scans[0]); db.commit()
             scans = scans[1:]
         next_number = (scans[-1].scan_number + 1) if scans else 1
+        # [AI PR-3] credential AI: người bấm "scan now" → job của họ (ghim default); lịch/hệ thống → policy lịch
+        from api.scm_models import ScanSchedule as _Sch
+        from api.services.llm_resolver import pin_for_user, schedule_pin
+        pin, sp, so = None, None, None
+        if user_id:
+            pin = pin_for_user(user_id)
+        else:
+            sch = db.query(_Sch).filter(_Sch.id == schedule_id).first() if schedule_id else None
+            sp, so, pin = schedule_pin(getattr(sch, "created_by_user_id", None), getattr(sch, "ai_credential_policy", None),
+                                     getattr(sch, "ai_owner_consent", True))
         scan = Scan(project_id=project.id, scan_number=next_number, scan_path=clone_dest,
-                    scan_types=scan_types, status=ScanStatus.PENDING)
+                    scan_types=scan_types, status=ScanStatus.PENDING, triggered_by_user_id=user_id,
+                    ai_credential_id=pin, ai_sched_policy=sp, ai_sched_owner_id=so)
         db.add(scan); db.commit(); db.refresh(scan)
         scan_id = scan.id
 

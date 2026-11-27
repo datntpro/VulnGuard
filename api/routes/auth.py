@@ -56,6 +56,8 @@ ACTIVE_SCAN_PREFIXES = ("/api/pentest", "/api/webscans", "/api/domains")
 ADMIN_ONLY = [
     ("*", "/api/auth/users"),
     ("PUT", "/api/ai/config"),
+    ("PUT", "/api/ai/settings"),         # [AI PR-3]
+    ("*", "/api/ai/credentials"),        # [AI PR-3] danh sách + thu hồi credential của mọi user (không có /api/me ở đây)
     ("PUT", "/api/settings"),
     # L-1: các endpoint con của settings (logo, sonarqube/smtp test) + SCM (SSRF/dùng token đã lưu) + AI test
     ("POST", "/api/settings"),
@@ -765,9 +767,19 @@ def update_user(user_id: str, payload: UserUpdate, admin: User = Depends(require
         user.password_hash = hash_password(payload.password)
         user.must_change_password = True    # D-11: admin đặt lại mật khẩu → người dùng phải đổi
         user.token_version += 1
+    _disable_ai_creds_if_needed(db, user, admin)    # CÙNG transaction với đổi is_active/role: lỗi → rollback cả hai
     db.commit()
     db.refresh(user)
     return user
+
+
+def _disable_ai_creds_if_needed(db: Session, user: User, actor: User) -> None:
+    """[AI PR-3] D13: vô hiệu hoá user / hạ xuống VIEWER → credential AI của họ `disabled` ngay (purge sau 30 ngày).
+    Chỉ flush (không commit) — người gọi commit chung với thay đổi user."""
+    if user.is_active and user.role != UserRole.VIEWER:
+        return
+    from api.services import ai_credentials
+    ai_credentials.disable_for_user(db, user.id, actor=actor.id)
 
 
 @router.delete("/users/{user_id}", status_code=204)
@@ -779,6 +791,8 @@ def delete_user(user_id: str, admin: User = Depends(require_admin), db: Session 
         raise HTTPException(status_code=400, detail="Không thể tự xoá tài khoản đang đăng nhập")
     if user.role == UserRole.ADMIN and _active_admin_count(db) <= 1:
         raise HTTPException(status_code=400, detail="Phải còn ít nhất 1 ADMIN đang hoạt động")
+    from api.services import ai_credentials   # [AI PR-3] cùng transaction với xoá user (hàng credential còn để audit/usage)
+    ai_credentials.disable_for_user(db, user.id, actor=admin.id)
     db.delete(user)
     db.commit()
     return None
