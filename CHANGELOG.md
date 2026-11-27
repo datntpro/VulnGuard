@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added — PDF PR-3: tải PDF trực tiếp (Typst)
+- `format=pdf` cho scan / pentest / web scan / doc review dựng bằng engine Typst và trả file đính kèm (tên file an toàn + `filename*` RFC 5987); job nền `POST|GET /api/reports/pdf-jobs` cho báo cáo > 300 phát hiện; `503 pdf_busy` + `Retry-After`; rate-limit + audit log.
+- UI: một nút "⬇ Xuất PDF" tải file; gỡ `window.print`, nút "In/Lưu PDF", "PDF nhanh" và ghi chú Ctrl/Cmd+P.
+
 ### Security — Docker hardening, supply chain, lockfiles (PR-H; N-5, N-9, L-5, B-6) (BREAKING for local-image scans / dependency workflow)
 - **N-5 / D-4:** `docker.sock` is no longer mounted into the app (a `:ro` socket mount still accepts `POST /containers/create` with `Privileged`).
   New `docker-compose.local-images.yml` routes `DOCKER_HOST` through a pinned, read-only `docker-socket-proxy` (`POST=0`, images/ping/version only; port not published).

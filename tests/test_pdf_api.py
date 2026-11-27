@@ -84,7 +84,7 @@ def test_scan_pdf_direct_download_headers():
 def test_scan_pdf_aliases_and_export():
     c, h, _ = _client()
     sid, _ = _seed_scan()
-    for url in (f"/api/scans/{sid}/report.pdf", f"/api/scans/{sid}/export?format=pdf"):
+    for url in (f"/api/scans/{sid}/report.pdf", f"/api/projects/scans/{sid}/export?format=pdf"):
         r = c.get(url, headers=h)
         assert r.status_code == 200 and r.content[:5] == b"%PDF-", url
 
@@ -327,6 +327,33 @@ def test_webscan_and_docreview_endpoints_require_auth_and_404():
     assert c.get("/api/docreview/versions/x/export?format=pdf", headers=h).status_code == 404
 
 
+def test_webscan_and_docreview_pdf_render():
+    from api.docreview_models import DocType, Document, DocumentVersion, FindingStatus, ReviewFinding
+    from api.webscan_models import WebFinding, WebScan
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    ws = WebScan(domain_id="d1")
+    db.add(ws)
+    db.flush()
+    db.add(WebFinding(scan_id=ws.id, template_id="t", name="XSS phản chiếu", severity="high", matched_at="https://a.example/x"))
+    doc = Document(name="SRS thanh toán", doc_type=list(DocType)[0])
+    db.add(doc)
+    db.flush()
+    ver = DocumentVersion(document_id=doc.id, version_number=2, original_filename="a.docx", stored_path="/x")
+    db.add(ver)
+    db.flush()
+    db.add(ReviewFinding(version_id=ver.id, category="Xác thực", criteria_id="ASVS-2.1.1", criteria_text="Mật khẩu ≥ 12 ký tự",
+                         status=FindingStatus.NOT_MET))
+    db.commit()
+    wid, vid = ws.id, ver.id
+    db.close()
+    c, h, _ = _client()
+    r = c.get(f"/api/webscans/{wid}/export?format=pdf", headers=h)
+    assert r.status_code == 200 and r.content[:5] == b"%PDF-" and "VulnGuard_WebScan_" in r.headers["content-disposition"]
+    r = c.get(f"/api/docreview/versions/{vid}/export?format=pdf", headers=h)
+    assert r.status_code == 200 and r.content[:5] == b"%PDF-" and "VulnGuard_DocReview_SRS-thanh-toan_v2_" in r.headers["content-disposition"]
+
+
 # ── no print left (grep guard, like PR-0) ──
 def _git_grep(pattern, *paths):
     return subprocess.run(["git", "grep", "-nE", "-e", pattern, "--", *paths], cwd=ROOT, capture_output=True, text=True)
@@ -341,7 +368,8 @@ def test_ui_pdf_functions_never_open_a_window():
     src = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     for fn in ("async function downloadPdf(", "async function pdfErrMsg(", "function downloadReportPdf(", "async function ptDownloadReport("):
         i = src.index(fn)
-        body = src[i:i + src[i:].index("\n}\n") + 3]
+        end = src[i:].index("\n")
+        body = src[i:i + end + 1] if src[i:i + end].rstrip().endswith("}") else src[i:i + src[i:].index("\n}\n") + 3]
         assert "window.open(" not in body and "window.print" not in body, fn
     # every PDF button goes through downloadPdf
     assert not re.search(r"window\.open\([^)]*format=pdf", src)

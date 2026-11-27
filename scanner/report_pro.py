@@ -333,7 +333,7 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
 </section>
 
 <div class="actions">
-  <a class="pdf-link" href="/api/scans/{_esc(scan.id)}/report?format=pdf">⬇ Tải PDF</a>
+  <a class="pdf-link" href="/api/scans/{_esc(getattr(scan, 'id', ''))}/report?format=pdf">⬇ Tải PDF</a>
 </div>
 </body></html>"""
 

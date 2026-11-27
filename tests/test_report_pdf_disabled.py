@@ -12,14 +12,13 @@ from tests._authutil import bearer, login, make_user
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_format_pdf_returns_503_json():
+def test_format_pdf_no_longer_disabled():
+    """PR-3 replaced the PR-0 503 stub: format=pdf is served by the Typst engine (see test_pdf_api.py)."""
     c = TestClient(app)
     email, _ = make_user()
     h = bearer(login(c, email))
     r = c.get("/api/scans/does-not-matter/report?format=pdf", headers=h)
-    assert r.status_code == 503
-    assert "text/html" not in r.headers["content-type"]
-    assert r.json()["detail"]["code"] == "pdf_export_disabled"
+    assert r.status_code == 404 and "text/html" not in r.headers["content-type"]
 
 
 def test_pdf_render_module_gone():
@@ -65,6 +64,6 @@ def test_grep_guard_fails_on_git_error(tmp_path):
 
 def test_ui_download_report_pdf_has_no_window_open():
     src = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    m = re.search(r"async function downloadReportPdf\(.*?\n}\n", src, re.S)
-    assert m, "downloadReportPdf not found"
+    m = re.search(r"async function downloadPdf\(.*?\n}\n", src, re.S)
+    assert m, "downloadPdf not found"
     assert "window.open(" not in m.group(0)

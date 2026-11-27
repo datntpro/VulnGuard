@@ -221,6 +221,8 @@ MUST_CHANGE_ALLOWED = {
     "/api/auth/status", "/api/features", "/api/health",
 }
 SELF_SERVICE_PATHS = {"/api/auth/change-password", "/api/auth/logout", "/api/auth/logout-all"}
+# POST chỉ để ĐỌC/xuất (không đổi dữ liệu): VIEWER được phép — job PDF kiểm quyền y như GET export.
+VIEWER_READ_POSTS = {"/api/reports/pdf-jobs"}
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 _SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 
@@ -315,7 +317,7 @@ async def auth_middleware(request: Request, call_next):
     # B1: self-service (đổi mật khẩu, đăng xuất mọi phiên) phải dùng được cho VIEWER, nếu không user VIEWER
     # bị ép đổi mật khẩu (D-11) sẽ bị khoá vĩnh viễn.
     if (request.method not in ("GET", "HEAD") and user.role == UserRole.VIEWER
-            and path not in SELF_SERVICE_PATHS):
+            and path not in SELF_SERVICE_PATHS and path not in VIEWER_READ_POSTS):
         return JSONResponse({"detail": "Tài khoản VIEWER chỉ có quyền xem"}, status_code=403)
     if _is_admin_only(request.method, path) and user.role != UserRole.ADMIN:
         return JSONResponse({"detail": "Chỉ ADMIN được thực hiện thao tác này"}, status_code=403)

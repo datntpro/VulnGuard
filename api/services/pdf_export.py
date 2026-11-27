@@ -27,16 +27,7 @@ from urllib.parse import quote
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from scanner.pdf.errors import (
-    PdfBusy,
-    PdfCompileError,
-    PdfEngineError,
-    PdfInputTooLarge,
-    PdfInvalidInput,
-    PdfOutputTooLarge,
-    PdfTimeout,
-    PdfWorkerKilled,
-)
+from scanner.pdf.errors import PdfBusy, PdfEngineError
 
 _log = logging.getLogger("vulnguard.pdf")
 _audit = logging.getLogger("vulnguard.audit")
@@ -67,6 +58,7 @@ def _utf8_stem(s: Any, max_len: int = 80) -> str:
     """Display name for ``filename*``: keep Unicode letters, drop controls/quotes/path separators."""
     t = unicodedata.normalize("NFC", str(s or ""))
     t = _CTRL.sub("", t)
+    t = re.sub(r"\s+", "_", t)
     t = re.sub(r'[\\/:*?"<>|;,%\']+', "_", t).strip(" ._")
     return t[:max_len] or "report"
 
