@@ -500,11 +500,18 @@ def _tools_section(scan) -> str:
             f'<tbody>{rows}</tbody></table></div>')
 
 
+PDF_DISABLED_DETAIL = {
+    "code": "pdf_export_disabled",
+    "message": ("Xuất PDF trực tiếp đang tạm tắt để vá lỗi bảo mật renderer. Tạm thời dùng "
+                "⬇ PDF nhanh hoặc ⬇ JSON/SARIF; bản PDF mới sẽ có trong bản cập nhật tới."),
+}
+
+
 @router.get("/{scan_id}/report", response_class=HTMLResponse)
 def generate_report(
     scan_id: str,
     download: bool = Query(default=False, description="True để download file .html"),
-    format: str = Query(default="html", description="html | pdf (pdf cần Chromium headless)"),
+    format: str = Query(default="html", description="html (pdf tạm tắt → 503)"),
     db: Session = Depends(get_db),
 ):
     """
@@ -514,6 +521,10 @@ def generate_report(
     - Tích hợp AI explanation và fix suggestion
     - Ngôn ngữ tiếng Việt
     """
+    if format == "pdf":
+        # PR-0: renderer Chromium CLI (SSRF/LFI) đã bị gỡ; không bao giờ trả HTML cho format=pdf.
+        raise HTTPException(status_code=503, detail=PDF_DISABLED_DETAIL)
+
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan không tồn tại")
@@ -553,23 +564,6 @@ def generate_report(
     )
 
     project_slug = project.name.replace(" ", "_")[:40]
-
-    # Xuất PDF phía server (1-click) nếu môi trường có Chromium headless.
-    if format == "pdf":
-        from fastapi import Response
-        from scanner.pdf_render import PdfUnavailable, html_to_pdf
-        try:
-            pdf = html_to_pdf(html)
-        except PdfUnavailable:
-            raise HTTPException(
-                status_code=501,
-                detail="Máy chủ chưa có Chromium headless để xuất PDF. Hãy dùng nút "
-                       "'Lưu PDF / In' trong báo cáo (in ra PDF từ trình duyệt), hoặc cài "
-                       "Chromium trên máy chủ.")
-        return Response(
-            content=pdf, media_type="application/pdf",
-            headers={"Content-Disposition":
-                     f'attachment; filename="vulnguard_report_{project_slug}_scan{scan.scan_number}.pdf"'})
 
     headers = {}
     if download:
