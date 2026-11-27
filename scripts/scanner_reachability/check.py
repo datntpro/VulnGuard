@@ -73,10 +73,13 @@ def run_probed(argv, watch, forbidden, label, timeout=600):
     out.close()
     env = dict(os.environ, PYTHONPATH=PROBE_DIR + os.pathsep + os.environ.get("PYTHONPATH", ""),
                VG_PROBE_WATCH=",".join(watch), VG_PROBE_OUT=out.name)
-    env.setdefault("HOME", tempfile.gettempdir())
+    # Fresh writable HOME: read-only rootfs + root-owned tmpfs HOME made policy_sentry (checkov) crash
+    # at import (`Path.exists()` on ~/.policy_sentry) and the scan silently found nothing.
+    env["HOME"] = tempfile.mkdtemp(prefix="vghome-")
     p = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout)
     lines = open(out.name, encoding="utf-8").read().splitlines()
     os.unlink(out.name)
+    shutil.rmtree(env["HOME"], ignore_errors=True)
     loaded = [ln for ln in lines if ln.startswith("loaded pid=")]
     runs = [ln[4:] for ln in lines if ln.startswith("RUN ")]
     bad = [r for r in runs if forbidden.search(r)]
