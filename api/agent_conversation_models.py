@@ -29,4 +29,5 @@ class AgentConversation(Base):
     title = Column(String(200), nullable=True)
     folder_id = Column(String(64), nullable=True)
     skill_id = Column(String(120), nullable=True)
+    owner_user_id = Column(String(64), nullable=True, index=True)   # [AI PR-1] None = hội thoại cũ (chỉ ADMIN thấy)
     messages = Column(JSON, nullable=False, default=list)  # [{role, content}, ...]

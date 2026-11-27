@@ -224,8 +224,8 @@ def _resolve_url(base_url: Optional[str]) -> str:
     if base_url:
         return base_url.rstrip("/")
     try:
-        from api.services import runtime_settings
-        return runtime_settings.ollama_url()
+        from api.services.llm_resolver import LLMContext, resolve
+        return resolve(LLMContext(feature="file_assistant")).url   # [AI PR-1] seam
     except Exception:
         return "http://localhost:11434"
 

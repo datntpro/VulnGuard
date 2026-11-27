@@ -68,6 +68,8 @@ def _run_migrations():
             "ALTER TABLE domains ADD COLUMN ownership_method VARCHAR(20)",
             "ALTER TABLE domains ADD COLUMN ownership_verified_at DATETIME",
             "ALTER TABLE pentest_runs ADD COLUMN scope_snapshot TEXT",  # 1.7 audit
+            "ALTER TABLE scans ADD COLUMN triggered_by_user_id VARCHAR(64)",  # [AI PR-1]
+            "ALTER TABLE agent_conversations ADD COLUMN owner_user_id VARCHAR(64)",  # [AI PR-1]
         ):
             try:
                 conn.execute(text(ddl))

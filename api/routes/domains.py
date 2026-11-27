@@ -216,7 +216,7 @@ async def _run_ai_crawl_analysis(crawl_id: str, domain_url: str):
         db.commit()
 
         grouped = _group_endpoints_for_ai(db, crawl_id)
-        analyzer = AIAnalyzer()
+        analyzer = AIAnalyzer(job_kind="domain_crawl", job_id=crawl_id)
         result = await analyzer.analyze_crawl(domain_url, grouped)
 
         crawl = db.query(DomainCrawl).filter(DomainCrawl.id == crawl_id).first()

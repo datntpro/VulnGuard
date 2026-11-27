@@ -92,31 +92,32 @@ Chú ý:
 
 
 class AIAnalyzer:
-    def __init__(self):
+    def __init__(self, user_id: Optional[str] = None, job_kind: Optional[str] = None,
+                 job_id: Optional[str] = None):
         # Đọc fresh mỗi lần instantiate — không dùng module-level vars
-        # để pick up model thay đổi qua UI (PUT /api/ollama/active-model)
-        # Dùng cùng nguồn cấu hình với api/config.py (Settings) để tránh 2 default
-        # khác nhau cho cùng 1 biến — Settings đã tự đọc env var OLLAMA_URL/
-        # OLLAMA_TIMEOUT nếu có, nên không cần đọc os.environ riêng ở đây nữa.
+        # để pick up model thay đổi qua UI (PUT /api/ollama/active-model).
+        # [AI PR-1] URL/model Ollama đến từ resolver (route), không đọc runtime_settings trực tiếp.
         from api.config import settings as _settings
-        try:
-            from api.services import runtime_settings
-            self.ollama_url = runtime_settings.ollama_url()
-        except Exception:
-            self.ollama_url = _settings.ollama_url
+        self.user_id, self.job_kind, self.job_id = user_id, job_kind, job_id
         self._ollama_timeout = _settings.ollama_timeout
+        self._refresh_local()
 
-        # Ưu tiên: active model đã set qua UI > env var > default
-        self.model = self._get_active_model()
+    def _ctx(self, feature: str = "triage", **kw):
+        from api.services.llm_resolver import LLMContext
+        return LLMContext(feature=feature, user_id=self.user_id, job_kind=self.job_kind,
+                          job_id=self.job_id, **kw)
+
+    def _refresh_local(self) -> None:
+        from api.services.llm_resolver import resolve_local
+        # Luôn lấy tuyến Ollama (kể cả khi mode=cloud_only) để giữ url/model cho các hàm local khác
+        route = resolve_local(self._ctx())
+        self.ollama_url = route.url
+        self.model = route.model
 
     def _get_active_model(self) -> str:
-        """Lấy active model — ưu tiên từ api/routes/ollama nếu đã import."""
-        try:
-            from api.services import runtime_settings
-            return runtime_settings.ollama_model()
-        except Exception:
-            pass
-        return os.environ.get("OLLAMA_MODEL", "llama3.2")
+        """Model Ollama hiện hành (đọc lại từ resolver mỗi lần để nhận thay đổi qua UI)."""
+        self._refresh_local()
+        return self.model
 
     async def analyze(self, vuln) -> Dict[str, Any]:
         """Phân tích một vulnerability với Ollama (nhận ORM object)."""
@@ -159,11 +160,13 @@ class AIAnalyzer:
             fixed_version=vuln_data.get("fixed_version", ""),
         )
         from api.services.ai_config import load_config
+        from api.services.llm_resolver import Cloud, resolve
         cfg = load_config()
         mode = cfg.get("mode", "local_only")
 
-        if mode == "cloud_only":
-            return await self.analyze_cloud(vuln_data, cfg=cfg)
+        route = resolve(self._ctx())           # [AI PR-1] seam: cloud_only → Cloud, còn lại → Ollama
+        if isinstance(route, Cloud) or mode == "cloud_only":
+            return await self.analyze_cloud(vuln_data, cfg=cfg, route=route)
 
         try:
             response_text = await self._call_ollama(prompt)
@@ -174,7 +177,8 @@ class AIAnalyzer:
             local = self._fallback_analysis(str(e))
 
         if mode == "hybrid" and self._should_escalate(vuln_data, local, cfg):
-            cloud = await self.analyze_cloud(vuln_data, local_opinion=local, cfg=cfg)
+            cloud = await self.analyze_cloud(vuln_data, local_opinion=local, cfg=cfg,
+                                             route=resolve(self._ctx(escalate=True)))
             # Cloud lỗi (mất mạng, hết quota…) → giữ kết quả local thay vì mất hết
             if cloud.get("provider") and not cloud.get("error"):
                 return cloud
@@ -216,11 +220,13 @@ class AIAnalyzer:
         return h["fp_band_low"] <= fp <= h["fp_band_high"]
 
     async def analyze_cloud(self, vuln_data: Dict[str, Any], local_opinion: Optional[dict] = None,
-                            cfg: Optional[dict] = None) -> Dict[str, Any]:
+                            cfg: Optional[dict] = None, route=None) -> Dict[str, Any]:
         """Phân tích bằng Claude (Anthropic API / Bedrock). Không raise — lỗi trả fallback có `error`."""
         try:
             from scanner.cloud_ai import CloudAnalyzer
-            return await CloudAnalyzer(cfg).analyze_finding(vuln_data, local_opinion=local_opinion)
+            from api.services.llm_resolver import resolve
+            route = route or resolve(self._ctx("reanalyze"))
+            return await CloudAnalyzer(route, cfg).analyze_finding(vuln_data, local_opinion=local_opinion)
         except Exception as e:
             from scanner.cloud_ai import sanitize_error, redact_text_basic
             logger.error(f"Cloud AI analysis failed for {str(vuln_data.get('title', '?'))[:50]}: {redact_text_basic(str(e))[:500]}")

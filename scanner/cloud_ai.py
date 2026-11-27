@@ -221,98 +221,25 @@ def build_user_prompt(v: Dict[str, Any], code_context: Optional[str], local_opin
     return "\n".join(parts)
 
 
-# ─────────────────────────────────────────────
-# Client factory
-# ─────────────────────────────────────────────
-def build_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
-    """Trả về (async_client, model, family). family ∈ {'anthropic_first','bedrock','openai'}."""
-    provider = cfg["provider"]
-
-    # ── OpenAI (ChatGPT) & OpenRouter — SDK openai, API tương thích ──
-    if provider in ("openai", "openrouter"):
-        from openai import AsyncOpenAI
-        from api.services.ai_config import get_api_key, OPENROUTER_BASE_URL
-        sec = cfg[provider]
-        key = get_api_key(provider, cfg)
-        if not key:
-            raise RuntimeError(f"Chưa cấu hình API key cho {provider} (Settings → AI Provider)")
-        if provider == "openrouter":
-            base_url = OPENROUTER_BASE_URL
-            default_headers = {"HTTP-Referer": "https://github.com/datntpro/VulnGuard",
-                               "X-Title": "VulnGuard"}
-            model = sec.get("model") or "anthropic/claude-3.5-sonnet"
-        else:
-            base_url = (sec.get("base_url") or "").strip() or None
-            default_headers = None
-            model = sec.get("model") or "gpt-4o"
-        client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=180.0,
-                             default_headers=default_headers)
-        return client, model, "openai"
-
-    import anthropic
-
-    timeout = anthropic.Timeout(180.0, connect=10.0)
-    if provider == "bedrock":
-        b = cfg["bedrock"]
-        auth_mode = b.get("auth_mode", "aws_chain")
-        bedrock_tok = None
-        if auth_mode == "bedrock_api_key":
-            from api.services.ai_config import get_api_key
-            tok = get_api_key("bedrock", cfg)
-            if not tok:
-                raise RuntimeError("Chưa cấu hình Bedrock API key (Settings → AI Provider)")
-            # Truyền token theo TỪNG client — KHÔNG ghi os.environ (tiến trình con sẽ thừa hưởng)
-            bedrock_tok = tok
-        client = anthropic.AsyncAnthropicBedrockMantle(
-            api_key=bedrock_tok,
-            aws_region=b.get("region") or None,
-            aws_profile=(b.get("aws_profile") or None) if auth_mode == "profile" else None,
-            timeout=timeout,
-            # Bedrock không có server-side `fallbacks` → dùng middleware phía client
-            middleware=[anthropic.BetaRefusalFallbackMiddleware([{"model": "anthropic.claude-opus-4-8"}])],
-        )
-        return client, b.get("model") or "anthropic.claude-opus-5-5", "bedrock"
-
-    a = cfg["anthropic"]
-    mode = a.get("auth_mode", "api_key")
-    if mode == "api_key":
-        from api.services.ai_config import get_anthropic_api_key
-        key = get_anthropic_api_key(cfg)
-        if not key:
-            raise RuntimeError("Chưa cấu hình Anthropic API key (Settings → AI Provider)")
-        client = anthropic.AsyncAnthropic(api_key=key, timeout=timeout)
-    elif mode == "wif":
-        w = a.get("wif") or {}
-        for k in ("federation_rule_id", "organization_id", "identity_token_file"):
-            if not w.get(k):
-                raise RuntimeError(f"WIF thiếu trường {k}")
-        creds = anthropic.WorkloadIdentityCredentials(
-            identity_token_provider=anthropic.IdentityTokenFile(w["identity_token_file"]),
-            federation_rule_id=w["federation_rule_id"],
-            organization_id=w["organization_id"],
-            service_account_id=w.get("service_account_id") or None,
-            workspace_id=w.get("workspace_id") or None,
-        )
-        client = anthropic.AsyncAnthropic(credentials=creds, timeout=timeout)
-    else:  # environment — ANTHROPIC_API_KEY / ant auth login profile
-        client = anthropic.AsyncAnthropic(timeout=timeout)
-    return client, a.get("model") or "claude-opus-5-5", "anthropic_first"
-
-
 _PROVIDER_LABEL = {"anthropic_first": "claude-api", "bedrock": "bedrock",
                    "openai": "openai"}
 
 
 class CloudAnalyzer:
-    def __init__(self, cfg: Optional[Dict[str, Any]] = None):
+    def __init__(self, route=None, cfg: Optional[Dict[str, Any]] = None):
+        """route: Cloud route từ api.services.llm_resolver (client chỉ dựng qua resolver).
+        cfg: chỉ để đọc `privacy` (không chứa quyết định route)."""
         from api.services.ai_config import load_config
+        from api.services.llm_resolver import LLMContext, open_client, resolve
         self.cfg = cfg or load_config()
-        self.client, self.model, self.family = build_client(self.cfg)
+        route = route or resolve(LLMContext(feature="test"))
+        self.route = route
+        self.client, self.model, self.family = open_client(route)
         self.first_party = self.family == "anthropic_first"
 
     @property
     def provider_label(self) -> str:
-        prov = self.cfg.get("provider", "")
+        prov = getattr(self.route, "provider", None) or self.cfg.get("provider", "")
         base = _PROVIDER_LABEL.get(self.family, prov)
         # openrouter dùng family openai nhưng ghi nhãn theo provider thật
         if prov == "openrouter":

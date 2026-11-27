@@ -71,21 +71,19 @@ Chú ý:
 class DocReviewer:
     def __init__(self):
         from api.config import settings as _settings
-        try:
-            from api.services import runtime_settings
-            self.ollama_url = runtime_settings.ollama_url()
-        except Exception:
-            self.ollama_url = _settings.ollama_url
         self.timeout = _settings.ollama_timeout
-        self.model = self._get_active_model()
+        self._refresh()
+
+    def _refresh(self):
+        # [AI PR-1] URL/model Ollama chỉ đến từ resolver
+        from api.services.llm_resolver import LLMContext, resolve
+        route = resolve(LLMContext(feature="docreview"))
+        self.ollama_url = route.url
+        self.model = route.model
 
     def _get_active_model(self) -> str:
-        try:
-            from api.routes.ollama import get_active_model
-            return get_active_model()
-        except Exception:
-            pass
-        return os.environ.get("OLLAMA_MODEL", "llama3.2")
+        self._refresh()
+        return self.model
 
     async def review(self, doc_text: str, doc_type_label: str, checklist: list) -> list[dict[str, Any]]:
         """checklist: list of (criteria_id, category, criteria_text).

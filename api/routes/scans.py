@@ -265,7 +265,8 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
 
         logger.info(f"[AI] Bắt đầu phân tích {total} vulnerabilities cho scan {scan_id}")
 
-        analyzer = AIAnalyzer()
+        _uid = getattr(_scan_row, "triggered_by_user_id", None) if _scan_row else None
+        analyzer = AIAnalyzer(user_id=_uid, job_kind="scan" if _uid else "schedule", job_id=scan_id)
         done_count = 0
         semaphore = _asyncio.Semaphore(3)  # Tối đa 3 vuln song song
 
@@ -402,6 +403,7 @@ async def trigger_scan(
     project_id: str,
     payload: ScanCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -418,11 +420,12 @@ async def trigger_scan(
 
     scan = await _create_and_run_scan(
         db, project_id, real,
-        [t.value for t in payload.scan_types], payload.run_ai_analysis, background_tasks)
+        [t.value for t in payload.scan_types], payload.run_ai_analysis, background_tasks,
+        user_id=getattr(getattr(request.state, "user", None), "id", None))
     return scan
 
 
-async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, background_tasks):
+async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, background_tasks, user_id=None):
     """Tạo Scan (rolling) + chạy nền. Dùng chung cho scan theo path và scan file upload."""
     async with _get_project_lock(project_id):
         scans = db.query(Scan).filter(Scan.project_id == project_id).order_by(Scan.scan_number).all()
@@ -431,7 +434,7 @@ async def _create_and_run_scan(db, project_id, scan_path, scan_types, run_ai, ba
             db.delete(scans[0]); db.commit(); scans = scans[1:]
         next_number = (scans[-1].scan_number + 1) if scans else 1
         scan = Scan(project_id=project_id, scan_number=next_number, scan_path=scan_path,
-                    scan_types=scan_types, status=ScanStatus.PENDING)
+                    scan_types=scan_types, status=ScanStatus.PENDING, triggered_by_user_id=user_id)
         db.add(scan); db.commit(); db.refresh(scan)
     background_tasks.add_task(_run_scan_background, scan.id, scan_path, scan_types, run_ai)
     return scan
@@ -558,6 +561,7 @@ def _safe_extract_zip(src, dest_dir: str) -> int:
 async def scan_upload(
     project_id: str,
     background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
     scan_types: str = Form("SAST,SCA,IAC,SECRETS"),
     run_ai_analysis: bool = Form(True),
@@ -610,7 +614,8 @@ async def scan_upload(
         shutil.rmtree(dest, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Zip rỗng hoặc mọi file bị chặn (zip-slip)")
 
-    scan = await _create_and_run_scan(db, project_id, dest, types, run_ai_analysis, background_tasks)
+    scan = await _create_and_run_scan(db, project_id, dest, types, run_ai_analysis, background_tasks,
+                                      user_id=getattr(getattr(request.state, "user", None), "id", None))
     return scan
 
 

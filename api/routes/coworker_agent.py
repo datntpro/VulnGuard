@@ -33,14 +33,13 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.database import get_db
 
 from api.config import settings
-from api.services import runtime_settings
 from api.routes.coworker import _host_request  # tái dùng proxy sang coworker_host
 
 logger = logging.getLogger(__name__)
@@ -120,27 +119,53 @@ Mỗi lượt CHỈ trả về DUY NHẤT một object JSON, KHÔNG kèm bất k
 # ─────────────────────────────────────────────────────────────
 # Gọi Ollama (chat API, non-stream) — model lấy từ Settings
 # ─────────────────────────────────────────────────────────────
+class CoworkBackend:
+    """[AI PR-1] Giao diện backend của vòng lặp Co-work (A1). `chat()` trả (raw_text, model).
+    PR-3b sẽ thêm CloudToolBackend (native tools); hiện chỉ có LocalJsonBackend."""
+    async def chat(self, messages: List[Dict[str, str]], skill_body: Optional[str] = None) -> tuple[str, str]:
+        raise NotImplementedError
+
+
+class LocalJsonBackend(CoworkBackend):
+    """Giao thức hiện tại: JSON-in-text ReAct trên Ollama /api/chat — không đổi."""
+    def __init__(self, route):
+        self.route = route
+
+    async def chat(self, messages: List[Dict[str, str]], skill_body: Optional[str] = None) -> tuple[str, str]:
+        route = self.route
+        model = route.model
+        system = SYSTEM_PROMPT
+        if skill_body:
+            system = f"{SYSTEM_PROMPT}\n\n# ── SKILL NGHIỆP VỤ ĐANG ÁP DỤNG ──\n{skill_body}"
+        payload_messages = [{"role": "system", "content": system}] + messages
+        timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            r = await client.post(
+                f"{route.url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": payload_messages,
+                    "stream": False,
+                    "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 4096},
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data.get("message", {}).get("content", ""), model
+
+
+def _backend(conversation_id: Optional[str] = None) -> CoworkBackend:
+    """Chọn backend qua resolver. A1/PR-1: Co-work luôn LocalOllama → LocalJsonBackend."""
+    from api.services.llm_resolver import LLMContext, LocalOllama, RouteRefused, resolve
+    route = resolve(LLMContext(feature="coworker", job_kind="coworker_conversation",
+                               job_id=conversation_id, needs_tools=True))
+    if isinstance(route, LocalOllama):
+        return LocalJsonBackend(route)
+    raise RouteRefused(getattr(route, "code", "AI_ROUTE"), getattr(route, "message_key", ""))
+
+
 async def _chat_ollama(messages: List[Dict[str, str]], skill_body: Optional[str] = None) -> tuple[str, str]:
-    from api.routes.ollama import get_active_model
-    model = get_active_model()
-    system = SYSTEM_PROMPT
-    if skill_body:
-        system = f"{SYSTEM_PROMPT}\n\n# ── SKILL NGHIỆP VỤ ĐANG ÁP DỤNG ──\n{skill_body}"
-    payload_messages = [{"role": "system", "content": system}] + messages
-    timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=10.0, pool=5.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        r = await client.post(
-            f"{runtime_settings.ollama_url()}/api/chat",
-            json={
-                "model": model,
-                "messages": payload_messages,
-                "stream": False,
-                "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 4096},
-            },
-        )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("message", {}).get("content", ""), model
+    return await _backend().chat(messages, skill_body=skill_body)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -298,13 +323,14 @@ VISION_PROMPT = (
 
 async def _describe_image(image_bytes: bytes) -> str:
     """Gọi vision model trên Ollama để mô tả 1 ảnh."""
-    from api.routes.ollama import get_active_vision_model
-    model = get_active_vision_model()
+    from api.services.llm_resolver import LLMContext, resolve
+    route = resolve(LLMContext(feature="coworker", job_kind="coworker_vision"))
+    model = route.vision_model
     b64 = base64.b64encode(image_bytes).decode("ascii")
     timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=15.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         r = await client.post(
-            f"{runtime_settings.ollama_url()}/api/generate",
+            f"{route.url}/api/generate",
             json={"model": model, "prompt": VISION_PROMPT, "images": [b64],
                   "stream": False, "options": {"temperature": 0.1}},
         )
@@ -314,7 +340,7 @@ async def _describe_image(image_bytes: bytes) -> str:
 
 async def _analyze_images(images: List[bytes]) -> str:
     """Mô tả từng ảnh. Nếu vision model lỗi/chưa cài → báo rõ thay vì im lặng."""
-    from api.routes.ollama import get_active_vision_model
+    from api.services.llm_resolver import LLMContext, resolve
     parts = []
     for i, img in enumerate(images, 1):
         try:
@@ -322,7 +348,7 @@ async def _analyze_images(images: List[bytes]) -> str:
             parts.append(f"[Hình {i}] {desc or '(không mô tả được)'}")
         except Exception as e:
             note = (f"[Hình {i}] KHÔNG phân tích được ảnh bằng vision model "
-                    f"'{get_active_vision_model()}': {e}. "
+                    f"'{resolve(LLMContext(feature='coworker')).vision_model}': {e}. "
                     f"Hãy cài model hỗ trợ ảnh (vd: ollama pull llama3.2-vision) và chọn trong Settings.")
             parts.append(note)
             # Lỗi model thường lặp cho mọi ảnh → dừng sớm, chỉ báo 1 lần
@@ -402,7 +428,8 @@ def _to_llm_messages(messages: List[ChatMessage]) -> List[Dict[str, str]]:
     return [{"role": m.role, "content": m.content} for m in messages]
 
 
-async def _advance(folder_id: str, llm_messages: List[Dict[str, str]], skill_body: Optional[str] = None) -> Dict[str, Any]:
+async def _advance(folder_id: str, llm_messages: List[Dict[str, str]], skill_body: Optional[str] = None,
+                   backend: Optional[CoworkBackend] = None) -> Dict[str, Any]:
     """Chạy ĐÚNG MỘT bước agent rồi trả về (client tự gọi tiếp để có progress trực tiếp).
 
     - read_only  → thực thi, trả status "step" (kèm thought + observation) để render ngay.
@@ -411,8 +438,9 @@ async def _advance(folder_id: str, llm_messages: List[Dict[str, str]], skill_bod
     Chỉ tự retry NỘI BỘ khi model trả JSON sai định dạng (tối đa MAX_PARSE_RETRY lần).
     """
     model = None
+    backend = backend or _backend()
     for _ in range(MAX_PARSE_RETRY):
-        raw, model = await _chat_ollama(llm_messages, skill_body=skill_body)
+        raw, model = await backend.chat(llm_messages, skill_body=skill_body)
         llm_messages.append({"role": "assistant", "content": raw})
 
         action = parse_action(raw)
@@ -497,9 +525,9 @@ async def agent_step(req: AgentStepRequest):
 @router.get("/health")
 async def agent_health():
     """Kiểm tra coworker_host + model đang active."""
-    from api.routes.ollama import get_active_model
+    from api.services.llm_resolver import LLMContext, resolve
     host = await _host_request("GET", "/health")
-    return {"ok": True, "coworker_host": host, "model": get_active_model()}
+    return {"ok": True, "coworker_host": host, "model": resolve(LLMContext(feature="coworker", job_kind="coworker_health")).model}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -573,17 +601,46 @@ def _derive_title(messages: List[ChatMessage]) -> str:
     return "Hội thoại mới"
 
 
+def _uid(request: Request) -> Optional[str]:
+    return getattr(getattr(request.state, "user", None), "id", None)
+
+
+def _may_access(row, request: Request) -> bool:
+    """[AI PR-1] Hội thoại thuộc chủ sở hữu. Hàng cũ (owner NULL) chỉ ADMIN thấy.
+    AUTH tắt (không có user) → một người dùng duy nhất, thấy hết."""
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return True
+    owner = getattr(row, "owner_user_id", None)
+    if owner is None:
+        return str(getattr(getattr(user, "role", ""), "value", getattr(user, "role", ""))) == "ADMIN"
+    return owner == user.id
+
+
+def _scoped(db, request: Request, conv_id: str):
+    from api.agent_conversation_models import AgentConversation
+    r = db.query(AgentConversation).filter(AgentConversation.id == conv_id).first()
+    if r is None or not _may_access(r, request):
+        raise HTTPException(status_code=404, detail="Không tìm thấy hội thoại")   # không lộ sự tồn tại
+    return r
+
+
 @router.post("/conversations")
-async def save_conversation(req: SaveConversationRequest, db: Session = Depends(get_db)):
+async def save_conversation(req: SaveConversationRequest, request: Request, db: Session = Depends(get_db)):
     from api.agent_conversation_models import AgentConversation
     msgs = [m.model_dump() for m in req.messages]
     title = req.title or _derive_title(req.messages)
 
     conv = None
     if req.id:
-        conv = db.query(AgentConversation).filter(AgentConversation.id == req.id).first()
+        existing = db.query(AgentConversation).filter(AgentConversation.id == req.id).first()
+        if existing is not None:
+            if not _may_access(existing, request):
+                raise HTTPException(status_code=404, detail="Không tìm thấy hội thoại")
+            conv = existing
     if conv is None:
         conv = AgentConversation(id=req.id) if req.id else AgentConversation()
+        conv.owner_user_id = _uid(request)
         db.add(conv)
     conv.title = title
     conv.folder_id = req.folder_id
@@ -595,9 +652,10 @@ async def save_conversation(req: SaveConversationRequest, db: Session = Depends(
 
 
 @router.get("/conversations")
-async def list_conversations(db: Session = Depends(get_db)):
+async def list_conversations(request: Request, db: Session = Depends(get_db)):
     from api.agent_conversation_models import AgentConversation
     rows = db.query(AgentConversation).order_by(AgentConversation.updated_at.desc()).limit(200).all()
+    rows = [r for r in rows if _may_access(r, request)]
     return {"conversations": [
         {"id": r.id, "title": r.title, "skill_id": r.skill_id, "folder_id": r.folder_id,
          "updated_at": r.updated_at.isoformat() if r.updated_at else None}
@@ -606,21 +664,15 @@ async def list_conversations(db: Session = Depends(get_db)):
 
 
 @router.get("/conversations/{conv_id}")
-async def get_conversation(conv_id: str, db: Session = Depends(get_db)):
-    from api.agent_conversation_models import AgentConversation
-    r = db.query(AgentConversation).filter(AgentConversation.id == conv_id).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Không tìm thấy hội thoại")
+async def get_conversation(conv_id: str, request: Request, db: Session = Depends(get_db)):
+    r = _scoped(db, request, conv_id)
     return {"id": r.id, "title": r.title, "skill_id": r.skill_id, "folder_id": r.folder_id,
             "messages": r.messages or []}
 
 
 @router.delete("/conversations/{conv_id}")
-async def delete_conversation(conv_id: str, db: Session = Depends(get_db)):
-    from api.agent_conversation_models import AgentConversation
-    r = db.query(AgentConversation).filter(AgentConversation.id == conv_id).first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Không tìm thấy hội thoại")
+async def delete_conversation(conv_id: str, request: Request, db: Session = Depends(get_db)):
+    r = _scoped(db, request, conv_id)
     db.delete(r)
     db.commit()
     return {"ok": True}
