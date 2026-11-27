@@ -24,6 +24,14 @@ mkdir -p "$PWD/storage/db" "$PWD/storage/documents"
 # detect-secrets…) cài trong venv luôn tìm thấy — nếu không, scan sẽ âm thầm
 # bỏ qua tool mà vẫn báo "0 lỗi" (P0.1).
 export PATH="$PWD/$VENV/bin:$HOME/.local/bin:$PATH"
+# PDF engine (Typst): self-test nhanh, chỉ cảnh báo (không chặn khởi động).
+if PDF_MSG="$("$VENV/bin/python" -m scanner.pdf.selftest --quiet 2>&1)"; then
+  echo "$PDF_MSG" | tail -n 1
+else
+  echo "❌ $(echo "$PDF_MSG" | tail -n 1)" >&2
+  echo "$PDF_MSG" | grep -E "FAIL" >&2 || true
+  echo "   Xuất PDF sẽ không hoạt động tới khi sửa. Sửa: $VENV/bin/pip install --require-hashes -r api/requirements.txt" >&2
+fi
 # Mặc định CHỈ nghe localhost (an toàn). Mở LAN: VULNGUARD_BIND=0.0.0.0 (xem wiki "Truy cập từ máy khác trong LAN").
 # VULNGUARD_HOST là alias deprecated của VULNGUARD_BIND.
 if [ -z "${VULNGUARD_BIND:-}" ] && [ -n "${VULNGUARD_HOST:-}" ]; then

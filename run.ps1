@@ -16,5 +16,9 @@ $vhost = if ($env:VULNGUARD_BIND) { $env:VULNGUARD_BIND } elseif ($env:VULNGUARD
 $env:VULNGUARD_BIND = $vhost
 if ($env:AUTH_ENABLED -in @("false","0","no","off") -and $vhost -notin @("127.0.0.1","localhost","::1")) {
   Write-Host "AUTH_ENABLED=false khong duoc phep khi VULNGUARD_BIND=$vhost"; exit 1 }
+# PDF engine (Typst) self-test: chi canh bao
+$pdfOut = & ".venv\Scripts\python.exe" -m scanner.pdf.selftest --quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Write-Host ($pdfOut | Select-Object -Last 1) }
+else { Write-Host "PDF engine LOI (xuat PDF se khong chay): $($pdfOut | Select-Object -Last 1)"; Write-Host "Sua: .venv\Scripts\pip install --require-hashes -r api/requirements.txt (Windows ARM64: dung Python x64 hoac Docker)" }
 Write-Host "VulnGuard PRODUCTION: http://${vhost}:$port  (Ctrl+C de dung)"
 & ".venv\Scripts\python.exe" -m uvicorn api.main:app --host $vhost --port $port

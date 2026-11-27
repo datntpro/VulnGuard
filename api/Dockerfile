@@ -187,6 +187,11 @@ RUN mkdir -p /app/storage/db /app/storage/reports /app/storage/.trivy-cache \
 
 USER appuser
 
+# PDF (Typst) self-test: build FAIL nếu wheel typst/font/worker/sandbox hỏng (amd64 + arm64).
+# Render 1 trang tiếng Việt trong worker đã siết, kiểm font nhúng và chặn @preview (không mạng).
+# Không dùng `python -I`: -I bỏ cwd khỏi sys.path nên không import được scanner.* (WORKDIR=/app).
+RUN python -m scanner.pdf.selftest
+
 EXPOSE 8080
 
 # host 0.0.0.0 bên TRONG container là bình thường (bị cô lập); việc KHÔNG phơi ra

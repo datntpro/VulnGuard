@@ -87,3 +87,7 @@ Chế độ `--http` bắt buộc `VULNGUARD_MCP_TOKEN` và header `Authorizatio
 ## Lỡ commit nhầm secret
 
 `.gitignore` hiện **không** bao gồm `storage/secret.key`, `storage/ai_config.json`, `storage/runtime_settings.json`. Đừng `git add` thư mục `storage/`. Nếu lỡ commit: xoay khoá / đổi mật khẩu / thu hồi token liên quan, xoá khỏi lịch sử git, và không dùng lại secret đó. Lưu ý đổi `secret.key` làm mất khả năng giải mã các secret đã lưu (phải nhập lại) và vô hiệu mọi phiên đăng nhập.
+
+## PDF không xuất được
+
+Chạy `python -m scanner.pdf.selftest` (hoặc `python3 scripts/setup.py --check`): lệnh in từng bước đạt/lỗi và cách sửa. Nguyên nhân thường gặp: wheel `typst` chưa cài (cài lại lockfile: `pip install --require-hashes -r api/requirements.txt`), Windows ARM64 (không có wheel; dùng Python x64 hoặc Docker), hoặc thiếu thư mục font `scanner/assets/fonts` (kiểm tra bản `git pull` đầy đủ). Không cần Chromium/trình duyệt.

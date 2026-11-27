@@ -61,3 +61,21 @@ Scan theo lịch SCM có thể gửi PDF cho owner qua SMTP. Xem [[SCM Integrati
 ## Pentest
 
 Không có endpoint export riêng. Dữ liệu run, finding và traffic lấy qua các API `GET /api/pentest/...` (xem [[API Reference|API-Reference]]).
+
+## Xuất báo cáo PDF: engine Typst (đóng gói và kiểm tra)
+
+PDF được dựng bằng **Typst** (wheel `typst==0.15.2` trong lockfile có hash `api/requirements.txt`), chạy trong tiến trình con đã giới hạn RAM/CPU/thời gian, **không cần trình duyệt và không cần mạng** lúc dựng. Font nằm trong repo (`scanner/assets/fonts`, DejaVu; Be Vietnam Pro + JetBrains Mono sẽ đi kèm template) và được nhúng đầy đủ nên tiếng Việt hiển thị đúng.
+
+**Self-test** (dựng 1 trang tiếng Việt trong worker, kiểm `%PDF-`, chữ "Đối tượng kiểm thử", font nhúng Type0/FontFile2 thuộc bộ font của ta, và `@preview` bị chặn):
+
+```bash
+python -m scanner.pdf.selftest        # chạy ở thư mục gốc repo; in "PDF engine: typst 0.15.2 OK" hoặc lỗi + cách sửa
+python3 scripts/setup.py --check      # liệt kê tool + chạy self-test này (native)
+```
+
+- **Docker (amd64 + arm64):** `api/Dockerfile` chạy self-test sau khi copy source; lỗi → build FAIL. CI job `pdf-docker` build cả hai kiến trúc (arm64 trên runner arm gốc).
+- **Native (macOS, Linux, Windows x64):** `bash setup.sh` cài lockfile rồi chạy self-test; `bash run.sh` in trạng thái `PDF engine` khi khởi động (chỉ cảnh báo, không chặn app).
+- **Windows ARM64:** chưa có wheel typst, dùng Python x64 hoặc Docker.
+- **Lỗi:** chạy lại `pip install --require-hashes -r api/requirements.txt` (native) hoặc `docker compose build --no-cache` (Docker).
+
+**Nâng cấp bản cũ:** `git pull`, sau đó `docker compose build` (Docker) hoặc `bash setup.sh` (native) để nhận engine mới.
