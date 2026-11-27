@@ -180,12 +180,23 @@ def _login(page, base, email):
     page.wait_for_url(lambda u: "/login" not in u, timeout=15000)
 
 
+_STATE = {}   # một lần đăng nhập mỗi role (tránh chạm giới hạn đăng nhập)
+
+
+def new_ctx(browser, base, role, **kw):
+    if role not in _STATE:
+        c0 = browser.new_context(locale="vi-VN"); p0 = c0.new_page()
+        email, _ = make_user(role)
+        _login(p0, base, email)
+        _STATE[role] = c0.storage_state(); c0.close()
+    return browser.new_context(storage_state=_STATE[role], locale="vi-VN", **kw)
+
+
 def open_ai(browser, base, role, *, viewport=None, theme=None, lang=None, contract=True, settings=None):
-    ctx = browser.new_context(viewport=viewport or {"width": 1280, "height": 900}, locale="vi-VN")
+    ctx = new_ctx(browser, base, role, viewport=viewport or {"width": 1280, "height": 900})
     page = ctx.new_page()
     c = Contract(page, role.name, settings) if contract else None
-    email, _ = make_user(role)
-    _login(page, base, email)
+    page.goto(base + "/")
     page.wait_for_selector("#user-chip", state="visible", timeout=15000)
     init = []
     if theme:
@@ -462,7 +473,7 @@ def test_viewer_readonly_and_no_personal_keys(base_url, browser):
 
 # ───────── bridge (backend cũ, chưa có /api/ai/settings) ─────────
 def test_bridge_mode_keeps_legacy_tabs_and_never_fakes_unsaved_test(base_url, browser):
-    ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="vi-VN")
+    ctx = new_ctx(browser, base_url, UserRole.ADMIN, viewport={"width": 1280, "height": 900})
     page = ctx.new_page()
     log = []
 
@@ -473,9 +484,8 @@ def test_bridge_mode_keeps_legacy_tabs_and_never_fakes_unsaved_test(base_url, br
     page.route("**/api/ai/test", spy)
     page.route("**/api/ai/settings", lambda r: r.fulfill(status=404, content_type="application/json", body='{"detail":"Not Found"}'))
     page.route("**/api/me/ai-credentials**", lambda r: r.fulfill(status=404, content_type="application/json", body='{"detail":"Not Found"}'))
-    email, _ = make_user(UserRole.ADMIN)
     try:
-        _login(page, base_url, email)
+        page.goto(base_url + "/")
         page.wait_for_selector("#user-chip", state="visible", timeout=15000)
         page.evaluate("navigate('settings')")
         page.wait_for_selector("#aiu-bridge:not(.aiu-hide)", timeout=15000)
@@ -542,11 +552,9 @@ def test_dark_theme_and_mobile_390_no_horizontal_overflow(base_url, browser):
 
 
 def test_old_anchors_redirect_to_new_ones(base_url, browser):
-    ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="vi-VN")
+    ctx = new_ctx(browser, base_url, UserRole.ADMIN, viewport={"width": 1280, "height": 900})
     page = ctx.new_page(); Contract(page)
-    email, _ = make_user(UserRole.ADMIN)
     try:
-        _login(page, base_url, email)
         page.goto(base_url + "/#st-ollama")
         page.wait_for_selector("#aiu-sec-ollama", state="visible", timeout=15000)
         page.wait_for_function("() => location.hash === '#ollama'")
