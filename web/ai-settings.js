@@ -131,8 +131,10 @@
   }
   function rel(iso) {
     if (!iso) return '';
-    const d = new Date(iso); if (isNaN(d)) return '';
+    // API trả datetime UTC "naive" (không Z/offset) → coi là UTC, không phải giờ local của trình duyệt
+    const str = String(iso); const d = new Date(/(Z|[+-]\d\d:?\d\d)$/i.test(str) ? str : str + 'Z'); if (isNaN(d)) return '';
     const s = (d.getTime() - Date.now()) / 1000, a = Math.abs(s);
+    if (a < 60) return t('justNow');
     let rtf; try { rtf = new Intl.RelativeTimeFormat(S.lang, { numeric: 'auto' }); } catch (e) { return ''; }
     if (a < 3600) return rtf.format(Math.round(s / 60), 'minute');
     if (a < 86400) return rtf.format(Math.round(s / 3600), 'hour');

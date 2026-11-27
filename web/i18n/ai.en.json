@@ -261,5 +261,6 @@
  "code.AI_RATE_LIMIT": "Too many requests. Wait a moment.",
  "code.AI_CLOUD_NO_TOOLS": "This cloud model has not passed the tool-calling probe.",
  "code.AI_ROUTE_CHANGED": "Settings changed — start over.",
- "stMineNA": "Not available"
+ "stMineNA": "Not available",
+ "justNow": "just now"
 }

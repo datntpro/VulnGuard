@@ -261,5 +261,6 @@
  "code.AI_RATE_LIMIT": "Quá nhiều yêu cầu. Chờ một lát.",
  "code.AI_CLOUD_NO_TOOLS": "Model cloud này chưa qua kiểm tra tool-calling.",
  "code.AI_ROUTE_CHANGED": "Cấu hình đã đổi — hãy bắt đầu lại.",
- "stMineNA": "Không khả dụng"
+ "stMineNA": "Không khả dụng",
+ "justNow": "vừa xong"
 }

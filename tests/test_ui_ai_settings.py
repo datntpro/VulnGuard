@@ -192,8 +192,9 @@ class Rec:
         return [c for c in self.log if (method is None or c[0] == method) and c[1].startswith(prefix)]
 
 
-def open_ai(browser, base, role, *, viewport=None, theme=None, lang=None, route=None):
-    ctx = new_ctx(browser, base, role, viewport=viewport or {"width": 1280, "height": 900})
+def open_ai(browser, base, role, *, viewport=None, theme=None, lang=None, route=None, tz=None):
+    kw = {"timezone_id": tz} if tz else {}
+    ctx = new_ctx(browser, base, role, viewport=viewport or {"width": 1280, "height": 900}, **kw)
     page = ctx.new_page()
     rec = Rec(page)
     if route:
@@ -637,6 +638,23 @@ def test_analyst_readonly_org_but_my_keys_end_to_end(base_url, browser):
         assert rec.calls("PUT", "/api/ai/settings") == [] and len(rec.calls(None, "/api/ai/credentials")) == 1      # chỉ lần gọi 403 chủ động ở đầu test
         assert all("scope=all" not in c[1] for c in rec.calls(None, "/api/ai/usage"))
         shot(page, "analyst-my-keys")
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize("tz", ["Asia/Ho_Chi_Minh", "America/Los_Angeles"])
+def test_relative_time_treats_naive_api_timestamps_as_utc(base_url, browser, tz):
+    """API trả datetime UTC không có Z; ở UTC+7 / UTC-8 khoá vừa kiểm tra phải hiện 'vừa xong', không '7 giờ trước'."""
+    ctx, page, rec = open_ai(browser, base_url, UserRole.ANALYST, tz=tz)
+    try:
+        off = page.evaluate("new Date().getTimezoneOffset()")
+        assert off == {"Asia/Ho_Chi_Minh": -420, "America/Los_Angeles": 480}[tz] or tz == "America/Los_Angeles" and off in (420, 480)   # đúng là TZ lệch UTC
+        page.click("#aiu-add-btn"); page.fill("#aiu-add-key", SECRET3); page.click("#aiu-add-go")
+        page.wait_for_selector("#aiu-mine-table tr[data-id]")
+        raw = api_json(page, "/api/me/ai-credentials")["credentials"][0]["last_validated_at"]
+        assert not raw.endswith("Z") and "+" not in raw                       # đúng là naive UTC như backend hiện tại
+        assert "vừa xong" in page.locator("#aiu-mine-table tr[data-id]").first.inner_text()
+        assert "giờ trước" not in page.locator("#aiu-mine-table").inner_text()
     finally:
         ctx.close()
 
