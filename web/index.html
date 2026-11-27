@@ -1181,7 +1181,7 @@
             <div class="opt-desc">Gọi trực tiếp Claude API của Anthropic (API key, Workload Identity Federation hoặc credential trên máy chủ).</div></label>
           <label class="opt-card"><input type="radio" name="ai-provider" value="bedrock" onchange="onAIProviderChange()">
             <div class="opt-title">🟧 Amazon Bedrock</div>
-            <div class="opt-desc">Claude qua AWS Bedrock — AWS IAM / IAM Identity Center, profile do <span class="text-mono">kiro-cli</span> / <span class="text-mono">aws sso login</span> tạo, hoặc Bedrock API key (headless).</div></label>
+            <div class="opt-desc">Claude qua AWS Bedrock — AWS IAM / IAM Identity Center, profile do <span class="text-mono">aws sso login</span> / <span class="text-mono">aws configure</span> tạo, hoặc Bedrock API key (headless).</div></label>
           <label class="opt-card"><input type="radio" name="ai-provider" value="openai" onchange="onAIProviderChange()">
             <div class="opt-title">🟢 OpenAI (ChatGPT)</div>
             <div class="opt-desc">OpenAI API — GPT-4o/GPT-4.1… (hoặc endpoint tương thích qua base URL).</div></label>
@@ -1240,7 +1240,7 @@
               <label>Phương thức đăng nhập AWS</label>
               <select id="ai-br-auth" onchange="onBedrockAuthModeChange()">
                 <option value="aws_chain">Credential chain trên máy chủ (IAM role / biến môi trường / default profile)</option>
-                <option value="profile">AWS profile — tạo bằng kiro-cli login / aws sso login</option>
+                <option value="profile">AWS profile — tạo bằng aws sso login / aws configure</option>
                 <option value="bedrock_api_key">Bedrock API key (headless / CI — AWS_BEARER_TOKEN_BEDROCK)</option>
               </select>
             </div>
@@ -1255,7 +1255,7 @@
           <div id="ai-br-profile-wrap" class="form-group" style="display:none;">
             <label>AWS profile</label>
             <input id="ai-br-profile" class="text-mono" placeholder="default">
-            <div class="field-hint">Đăng nhập trước trên máy chủ bằng <span class="text-mono">kiro-cli login</span> hoặc <span class="text-mono">aws sso login --profile &lt;tên&gt;</span>, rồi điền đúng tên profile ở đây.</div>
+            <div class="field-hint">Đăng nhập trước trên máy chủ bằng <span class="text-mono">aws sso login --profile &lt;tên&gt;</span> (<span class="text-mono">kiro-cli login</span> chỉ đăng nhập Kiro, không tạo AWS profile), rồi điền đúng tên profile ở đây.</div>
           </div>
           <div id="ai-br-key-wrap" class="form-group" style="display:none;">
             <label>Bedrock API key</label>
@@ -4050,7 +4050,12 @@ async function loadOllamaStatus() {
   try {
     const r = await api('/api/ollama/health');
     bar.style.background = 'color-mix(in srgb, var(--low) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--low) 30%, transparent)'; bar.style.color = 'var(--low)';
-    bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
+    if (r.model_installed === false) {
+      bar.style.background = 'color-mix(in srgb, var(--medium, #d97706) 12%, transparent)'; bar.style.color = 'var(--medium, #d97706)';
+      bar.textContent = `⚠️ Ollama đang chạy nhưng model đã cấu hình "${r.active_model}" CHƯA được cài — hãy pull model này hoặc chọn model khác`;
+    } else {
+      bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
+    }
   } catch(e) {
     bar.style.background = 'color-mix(in srgb, var(--critical) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--critical) 30%, transparent)'; bar.style.color = 'var(--critical)';
     bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Cách xử lý:<br>
@@ -4269,6 +4274,9 @@ async function loadInstalledModels() {
     sel.innerHTML = models.length
       ? models.map(m => `<option value="${escHtml(m.name)}" ${m.name === active ? 'selected' : ''}>${escHtml(m.name)} (${escHtml(m.size_gb)} GB)</option>`).join('')
       : '<option value="">— Chưa có model nào —</option>';
+    if (active && !models.some(m => m.name === active)) {
+      sel.insertAdjacentHTML('afterbegin', `<option value="${escHtml(active)}" selected>${escHtml(active)} (đã cấu hình — CHƯA cài)</option>`);
+    }
 
     if (!models.length) {
       el.innerHTML = `<div class="empty-state" style="padding:20px;"><p>Chưa có model nào. Hãy pull model ở mục phía trên.</p></div>`;

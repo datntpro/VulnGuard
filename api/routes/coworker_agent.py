@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from api.database import get_db
 
 from api.config import settings
+from api.services import runtime_settings
 from api.routes.coworker import _host_request  # tái dùng proxy sang coworker_host
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ async def _chat_ollama(messages: List[Dict[str, str]], skill_body: Optional[str]
     timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         r = await client.post(
-            f"{settings.ollama_url}/api/chat",
+            f"{runtime_settings.ollama_url()}/api/chat",
             json={
                 "model": model,
                 "messages": payload_messages,
@@ -303,7 +304,7 @@ async def _describe_image(image_bytes: bytes) -> str:
     timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=15.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         r = await client.post(
-            f"{settings.ollama_url}/api/generate",
+            f"{runtime_settings.ollama_url()}/api/generate",
             json={"model": model, "prompt": VISION_PROMPT, "images": [b64],
                   "stream": False, "options": {"temperature": 0.1}},
         )

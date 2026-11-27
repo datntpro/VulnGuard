@@ -45,7 +45,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "bedrock": {
         # auth_mode: aws_chain = env/role/default chain · profile = AWS profile do
-        #   `kiro-cli login` / `aws sso login` tạo · bedrock_api_key = Bedrock API key
+        #   `aws sso login` / `aws configure` tạo · bedrock_api_key = Bedrock API key
         #   (AWS_BEARER_TOKEN_BEDROCK), dùng cho headless/CI
         "auth_mode": "aws_chain",
         "region": "us-east-1",

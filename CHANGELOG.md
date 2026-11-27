@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Security — AI PR-0: rò rỉ khoá AI + sửa lỗi Ollama URL (Refs #109)
+- Bedrock API key không còn ghi vào `os.environ`; truyền theo từng client. Tiến trình con của scanner/pentest (`spawn`, `run_command`, katana) loại `AWS_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `KIRO_*`, `AZURE_OPENAI_*`, `GOOGLE_*` (env tường minh của caller vẫn được tôn trọng).
+- Lỗi provider không còn trả nguyên văn: `/api/ai/test` và `run.error_message` dùng mã chuẩn hoá + chi tiết đã che. Thêm mẫu che `ABSK…`, `ksk_…`, `sk-or-v1-…`, Bearer/query token.
+- Co-work, Document Review, File Assistant dùng Ollama URL cấu hình trong UI. Thẻ trạng thái báo "model đã cấu hình chưa cài" thay vì lặng lẽ đổi model.
+- Sửa nhãn sai "kiro-cli login tạo AWS profile".
+
 ### Added — PDF PR-3: tải PDF trực tiếp (Typst)
 - `format=pdf` cho scan / pentest / web scan / doc review dựng bằng engine Typst và trả file đính kèm (tên file an toàn + `filename*` RFC 5987); job nền `POST|GET /api/reports/pdf-jobs` cho báo cáo > 300 phát hiện; `503 pdf_busy` + `Retry-After`; rate-limit + audit log.
 - UI: một nút "⬇ Xuất PDF" tải file; gỡ `window.print`, nút "In/Lưu PDF", "PDF nhanh" và ghi chú Ctrl/Cmd+P.

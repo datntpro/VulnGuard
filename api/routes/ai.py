@@ -48,7 +48,7 @@ def list_ai_models(provider: str, _=Depends(require_admin)):
 
 @router.post("/api/ai/test")
 async def test_ai():
-    from scanner.cloud_ai import CloudAnalyzer
+    from scanner.cloud_ai import CloudAnalyzer, sanitize_error
     cfg = load_config()
     t0 = time.monotonic()
     try:
@@ -58,7 +58,7 @@ async def test_ai():
                 "latency_ms": int((time.monotonic() - t0) * 1000), "error": None}
     except Exception as e:
         return {"ok": False, "provider": cfg["provider"], "model": None,
-                "latency_ms": int((time.monotonic() - t0) * 1000), "error": str(e)[:500]}
+                "latency_ms": int((time.monotonic() - t0) * 1000), "error": sanitize_error(e)}
 
 
 @router.post("/api/vulns/{vuln_id}/reanalyze")

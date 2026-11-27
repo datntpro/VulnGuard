@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from api.config import settings
+from api.services import runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +181,7 @@ async def _call_ollama(prompt: str) -> str:
     timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         r = await client.post(
-            f"{settings.ollama_url}/api/generate",
+            f"{runtime_settings.ollama_url()}/api/generate",
             json={
                 "model": model,
                 "prompt": prompt,

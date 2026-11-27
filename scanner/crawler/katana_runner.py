@@ -24,6 +24,8 @@ import tempfile
 import urllib.parse
 from typing import List, Dict, Any, Optional, Tuple
 
+from scanner.scanners.base import scrubbed_env
+
 
 KATANA_BIN = "katana"
 
@@ -123,6 +125,7 @@ async def run_katana(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=scrubbed_env(),
             )
             try:
                 _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)

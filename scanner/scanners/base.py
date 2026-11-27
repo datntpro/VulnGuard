@@ -18,6 +18,19 @@ _SCRUB_ENV = {
     "VULNGUARD_COWORKER_TOKEN", "VULNGUARD_SECRET_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
     "OPENROUTER_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "SONARQUBE_TOKEN",
 }
+# Tiền tố provider AI — luôn bị loại khỏi env tiến trình con (kể cả AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE…)
+_SCRUB_ENV_PREFIXES = ("AWS_", "ANTHROPIC_", "OPENAI_", "OPENROUTER_", "KIRO_", "AZURE_OPENAI_", "GOOGLE_")
+
+
+def scrubbed_env(base=None, extra=None) -> dict:
+    """Bản sao env đã bỏ secret provider AI + secret app. `extra` (tường minh) được merge SAU cùng."""
+    import os as _os
+    src = _os.environ if base is None else base
+    out = {k: v for k, v in src.items()
+           if k not in _SCRUB_ENV and not k.upper().startswith(_SCRUB_ENV_PREFIXES)}
+    if extra:
+        out.update(extra)
+    return out
 
 
 async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
@@ -25,10 +38,7 @@ async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
     """Chạy command async và trả về (returncode, stdout, stderr).
 
     env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế)."""
-    import os as _os
-    run_env = {k: v for k, v in _os.environ.items() if k not in _SCRUB_ENV}
-    if env:
-        run_env.update(env)
+    run_env = scrubbed_env(extra=env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
