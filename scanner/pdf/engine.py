@@ -22,6 +22,7 @@ from .errors import (
     PdfCompileError,
     PdfEngineError,
     PdfInputTooLarge,
+    PdfBusy,
     PdfInvalidInput,
     PdfOutputTooLarge,
     PdfTimeout,
@@ -36,7 +37,7 @@ KINDS = ("scan", "pentest", "webscan", "docreview")
 WORKER_PATH = Path(__file__).resolve().parent / "worker.py"
 ENTRY = "report.typ"
 
-MAX_DATA_BYTES = 30 * 1024 * 1024
+MAX_DATA_BYTES = 8 * 1024 * 1024  # adversarial no-space payloads near 30 MB reached 1.5 GB RSS (PR-1 verify F4)
 MAX_CHART_BYTES = 256 * 1024
 MAX_PDF_BYTES = int(os.environ.get("VG_PDF_MAX_BYTES", 100 * 1024 * 1024))
 MAX_PAGES = 2000
@@ -45,6 +46,14 @@ MAX_AS_BYTES = int(float(os.environ.get("VG_PDF_MAX_AS_MB", 1536)) * 1024 * 1024
 DEFAULT_TIMEOUT_S = 60.0
 CONCURRENCY = max(1, int(os.environ.get("VG_PDF_CONCURRENCY", 2)))
 _SEM = threading.BoundedSemaphore(CONCURRENCY)
+BUSY_WAIT_S = float(os.environ.get("VG_PDF_BUSY_WAIT_S", 1.0))
+
+# adapter-level input caps (plan §4)
+MAX_FINDINGS = 5000
+MAX_TITLE = 300
+MAX_TEXT = 8192
+MAX_CODE_LINES = 200
+_CODE_KEYS = frozenset({"code", "evidence", "snippet", "request", "response"})
 
 # Dead proxy: Typst's only network feature is package download (probe F4/F5).
 DEAD_PROXY = "http://127.0.0.1:9"
@@ -121,9 +130,16 @@ def run_worker(
     max_as: int = MAX_AS_BYTES,
     max_pdf: int = MAX_PDF_BYTES,
     proxy: str = DEAD_PROXY,
-    poll_s: float = 0.1,
+    poll_s: float = 0.02,
 ) -> bytes:
     """Compile ``entry`` from ``ws.root`` in the sandboxed worker. Returns PDF bytes."""
+    if max_rss and not sys.platform.startswith("linux"):
+        # RLIMIT_AS is not enforceable here: the psutil RSS poll is the only memory cap, so
+        # refuse to run without it (fail closed).
+        try:
+            import psutil  # noqa: F401
+        except ImportError as e:
+            raise PdfEngineError("memory watchdog unavailable (psutil missing); refusing to render") from e
     job = json.dumps(
         {
             "entry": entry,
@@ -226,7 +242,7 @@ def run_worker(
     if reason == "memory":
         raise PdfWorkerKilled("pdf worker exceeded memory limit")
     rc = proc.returncode
-    detail = err.getvalue().decode("utf-8", "replace").strip()[:500]
+    detail = _scrub_paths(err.getvalue().decode("utf-8", "replace").strip(), ws)[:500]
     if rc == 0:
         data = out.getvalue()
         if not data.startswith(b"%PDF-"):
@@ -237,6 +253,14 @@ def run_worker(
     if rc is not None and rc < 0:  # killed by signal (RLIMIT_CPU/AS abort, SIGXFSZ ...)
         raise PdfWorkerKilled(f"pdf worker died on signal {-rc}")
     raise PdfEngineError(f"pdf worker failed (exit {rc}): {detail}")
+
+
+def _scrub_paths(msg: str, ws: Workspace) -> str:
+    """Never leak the temp workspace (or any absolute path) in error text."""
+    for p in {str(ws.base), str(ws.base.resolve()), str(ws.root), str(ws.root.resolve())}:
+        msg = msg.replace(p, "<work>")
+    msg = re.sub(r"vg-pdf-[A-Za-z0-9_]+", "<work>", msg)
+    return re.sub(r"(?<![\w<])/(?:[\w.@+-]+/)+", "<path>/", msg)
 
 
 def check_pdf(data: bytes, *, max_pages: int = MAX_PAGES) -> int:
@@ -260,6 +284,37 @@ def validate_chart_svg(svg: str) -> str:
     return svg
 
 
+def apply_caps(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Cap findings count and per-field sizes before serialisation (plan §4, D5)."""
+    out = dict(doc)
+    fs = out.get("findings")
+    if isinstance(fs, list):
+        if len(fs) > MAX_FINDINGS:
+            out["findings_truncated_from"] = len(fs)
+            fs = fs[:MAX_FINDINGS]
+        capped = []
+        for f in fs:
+            if not isinstance(f, Mapping):
+                capped.append(f)
+                continue
+            g = dict(f)
+            for k, v in g.items():
+                if not isinstance(v, str):
+                    continue
+                if k == "title":
+                    g[k] = v[:MAX_TITLE]
+                elif k in _CODE_KEYS:
+                    lines = v.split("\n")
+                    if len(lines) > MAX_CODE_LINES:
+                        lines = lines[:MAX_CODE_LINES] + ["…"]
+                    g[k] = "\n".join(lines)[:MAX_TEXT]
+                else:
+                    g[k] = v[:MAX_TEXT]
+            capped.append(g)
+        out["findings"] = capped
+    return out
+
+
 def render(
     kind: Kind,
     doc: Mapping[str, Any],
@@ -276,7 +331,7 @@ def render(
     if kind not in KINDS:
         raise PdfInvalidInput("unknown report kind")
     try:
-        clean = sanitize(dict(doc))
+        clean = sanitize(apply_caps(doc))
     except (TypeError, ValueError) as e:
         raise PdfInvalidInput(str(e)) from e
     clean["kind"] = kind
@@ -286,8 +341,8 @@ def render(
     inputs = {"data": data}
     if chart_svg is not None:
         inputs["chart_svg"] = validate_chart_svg(chart_svg)
-    if not _SEM.acquire(timeout=timeout_s):
-        raise PdfTimeout("too many concurrent pdf renders")
+    if not _SEM.acquire(timeout=BUSY_WAIT_S):
+        raise PdfBusy("pdf renderer busy; retry shortly")
     try:
         with build_workspace() as ws:
             pdf = run_worker(ws, inputs, timestamp=generated_at, timeout_s=timeout_s)

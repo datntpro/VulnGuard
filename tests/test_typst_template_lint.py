@@ -21,29 +21,34 @@ def _strip_comments(src: str) -> str:
     return re.sub(r"(?m)(?<!:)//.*$", "", src)
 
 
+_LITERAL_CALL = re.compile(rf"(?<![\w.-])(?:{FILE_FUNCS})\s*\(\s*\"[^\"\\]*\"\s*[,)]")
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+# identifiers that must never appear anywhere (aliasing / method / field access included)
+_NEVER = re.compile(r"(?<![\w-])(eval|plugin|std|read|image|json|csv|yaml|toml|xml|cbor|bibliography)(?![\w-])")
+
+
 def lint_typ(src: str) -> list[str]:
     s = _strip_comments(src)
+    s0 = s
     bad: list[str] = []
-    if re.search(r"\beval\s*\(", s):
-        bad.append("eval(")
     if re.search(r"\b(import|include)\s+\"@", s):
         bad.append("package import/include")
-    for m in re.finditer(r"\b(import|include)\s+(?!\")", s):
+    if re.search(r"\b(import|include)\s+(?!\")", s):
         bad.append("non-literal import/include")
-    for m in re.finditer(rf"(?<![\w.-])({FILE_FUNCS})\s*\(", s):
-        rest = s[m.start():]
-        if any(rest.startswith(a) for a in ALLOWED_CALLS):
-            continue
-        if re.match(rf"({FILE_FUNCS})\s*\(\s*\"[^\"\\]*\"", rest):
-            continue  # string literal naming a file we ship
-        bad.append(f"{m.group(1)}( with non-literal argument")
+    # blank out the sanctioned call forms, then mask every remaining string literal
+    for a in ALLOWED_CALLS:
+        s = s.replace(a, "__OK__")
+    s = _LITERAL_CALL.sub("__OK__(", s)
+    s = _STRING.sub('""', s)
+    for m in _NEVER.finditer(s):
+        bad.append(f"forbidden identifier {m.group(1)!r} (aliases/field access included)")
     for fn in ("link", "label", "ref", "cite"):
-        if re.search(rf"(?<![\w.-]){fn}\s*\(", s):
+        if re.search(rf"(?<![\w-]){fn}\s*\(", s):
             bad.append(f"{fn}(")
     if re.search(r"\braw\s*\([^)]*\blang\s*:\s*[^\"\s]", s):
         bad.append("raw(lang: <data>)")
-    for m in re.finditer(r"sys\.inputs\S*", s):
-        if not re.match(r'sys\.inputs\.at\("(data|chart_svg)"\)', s[m.start():]):
+    for m in re.finditer(r"sys\.inputs\S*", s0):
+        if not re.match(r'sys\.inputs\.at\("(data|chart_svg)"\)', s0[m.start():]):
             bad.append("sys.inputs use outside data/chart_svg")
     return bad
 
@@ -71,6 +76,19 @@ def test_shipped_templates_are_clean(path):
         '#raw(d.code, lang: d.lang)',
         '#csv("/etc/passwd")x#read(sys.inputs.at("data"))',
         '#import d.mod',
+        '#let r = read\n#r(d.p)',
+        '#let e = eval\n#e(d.t, mode: "markup")',
+        '#(read)(d.p)',
+        '#let r = read\n#r.with(encoding: none)(d.p)',
+        '#let p = plugin\n#p(d.w)',
+        '#let r = std.read',
+        '#let x = (a: image)\n#(x.a)(d.p)',
+        '#let j = json\n#j(d.p)',
+        '#let c = csv\n#c(d.p)',
+        '#let y = yaml\n#let x = xml\n#let t = toml\n#let b = cbor',
+        '#{ let f = read; f(d.p) }',
+        '#import d.mod: read',
+        '#include d.p',
     ],
 )
 def test_lint_catches_bad_patterns(src):

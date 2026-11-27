@@ -115,3 +115,35 @@ def test_typst_follows_symlinks_hence_root_must_be_symlink_free(canary):
             verify_root(ws.root)  # ...which is exactly what verify catches
         pdf = run_worker(ws, {}, entry="t.typ")
         assert "SECRET-OUTSIDE-CANARY" in pdf_text(pdf)
+
+
+def test_font_dir_license_and_other_files_not_copied(tmp_path):
+    fd = tmp_path / "fonts"
+    fd.mkdir()
+    src = Path(__file__).resolve().parent.parent / "scanner" / "assets" / "fonts" / "DejaVuSans.ttf"
+    (fd / "DejaVuSans.ttf").write_bytes(src.read_bytes())
+    (fd / "OFL.txt").write_text("license")
+    (fd / "README.md").write_text("x")
+    (fd / "notes.json").write_text("{}")
+    with build_workspace(font_dirs=(fd,)) as ws:  # verify_root must pass
+        names = sorted(p.name for p in (ws.root / "fonts").iterdir())
+        assert names == ["DejaVuSans.ttf"]
+
+
+def test_font_dir_symlink_still_refused(tmp_path, canary):
+    fd = tmp_path / "fonts"
+    fd.mkdir()
+    os.symlink(canary, fd / "x.ttf")
+    with pytest.raises(UnsafeRoot):
+        with build_workspace(font_dirs=(fd,)):
+            pass
+
+
+def test_compile_error_does_not_leak_temp_path():
+    import tempfile
+
+    with pytest.raises(PdfCompileError) as ei:
+        compile_src('#read("missing-file.typ")')
+    msg = str(ei.value)
+    assert "vg-pdf-" not in msg and tempfile.gettempdir() not in msg and "/private" not in msg
+    assert msg  # still informative

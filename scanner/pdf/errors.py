@@ -33,3 +33,9 @@ class PdfWorkerKilled(PdfEngineError):
 
 class PdfOutputTooLarge(PdfEngineError):
     code = "pdf_output_too_large"
+
+
+class PdfBusy(PdfEngineError):
+    """All render slots taken; caller should answer 503/429 "busy" and retry later."""
+
+    code = "pdf_busy"

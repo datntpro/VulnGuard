@@ -19,7 +19,8 @@ from .errors import UnsafeRoot
 PKG_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = PKG_DIR / "templates"
 LEGACY_FONTS_DIR = PKG_DIR.parent / "assets" / "fonts"  # DejaVu; PR-2 moves fonts into templates/fonts
-ALLOWED_SUFFIXES = {".typ", ".ttf", ".otf", ".png"}
+FONT_SUFFIXES = {".ttf", ".otf", ".ttc", ".woff2"}
+ALLOWED_SUFFIXES = {".typ", ".png"} | FONT_SUFFIXES
 MAX_ROOT_BYTES = 64 * 1024 * 1024
 
 
@@ -70,8 +71,9 @@ def verify_root(root: Path, *, allowed_suffixes=ALLOWED_SUFFIXES) -> int:
     return total
 
 
-def _copy_tree_plain(src: Path, dst: Path, *, allowed_suffixes) -> None:
-    """Copy regular files only; refuse symlinks in the *source* too."""
+def _copy_tree_plain(src: Path, dst: Path, *, allowed_suffixes, skip_others: bool = False) -> None:
+    """Copy regular files only; refuse symlinks in the *source* too. With ``skip_others``
+    non-whitelisted regular files (e.g. OFL.txt next to fonts) are silently left behind."""
     if not src.exists():
         return
     if src.is_symlink():
@@ -84,8 +86,10 @@ def _copy_tree_plain(src: Path, dst: Path, *, allowed_suffixes) -> None:
                 raise UnsafeRoot(f"symlinked source dir: {name}")
         for name in fns:
             s = Path(dp, name)
-            if os.path.islink(s) or s.suffix.lower() not in allowed_suffixes:
-                if s.suffix.lower() in (".txt", ".md"):  # license texts shipped next to fonts: skip
+            if os.path.islink(s):
+                raise UnsafeRoot(f"refusing source file: {s.name}")
+            if s.suffix.lower() not in allowed_suffixes:
+                if skip_others:  # license texts etc. shipped next to fonts: never copied
                     continue
                 raise UnsafeRoot(f"refusing source file: {s.name}")
             (dst / rel / name).write_bytes(s.read_bytes())  # read+write: never copies a link
@@ -116,7 +120,7 @@ def build_workspace(
             tf = template_dir / "fonts"
             font_dirs = (tf,) if tf.is_dir() and any(tf.glob("*.ttf")) else (LEGACY_FONTS_DIR,)
         for fd in font_dirs:
-            _copy_tree_plain(Path(fd), fonts_out, allowed_suffixes={".ttf", ".otf", ".txt", ".md"})
+            _copy_tree_plain(Path(fd), fonts_out, allowed_suffixes=FONT_SUFFIXES, skip_others=True)
         for rel, data in (extra_files or {}).items():
             rp = Path(rel)
             if rp.is_absolute() or ".." in rp.parts:

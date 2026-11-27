@@ -8,6 +8,7 @@ import pytest
 
 from scanner.pdf import engine
 from scanner.pdf.errors import (
+    PdfBusy,
     PdfEngineError,
     PdfInputTooLarge,
     PdfInvalidInput,
@@ -90,8 +91,11 @@ def test_concurrency_semaphore_default_and_blocking(monkeypatch):
     sem = threading.BoundedSemaphore(1)
     sem.acquire()
     monkeypatch.setattr(engine, "_SEM", sem)
-    with pytest.raises(PdfTimeout):
-        engine.render("scan", {"title": "x"}, timeout_s=0.3)
+    monkeypatch.setattr(engine, "BUSY_WAIT_S", 0.2)
+    t = time.monotonic()
+    with pytest.raises(PdfBusy):
+        engine.render("scan", {"title": "x"})
+    assert time.monotonic() - t < 2  # short wait, not the 60 s render timeout
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="RLIMIT_AS enforceable on Linux only")
@@ -104,3 +108,47 @@ def test_page_cap(monkeypatch):
     pdf = engine.render("scan", {"title": "x"}, generated_at=0)
     with pytest.raises(PdfOutputTooLarge):
         engine.check_pdf(pdf, max_pages=0)
+
+
+def test_fail_closed_without_psutil_on_non_linux(monkeypatch):
+    import builtins
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    real = builtins.__import__
+
+    def fake(name, *a, **k):
+        if name == "psutil":
+            raise ImportError("no psutil")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake)
+    from scanner.pdf.root import build_workspace
+
+    with build_workspace(extra_files={"t.typ": b"hi"}) as ws:
+        with pytest.raises(PdfEngineError, match="psutil"):
+            engine.run_worker(ws, {}, entry="t.typ")
+
+
+def test_rss_poll_interval_is_fast():
+    import inspect
+
+    assert inspect.signature(engine.run_worker).parameters["poll_s"].default <= 0.02
+
+
+def test_adapter_caps_findings_lines_and_fields():
+    doc = {
+        "findings": [
+            {"title": "t" * 1000, "description": "d" * 20000, "code": "\n".join("l%d" % i for i in range(1000))}
+        ]
+        * (engine.MAX_FINDINGS + 5)
+    }
+    out = engine.apply_caps(doc)
+    assert len(out["findings"]) == engine.MAX_FINDINGS
+    assert out["findings_truncated_from"] == engine.MAX_FINDINGS + 5
+    f = out["findings"][0]
+    assert len(f["title"]) == engine.MAX_TITLE and len(f["description"]) == engine.MAX_TEXT
+    assert f["code"].count("\n") == engine.MAX_CODE_LINES  # 200 lines + ellipsis line
+
+
+def test_data_cap_is_8mb():
+    assert engine.MAX_DATA_BYTES <= 8 * 1024 * 1024
