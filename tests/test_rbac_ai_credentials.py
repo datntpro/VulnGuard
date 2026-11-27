@@ -116,7 +116,8 @@ def test_failed_probe_stores_nothing_and_returns_code_only(probe):
 
 
 @pytest.mark.parametrize("body,status,code", [
-    ({"provider": "azure_openai", "secret": KEY_A}, 422, "AI_BAD_PROVIDER"),
+    ({"provider": "vertex", "secret": KEY_A}, 422, "AI_BAD_PROVIDER"),              # [PR-6] Vertex chỉ ADMIN
+    ({"provider": "openai_compatible", "secret": KEY_A}, 422, "AI_BAD_PROVIDER"),   # base_url tuỳ chỉnh: ADMIN (D4)
     ({"provider": "anthropic", "secret": KEY_A, "model": "a b; rm -rf"}, 422, "AI_BAD_MODEL"),
     ({"provider": "bedrock", "secret": "ABSK" + "x" * 30, "region": "evil.com"}, 422, "AI_BAD_REGION"),
     ({"provider": "anthropic", "secret": "short"}, 422, "AI_KEY_INVALID_FORMAT"),

@@ -23,10 +23,14 @@ DEFAULT_BEDROCK_MODEL = "anthropic.claude-opus-5-5"
 DEFAULT_OPENAI_MODEL = "gpt-4o"
 DEFAULT_OPENROUTER_MODEL = "anthropic/claude-3.5-sonnet"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# [AI PR-6]
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_VERTEX_MODEL = "google/gemini-2.5-flash"
+DEFAULT_AZURE_API_VERSION = "2024-10-21"
 
 # Các section provider có chứa API key (được mã hoá → <section>.api_key_enc)
-_KEYED_SECTIONS = ("anthropic", "openai", "openrouter", "bedrock")
-PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter")
+_KEYED_SECTIONS = ("anthropic", "openai", "openrouter", "bedrock", "azure_openai", "gemini", "vertex", "openai_compatible")
+PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter", "azure_openai", "gemini", "vertex", "openai_compatible")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "provider": "anthropic",          # cloud provider dùng cho hybrid / cloud_only
@@ -60,6 +64,30 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "openrouter": {                   # OpenRouter — 1 key, nhiều model nhà cung cấp
         "model": DEFAULT_OPENROUTER_MODEL,
+        "api_key_enc": None,
+    },
+    # [AI PR-6] Azure OpenAI: key (user/org) hoặc Entra client-credentials (org). `deployment` là tên gọi trong URL.
+    "azure_openai": {
+        "auth_mode": "api_key",       # api_key | entra
+        "endpoint": "",               # https://<resource>.openai.azure.com (host kiểm chặt)
+        "deployment": "",
+        "api_version": DEFAULT_AZURE_API_VERSION,
+        "tenant_id": "", "client_id": "",     # chỉ khi auth_mode=entra (api_key_enc = client secret)
+        "api_key_enc": None,          # `model` của lời gọi = tên deployment (giá ước lượng/policy theo tên đó)
+    },
+    "gemini": {                       # Gemini API (AI Studio) — endpoint OpenAI-compatible cố định
+        "model": DEFAULT_GEMINI_MODEL,
+        "api_key_enc": None,
+    },
+    "vertex": {                       # Vertex AI (org): api_key_enc = service-account JSON
+        "auth_mode": "service_account",
+        "project": "", "location": "us-central1",
+        "model": DEFAULT_VERTEX_MODEL,
+        "api_key_enc": None,
+    },
+    "openai_compatible": {            # endpoint tương thích OpenAI tuỳ chỉnh (vLLM, LiteLLM, …) — ADMIN, qua url_guard
+        "base_url": "",
+        "model": "",
         "api_key_enc": None,
     },
     "hybrid": {
@@ -132,7 +160,7 @@ def public_config(cfg: Optional[dict] = None) -> Dict[str, Any]:
         key = decrypt_secret(cfg[sec].get("api_key_enc"))
         enc = cfg[sec].pop("api_key_enc", None)
         cfg[sec]["api_key_set"] = bool(enc)
-        cfg[sec]["api_key_hint"] = mask_secret(key) if key else ""
+        cfg[sec]["api_key_hint"] = "" if sec == "vertex" else (mask_secret(key) if key else "")   # SA JSON: không hint
     return cfg
 
 
@@ -154,6 +182,7 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
     with _lock:
         cfg = load_config()
         old_base_url = str((cfg.get("openai") or {}).get("base_url") or "").strip()
+        old_compat_url = str((cfg.get("openai_compatible") or {}).get("base_url") or "").strip()
         update = copy.deepcopy(update or {})
         for k in ("migrations", "org_credential_id", "probe"):   # [AI PR-3] nội bộ — không nhận từ client
             update.pop(k, None)
@@ -168,6 +197,10 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
                 if update[sec].pop("clear_api_key", False):
                     cfg[sec]["api_key_enc"] = None
         cfg = _deep_merge(cfg, update)
+        up = update.get("policy")
+        if isinstance(up, dict) and "azure_deployment_models" in up:
+            # [re-verify L2] ánh xạ deployment→model là REPLACE (không merge) để ADMIN xoá được mục; giá trị null cũng xoá
+            cfg.setdefault("policy", {})["azure_deployment_models"] = copy.deepcopy(up["azure_deployment_models"])
 
         if cfg["provider"] not in PROVIDERS:
             raise ValueError("provider phải thuộc: " + ", ".join(PROVIDERS))
@@ -193,6 +226,14 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
         if cfg["policy"]["custom_base_url"] == "off" and isinstance(oa_url, str) and oa_url.strip() \
                 and oa_url.strip() != old_base_url:       # lưu lại đúng URL cũ không đổi thì được
             raise ValueError("BAD_BASE_URL: custom base_url bị policy tắt")   # áp cho MỌI đường lưu (cả PUT /api/ai/config cũ)
+        from api.services import ai_provider_params   # [AI PR-6] tham số nơi gửi khoá của provider mới (kiểm chặt, không DNS)
+        for sec in ("azure_openai", "vertex", "openai_compatible"):
+            if isinstance(update.get(sec), dict):
+                ai_provider_params.validate_section(sec, cfg[sec], secret=new_keys.get(sec))
+        ob = ((update.get("openai_compatible") or {}).get("base_url") if isinstance(update.get("openai_compatible"), dict) else None)
+        if cfg["policy"]["custom_base_url"] == "off" and isinstance(ob, str) and ob.strip() \
+                and ob.strip() != old_compat_url:
+            raise ValueError("BAD_BASE_URL: custom base_url bị policy tắt")
         cfg["privacy"]["context_lines"] = max(0, min(int(cfg["privacy"]["context_lines"]), 80))
         for k in ("send_code_context", "redact_secrets"):
             cfg["privacy"][k] = bool(cfg["privacy"][k])
@@ -205,6 +246,14 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
         if not str(cfg["openrouter"]["model"]).strip():
             cfg["openrouter"]["model"] = DEFAULT_OPENROUTER_MODEL
 
+        if not str(cfg["gemini"]["model"]).strip():
+            cfg["gemini"]["model"] = DEFAULT_GEMINI_MODEL
+        if not str(cfg["vertex"]["model"]).strip():
+            cfg["vertex"]["model"] = DEFAULT_VERTEX_MODEL
+        for sec, key in new_keys.items():
+            if key and key.startswith("sk-ant-oat"):     # token OAuth gói Claude.ai: không dùng ngoài sản phẩm của Anthropic
+                raise ValueError("AI_KEY_UNSUPPORTED: token OAuth của gói Claude.ai (sk-ant-oat…) không dùng được ở đây — "
+                                 "hãy tạo API key tại console.anthropic.com")
         for sec, key in new_keys.items():
             if key:
                 cfg[sec]["api_key_enc"] = encrypt_secret(key)

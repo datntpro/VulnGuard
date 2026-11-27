@@ -32,15 +32,19 @@ from api.database import get_db
 from api.routes.auth import current_user, require_admin
 from api.services import ai_credentials as creds
 from api.services import ai_policy, ai_usage
-from api.services.ai_config import DEFAULT_BEDROCK_MODEL, DEFAULT_CLAUDE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL
+from api.services.ai_config import (DEFAULT_BEDROCK_MODEL, DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_OPENAI_MODEL,
+                                    DEFAULT_OPENROUTER_MODEL)
 
 router = APIRouter(tags=["ai-credentials"])
 audit = logging.getLogger("vulnguard.audit.ai")
 
-USER_PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter")      # PR-6 thêm azure/gemini
-_AUTH_MODE = {"anthropic": "api_key", "bedrock": "bedrock_api_key", "openai": "api_key", "openrouter": "api_key"}
+# [PR-6] thêm azure_openai (key theo deployment; user chỉ đưa TÊN resource) và gemini. Vertex / openai_compatible chỉ ADMIN.
+USER_PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter", "azure_openai", "gemini")
+_AUTH_MODE = {"anthropic": "api_key", "bedrock": "bedrock_api_key", "openai": "api_key", "openrouter": "api_key",
+              "azure_openai": "api_key", "gemini": "api_key"}
 _DEFAULT_MODEL = {"anthropic": DEFAULT_CLAUDE_MODEL, "bedrock": DEFAULT_BEDROCK_MODEL,
-                  "openai": DEFAULT_OPENAI_MODEL, "openrouter": DEFAULT_OPENROUTER_MODEL}
+                  "openai": DEFAULT_OPENAI_MODEL, "openrouter": DEFAULT_OPENROUTER_MODEL,
+                  "gemini": DEFAULT_GEMINI_MODEL, "azure_openai": ""}
 MAX_PER_USER = 20
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,119}$")
 _REGION_RE = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d{1,2}$")
@@ -74,7 +78,7 @@ async def _probe(route) -> Dict[str, Any]:
     """Probe nhỏ nhất (PR-4). Chỉ trả các trường đã chuẩn hoá — không văn bản provider."""
     from api.services.ai_probe import probe_cloud
     d = (await probe_cloud(route)).to_dict()
-    return {k: d.get(k) for k in ("ok", "code", "model", "latency_ms", "tools", "json")}
+    return {k: d.get(k) for k in ("ok", "code", "model", "latency_ms", "tools", "json", "real_model")}
 
 
 # ── schemas ──────────────────────────────────────────────
@@ -84,6 +88,9 @@ class CredCreate(BaseModel):
     model: Optional[str] = None
     label: Optional[str] = None
     region: Optional[str] = None
+    resource: Optional[str] = Field(default=None, max_length=64)       # azure_openai: tên resource (host do server dựng)
+    deployment: Optional[str] = Field(default=None, max_length=64)     # azure_openai
+    api_version: Optional[str] = Field(default=None, max_length=32)    # azure_openai
     is_default: bool = False
 
 
@@ -91,6 +98,8 @@ class CredPatch(BaseModel):
     label: Optional[str] = None
     model: Optional[str] = None
     region: Optional[str] = None
+    deployment: Optional[str] = Field(default=None, max_length=64)
+    api_version: Optional[str] = Field(default=None, max_length=32)
     is_default: Optional[bool] = None
 
 
@@ -103,6 +112,9 @@ class CredTest(BaseModel):
     secret: str = Field(min_length=1, max_length=4096)
     model: Optional[str] = None
     region: Optional[str] = None
+    resource: Optional[str] = Field(default=None, max_length=64)
+    deployment: Optional[str] = Field(default=None, max_length=64)
+    api_version: Optional[str] = Field(default=None, max_length=32)
 
 
 # ── validation ───────────────────────────────────────────
@@ -112,12 +124,34 @@ def _clean_secret(provider: str, secret: str) -> str:
         raise _err(422, "AI_KEY_INVALID_FORMAT")
     if s.startswith("sk-ant-oat"):          # token OAuth của gói Claude.ai: không dùng ngoài sản phẩm của Anthropic
         raise _err(422, "AI_KEY_UNSUPPORTED")
+    if provider == "gemini" and s.startswith("{"):   # service-account JSON thuộc Vertex (chỉ ADMIN), không phải key Gemini API
+        raise _err(422, "AI_KEY_INVALID_FORMAT")
     return s
 
 
-def _clean_params(provider: str, model: Optional[str], region: Optional[str]) -> Dict[str, Any]:
+def _clean_azure(deployment: Optional[str], resource: Optional[str], api_version: Optional[str],
+                 existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """User đưa TÊN resource (không phải URL) → endpoint dựng ở server, host cố định *.openai.azure.com (D4)."""
+    from api.services import ai_provider_params as pp
+    from api.services.url_guard import UrlRejected
+    ex = existing or {}
+    try:
+        endpoint = pp.azure_endpoint_from_resource(resource.strip().lower()) if resource else ex.get("endpoint")
+        dep = pp.check_deployment((deployment or ex.get("deployment") or "").strip())
+        ver = pp.check_api_version(api_version or ex.get("api_version"))
+        endpoint = pp.check_azure_endpoint(endpoint)
+    except UrlRejected:
+        raise _err(422, "AI_BAD_AZURE_PARAMS") from None
+    return {"endpoint": endpoint, "deployment": dep, "api_version": ver, "model": dep}
+
+
+def _clean_params(provider: str, model: Optional[str], region: Optional[str], *, resource: Optional[str] = None,
+                  deployment: Optional[str] = None, api_version: Optional[str] = None,
+                  existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if provider not in USER_PROVIDERS:
         raise _err(422, "AI_BAD_PROVIDER")
+    if provider == "azure_openai":
+        return _clean_azure(deployment or model, resource, api_version, existing)
     model = (model or "").strip() or _DEFAULT_MODEL[provider]
     if not _MODEL_RE.match(model):
         raise _err(422, "AI_BAD_MODEL")
@@ -131,11 +165,12 @@ def _clean_params(provider: str, model: Optional[str], region: Optional[str]) ->
     return params
 
 
-def _check_policy(provider: str, model: str) -> None:
+def _check_policy(provider: str, model: str, params: Optional[Dict[str, Any]] = None) -> None:
     pol = ai_policy.get_policy()
     if pol["byok"] == "off":
         raise _err(403, "AI_BYOK_OFF")
-    if not ai_policy.is_allowed(pol, provider, model):
+    # [PR-6 S2] Azure: allowlist theo model THẬT của deployment (ánh xạ ADMIN), không theo tên do user đặt
+    if not ai_policy.is_allowed_model(pol, provider, ai_policy.policy_model(pol, provider, params, model)):
         raise _err(422, "AI_NOT_ALLOWED")
 
 
@@ -143,7 +178,8 @@ def _public(m: Dict[str, Any]) -> Dict[str, Any]:
     """Thông tin cho CHỦ (có key_hint 4 ký tự cuối). Không owner id, không auth_mode nội bộ, không secret."""
     p = m.get("params") or {}
     return {"id": m["id"], "provider": m["provider"], "label": m["label"], "key_hint": m["key_hint"],
-            "model": p.get("model"), "region": p.get("region"), "status": m["status"],
+            "model": p.get("model"), "region": p.get("region"), "deployment": p.get("deployment"),
+            "endpoint": p.get("endpoint"), "api_version": p.get("api_version"), "status": m["status"],
             "last_validated_at": m["last_validated_at"], "last_error_code": m["last_error_code"],
             "last_used_at": m["last_used_at"], "is_default": m["is_default"], "created_at": m["created_at"],
             "rotated_at": m["rotated_at"]}
@@ -194,8 +230,9 @@ def list_mine(user: User = Depends(byok_user), db: Session = Depends(get_db)):
 @router.post("/api/me/ai-credentials", status_code=201)
 async def create_mine(body: CredCreate, user: User = Depends(byok_user), db: Session = Depends(get_db)):
     from api.services.llm_resolver import ephemeral_route
-    params = _clean_params(body.provider, body.model, body.region)
-    _check_policy(body.provider, params["model"])
+    params = _clean_params(body.provider, body.model, body.region, resource=body.resource,
+                           deployment=body.deployment, api_version=body.api_version)
+    _check_policy(body.provider, params["model"], params)
     secret = _clean_secret(body.provider, body.secret)
     if creds.count_active(db, user.id) >= MAX_PER_USER:
         raise _err(409, "AI_CRED_LIMIT")
@@ -230,8 +267,9 @@ async def create_mine(body: CredCreate, user: User = Depends(byok_user), db: Ses
 @router.post("/api/me/ai-credentials/test")
 async def test_unsaved(body: CredTest, user: User = Depends(byok_user), db: Session = Depends(get_db)):
     from api.services.llm_resolver import ephemeral_route
-    params = _clean_params(body.provider, body.model, body.region)
-    _check_policy(body.provider, params["model"])
+    params = _clean_params(body.provider, body.model, body.region, resource=body.resource,
+                           deployment=body.deployment, api_version=body.api_version)
+    _check_policy(body.provider, params["model"], params)
     secret = _clean_secret(body.provider, body.secret)
     _throttle(user.id)
     route = ephemeral_route(body.provider, _AUTH_MODE[body.provider], params, secret, user.id)
@@ -251,11 +289,12 @@ def patch_mine(cred_id: str, body: CredPatch, user: User = Depends(byok_user), d
         if dup:
             raise _err(409, "AI_CRED_DUPLICATE_LABEL")
         row.label = label
-    if body.model is not None or body.region is not None:
+    if any(v is not None for v in (body.model, body.region, body.deployment, body.api_version)):
         params = dict(row.params or {})
         np = _clean_params(row.provider, body.model if body.model is not None else params.get("model"),
-                           body.region if body.region is not None else params.get("region"))
-        _check_policy(row.provider, np["model"])
+                           body.region if body.region is not None else params.get("region"),
+                           deployment=body.deployment, api_version=body.api_version, existing=params)
+        _check_policy(row.provider, np["model"], {**params, **np})
         creds.update_params(db, row.id, {**params, **np}, actor=user.id)   # re-seal envelope với params mới
         row.status = "unknown"        # model/region mới chưa được kiểm tra
     if body.is_default is not None:

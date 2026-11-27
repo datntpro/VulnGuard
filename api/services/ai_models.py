@@ -32,6 +32,11 @@ STATIC_MODELS: Dict[str, List[str]] = {
         "openai/gpt-4o", "openai/o4-mini", "google/gemini-2.5-pro",
         "meta-llama/llama-3.1-70b-instruct", "deepseek/deepseek-chat",
     ],
+    # [AI PR-6] Azure: model id THẬT chỉ để gợi ý — lời gọi dùng tên *deployment* do bạn đặt
+    "azure_openai": ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
+    "gemini": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
+    "vertex": ["google/gemini-2.5-pro", "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"],
+    "openai_compatible": [],
 }
 
 
@@ -58,6 +63,9 @@ async def list_models(provider: str, route) -> Dict[str, Any]:
             return _static(provider, "Chưa có credential — dùng danh sách mặc định")
         if provider == "bedrock":
             return await asyncio.to_thread(_bedrock, route)
+        if provider in ("azure_openai", "vertex"):    # không có API liệt kê model theo khoá → danh sách gợi ý
+            return _static(provider, "Dùng danh sách gợi ý — Azure gọi theo tên deployment" if provider == "azure_openai"
+                           else "Dùng danh sách gợi ý")
         return await _via_sdk(provider, route)
     except Exception as e:
         from api.services.ai_probe import classify
@@ -77,6 +85,11 @@ async def _via_sdk(provider: str, route) -> Dict[str, Any]:
             return _ok(ids or STATIC_MODELS["anthropic"], "api" if ids else "static")
         page = await asyncio.wait_for(client.models.list(), timeout=20)
         ids = sorted(m.id for m in page.data if getattr(m, "id", None))
+        if provider == "gemini":      # id trả về dạng "models/gemini-2.5-pro"
+            ids = [i.split("/", 1)[1] if i.startswith("models/") else i for i in ids]
+            return _ok([i for i in ids if i.startswith("gemini")] or STATIC_MODELS["gemini"], "api" if ids else "static")
+        if provider == "openai_compatible":
+            return _ok(ids, "api" if ids else "static")
         chat = [i for i in ids if i.startswith(("gpt-", "o1", "o3", "o4", "chatgpt"))]
         return _ok((chat + ids) or STATIC_MODELS["openai"], "api" if ids else "static")
     finally:

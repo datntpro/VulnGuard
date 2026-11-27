@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import fnmatch
+import re
 from typing import Any, Dict, Optional
 
 BYOK_MODES = ("allowed", "required", "off")
@@ -24,7 +25,13 @@ DEFAULT_POLICY: Dict[str, Any] = {
     "scheduled_jobs_credential": "org",
     "custom_base_url": "admin_only",
     "base_url_allowlist": [],
+    # [AI PR-6 S2] Azure: tên deployment do NGƯỜI DÙNG đặt nên không đáng tin để định giá/allowlist. ADMIN ánh xạ
+    # "<resource>/<deployment>" → model thật (vd {"myres/prod-chat": "gpt-4o"}). Chưa ánh xạ = "unmapped/<deployment>":
+    # không khớp allowlist cụ thể nào, và giá tính theo mức đắt nhất của họ OpenAI.
+    "azure_deployment_models": {},
 }
+_AZ_KEY = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?/[a-z0-9][a-z0-9._\-]{0,63}$")
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,119}$")
 
 
 def _num(v: Any, name: str, *, integer: bool = False, maximum: float = 1e6) -> Optional[float]:
@@ -69,6 +76,18 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if p["custom_base_url"] not in ("admin_only", "off"):
         raise ValueError("policy.custom_base_url phải là admin_only | off")
     p["base_url_allowlist"] = _str_list(p["base_url_allowlist"], "policy.base_url_allowlist")
+    m = p["azure_deployment_models"]
+    if not isinstance(m, dict) or len(m) > 200:
+        raise ValueError("policy.azure_deployment_models phải là object <resource>/<deployment> → model")
+    clean = {}
+    for k, v in m.items():
+        if v is None:                      # null = xoá mục này (semantics xoá tường minh)
+            continue
+        k2 = str(k).strip().lower()
+        if not _AZ_KEY.match(k2) or not isinstance(v, str) or not _MODEL_ID.match(v.strip()):
+            raise ValueError("policy.azure_deployment_models: khoá phải dạng <resource>/<deployment>, giá trị là model id hợp lệ")
+        clean[k2] = v.strip()
+    p["azure_deployment_models"] = clean
     oq, uq = p["org_quota"], p["user_quota_own_keys"]
     p["org_quota"] = {"usd_per_user_month": _num(oq.get("usd_per_user_month"), "org_quota.usd_per_user_month"),
                       "rpm_per_user": _num(oq.get("rpm_per_user"), "org_quota.rpm_per_user", integer=True, maximum=100000)}
@@ -108,6 +127,36 @@ def is_allowed(policy: Dict[str, Any], provider: str, model: Optional[str]) -> b
         if fnmatch.fnmatchcase(target, pat):
             return True
     return False
+
+
+def is_allowed_model(policy: Dict[str, Any], provider: str, model: Optional[str]) -> bool:
+    """is_allowed theo id gốc HOẶC (Azure) id đã chuẩn hoá: Azure báo model có hậu tố ngày (`gpt-4o-2024-08-06`) nên mục
+    allowlist `azure_openai:gpt-4o` phải khớp. Marker `unmapped/…` được giữ nguyên qua chuẩn hoá (không bao giờ khớp rẻ)."""
+    if is_allowed(policy, provider, model):
+        return True
+    if provider == "azure_openai" and model:
+        from api.services.ai_prices import normalize_model
+        n = normalize_model(model)
+        return n != (model or "").lower() and is_allowed(policy, provider, n)
+    return False
+
+
+def azure_real_model(policy: Dict[str, Any], endpoint: Optional[str], deployment: Optional[str]) -> str:
+    """Model THẬT của một deployment Azure theo ánh xạ của ADMIN; chưa ánh xạ → "unmapped/<deployment>"
+    (không bao giờ tin tên deployment do người dùng đặt)."""
+    host = re.sub(r"^https?://", "", (endpoint or "").strip().lower()).split("/")[0].split(":")[0]
+    resource = host.split(".")[0]
+    dep = (deployment or "").strip()
+    real = (policy.get("azure_deployment_models") or {}).get(f"{resource}/{dep.lower()}")
+    return real or f"unmapped/{dep}"
+
+
+def policy_model(policy: Dict[str, Any], provider: str, params: Optional[Dict[str, Any]], call_model: str) -> str:
+    """Model dùng cho allowlist + định giá. Với Azure là model thật theo ánh xạ; provider khác là chính model gọi."""
+    if provider == "azure_openai":
+        p = params or {}
+        return azure_real_model(policy, p.get("endpoint"), p.get("deployment") or call_model)
+    return call_model
 
 
 def coworker_route(cfg: Dict[str, Any]) -> str:

@@ -48,7 +48,7 @@ def test_bedrock_auth_modes(ai_cfg):
 
 def test_invalid_provider_rejected(ai_cfg):
     with pytest.raises(ValueError):
-        ai_cfg.validate_and_save({"provider": "gemini"})
+        ai_cfg.validate_and_save({"provider": "kiro"})   # [PR-6] gemini đã là provider hợp lệ; Kiro/Copilot không bao giờ
 
 
 def test_clear_key_per_section(ai_cfg):
