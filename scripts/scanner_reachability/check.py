@@ -104,6 +104,8 @@ def run_probed(argv, watch, forbidden, label, control_run, require_import=None, 
     if not any(control_run in r for r in runs):
         print(f"[{label}] FAIL: positive control missing - no RUN call in {control_run}; probe is vacuous or the tool did not run")
         ok = False
+        print(f"    stdout tail: {p.stdout[-800:]!r}")
+        print(f"    stderr tail: {p.stderr[-1500:]!r}")
     if require_import and not any(ln.startswith(require_import) for ln in imports):
         print(f"[{label}] FAIL: expected IMPORT calls in {require_import}* (pysemgrep path not exercised); probe unproven")
         ok = False
