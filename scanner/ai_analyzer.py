@@ -8,6 +8,8 @@ import logging
 import os
 from typing import Dict, Any, Optional
 
+from api.services import url_guard  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # Fallback messages — dùng để detect và skip khi render report
@@ -245,7 +247,7 @@ class AIAnalyzer:
             write=10.0,
             pool=5.0,
         )
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=timeout) as client:
             response = await client.post(
                 f"{self.ollama_url}/api/generate",
                 json={
@@ -349,7 +351,7 @@ class AIAnalyzer:
     async def _call_ollama_crawl(self, prompt: str) -> str:
         """Giống _call_ollama nhưng cho phép output dài hơn (list endpoint có thể nhiều)."""
         timeout = httpx.Timeout(connect=10.0, read=float(self._ollama_timeout), write=10.0, pool=5.0)
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=timeout) as client:
             response = await client.post(
                 f"{self.ollama_url}/api/generate",
                 json={
@@ -386,7 +388,7 @@ class AIAnalyzer:
 
     async def check_ollama_health(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+            async with url_guard.guarded_async_client("ollama", timeout=5) as client:
                 r = await client.get(f"{self.ollama_url}/api/tags")
                 return r.status_code == 200
         except Exception:
@@ -394,7 +396,7 @@ class AIAnalyzer:
 
     async def get_available_models(self):
         try:
-            async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            async with url_guard.guarded_async_client("ollama", timeout=10) as client:
                 r = await client.get(f"{self.ollama_url}/api/tags")
                 data = r.json()
                 return [m["name"] for m in data.get("models", [])]

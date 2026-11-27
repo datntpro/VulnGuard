@@ -1,13 +1,13 @@
 """
 Liệt kê model mà license/API key của provider hỗ trợ — để UI cho CHỌN thay vì gõ tay.
 
-Gọi API provider bằng key đã lưu; nếu không có key hoặc API lỗi/offline → trả danh
-sách static (những model phổ biến đã biết) kèm source="static" để UI vẫn dùng được.
-Không bao giờ ném lỗi ra ngoài.
-
-TODO(AI PR-4): đọc key trực tiếp từ cấu hình org (không qua llm_resolver) vì liệt kê model theo provider tuỳ chọn;
-chuyển sang credential của resolver + url_guard khi có probe/SSRF guard.
+[AI PR-4] Không đọc key trực tiếp từ cấu hình nữa: nhận một `Route` do llm_resolver chọn
+(resolve_provider) và dùng client SDK của resolver (open_client(probe=True): trust_env=False, không
+redirect, guard SSRF). Offline / chưa có key / lỗi → trả danh sách static kèm source="static".
+Không bao giờ ném lỗi ra ngoài; ghi chú lỗi KHÔNG chứa văn bản của provider.
 """
+import asyncio
+import json
 import logging
 from typing import Any, Dict, List
 
@@ -48,71 +48,55 @@ def _static(provider: str, note: str = "") -> Dict[str, Any]:
     return _ok(STATIC_MODELS.get(provider, []), "static", note)
 
 
-def list_models(provider: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Trả {models, source, note, error}. source ∈ {api, static}."""
+async def list_models(provider: str, route) -> Dict[str, Any]:
+    """Trả {models, source, note, error}. source ∈ {api, static}. `route`: Cloud|Refuse từ resolver."""
+    from api.services.llm_resolver import Cloud
+    try:
+        if provider == "openrouter":
+            return await _openrouter()          # danh sách công khai — không cần key
+        if not isinstance(route, Cloud) or route.provider != provider:
+            return _static(provider, "Chưa có credential — dùng danh sách mặc định")
+        if provider == "bedrock":
+            return await asyncio.to_thread(_bedrock, route)
+        return await _via_sdk(provider, route)
+    except Exception as e:
+        from api.services.ai_probe import classify
+        logger.info("list_models(%s) lỗi, dùng static: %s", provider, type(e).__name__)
+        return _static(provider, f"Không gọi được API ({classify(e)}) — dùng danh sách mặc định")
+
+
+async def _via_sdk(provider: str, route) -> Dict[str, Any]:
+    from api.services.llm_resolver import open_client
+    if provider == "anthropic" and route.credential.public_params().get("auth_mode", "api_key") != "api_key":
+        return _static("anthropic", "Auth không phải API key — dùng danh sách mặc định")
+    client, _model, _family = open_client(route, probe=True)
     try:
         if provider == "anthropic":
-            return _anthropic(cfg)
-        if provider == "openai":
-            return _openai(cfg)
-        if provider == "openrouter":
-            return _openrouter(cfg)
-        if provider == "bedrock":
-            return _bedrock(cfg)
-    except Exception as e:
-        logger.info("list_models(%s) lỗi, dùng static: %s", provider, e)
-        return _static(provider, f"Không gọi được API ({str(e)[:120]}) — dùng danh sách mặc định")
-    return _static(provider)
+            page = await asyncio.wait_for(client.models.list(limit=100), timeout=20)
+            ids = [m.id for m in page.data if getattr(m, "id", None)]
+            return _ok(ids or STATIC_MODELS["anthropic"], "api" if ids else "static")
+        page = await asyncio.wait_for(client.models.list(), timeout=20)
+        ids = sorted(m.id for m in page.data if getattr(m, "id", None))
+        chat = [i for i in ids if i.startswith(("gpt-", "o1", "o3", "o4", "chatgpt"))]
+        return _ok((chat + ids) or STATIC_MODELS["openai"], "api" if ids else "static")
+    finally:
+        await client.close()
 
 
-def _anthropic(cfg) -> Dict[str, Any]:
-    import httpx
-    from api.services.ai_config import get_anthropic_api_key
-    a = cfg.get("anthropic", {})
-    # Chỉ gọi API khi auth bằng api_key; wif/environment → static
-    if a.get("auth_mode") != "api_key":
-        return _static("anthropic", "Auth không phải API key — dùng danh sách mặc định")
-    key = get_anthropic_api_key(cfg)
-    if not key:
-        return _static("anthropic", "Chưa nhập API key — dùng danh sách mặc định")
-    r = httpx.get("https://api.anthropic.com/v1/models",
-                  headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                  params={"limit": 100}, timeout=20)
-    r.raise_for_status()
-    ids = [m["id"] for m in r.json().get("data", []) if m.get("id")]
-    return _ok(ids or STATIC_MODELS["anthropic"], "api" if ids else "static")
-
-
-def _openai(cfg) -> Dict[str, Any]:
-    import httpx
-    from api.services.ai_config import get_api_key
-    sec = cfg.get("openai", {})
-    key = get_api_key("openai", cfg)
-    if not key:
-        return _static("openai", "Chưa nhập API key — dùng danh sách mặc định")
-    base = (sec.get("base_url") or "https://api.openai.com/v1").rstrip("/")
-    r = httpx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"}, timeout=20)
-    r.raise_for_status()
-    ids = sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
-    # ưu tiên các model chat gpt/o* lên đầu
-    chat = [i for i in ids if i.startswith(("gpt-", "o1", "o3", "o4", "chatgpt"))]
-    return _ok((chat + ids) or STATIC_MODELS["openai"], "api" if ids else "static")
-
-
-def _openrouter(cfg) -> Dict[str, Any]:
-    import httpx
-    from api.services.ai_config import get_api_key, OPENROUTER_BASE_URL
-    key = get_api_key("openrouter", cfg)
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    r = httpx.get(f"{OPENROUTER_BASE_URL}/models", headers=headers, timeout=20)
-    r.raise_for_status()
-    ids = sorted(m["id"] for m in r.json().get("data", []) if m.get("id"))
+async def _openrouter() -> Dict[str, Any]:
+    from api.services import url_guard
+    from api.services.ai_config import OPENROUTER_BASE_URL
+    async with url_guard.guarded_async_client("cloud", timeout=20) as c:
+        async with c.stream("GET", f"{OPENROUTER_BASE_URL}/models") as r:
+            r.raise_for_status()
+            data = json.loads(await url_guard.read_capped(r))
+    ids = sorted(m["id"] for m in data.get("data", []) if m.get("id"))
     return _ok(ids or STATIC_MODELS["openrouter"], "api" if ids else "static")
 
 
-def _bedrock(cfg) -> Dict[str, Any]:
-    """Liệt kê foundation model của Anthropic trên Bedrock qua boto3 (nếu có credential)."""
-    b = cfg.get("bedrock", {})
+def _bedrock(route) -> Dict[str, Any]:
+    """Liệt kê foundation model của Anthropic trên Bedrock qua boto3 (profile/region từ credential của resolver)."""
+    b = route.credential.public_params()
     try:
         import boto3
         sess = boto3.Session(profile_name=(b.get("aws_profile") or None)
@@ -123,4 +107,4 @@ def _bedrock(cfg) -> Dict[str, Any]:
         ids = [m["modelId"] for m in resp.get("modelSummaries", []) if m.get("modelId")]
         return _ok(ids or STATIC_MODELS["bedrock"], "api" if ids else "static")
     except Exception as e:
-        return _static("bedrock", f"Không liệt kê được qua boto3 ({str(e)[:100]}) — dùng danh sách mặc định")
+        return _static("bedrock", f"Không liệt kê được qua boto3 ({type(e).__name__}) — dùng danh sách mặc định")

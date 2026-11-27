@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Dict, Literal, Optional, Tuple, Union
 
@@ -119,6 +120,10 @@ class ResolvedCredential:
     def __deepcopy__(self, memo):
         raise TypeError("ResolvedCredential không copy được")
 
+    def public_params(self) -> Dict[str, Any]:
+        """Tham số KHÔNG bí mật của credential (region, profile, auth_mode, base_url…) — cho liệt kê model/UI."""
+        return {k: copy.deepcopy(v) for k, v in self._section.items() if k != "api_key_enc"}
+
     def _cfg(self) -> Dict[str, Any]:
         """CHỈ dùng nội bộ module này để dựng client."""
         return {"provider": self._provider, self._provider: self._section}
@@ -195,6 +200,19 @@ def _cloud_route(cfg: Dict[str, Any]) -> Route:
     return Cloud(credential=cred, provider=provider, model=model, family=family)
 
 
+def cloud_route_for(cfg: Dict[str, Any]) -> Route:
+    """Route cloud từ một cfg bất kỳ (vd cfg đã gộp giá trị CHƯA LƯU để test). Dùng cho probe / liệt kê model."""
+    return _cloud_route(cfg)
+
+
+def resolve_provider(provider: str) -> Route:
+    """Route cloud của MỘT provider cụ thể (liệt kê model cho dropdown) — credential vẫn do resolver chọn."""
+    from api.services.ai_config import load_config
+    cfg = load_config()
+    cfg["provider"] = provider
+    return _cloud_route(cfg)
+
+
 def resolve_local(ctx: LLMContext) -> LocalOllama:
     """Tuyến Ollama của tổ chức (bước local của triage; URL/model hiệu lực). Không đổi theo mode."""
     return _local_route()
@@ -221,24 +239,49 @@ def resolve(ctx: LLMContext) -> Route:
 # ─────────────────────────────────────────────
 # open_client() — nơi DUY NHẤT dựng client SDK
 # ─────────────────────────────────────────────
-def open_client(route: Route) -> Tuple[Any, str, str]:
-    """Trả (async_client, model, family). family ∈ {'anthropic_first','bedrock','openai'}."""
+def open_client(route: Route, *, probe: bool = False) -> Tuple[Any, str, str]:
+    """Trả (async_client, model, family). family ∈ {'anthropic_first','bedrock','openai'}.
+
+    [PR-4] probe=True: httpx client riêng (trust_env=False, không redirect, timeout 10s, guard SSRF).
+    Ollama và OpenAI-compatible base_url tuỳ chỉnh LUÔN đi qua transport guard (kiểm lại IP ở mỗi request)."""
     if isinstance(route, Refuse):
         raise RouteRefused(route.code, route.message_key)
     if isinstance(route, LocalOllama):
         # Ollama native cho agent tool-use: endpoint tương thích OpenAI `{url}/v1`, không cần key thật
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=_OLLAMA_DUMMY_KEY, base_url=route.url.rstrip("/") + "/v1", timeout=180.0)
+        from api.services import url_guard
+        client = AsyncOpenAI(api_key=_OLLAMA_DUMMY_KEY, base_url=route.url.rstrip("/") + "/v1", timeout=180.0,
+                             http_client=url_guard.guarded_async_client("ollama", timeout=180.0))
         return client, route.model, "openai"
     if isinstance(route, Cloud):
-        client, _model, family = _build_cloud_client(route.credential._cfg())
+        client, _model, family = _build_cloud_client(route.credential._cfg(), probe=probe)
         return client, route.model, family
     raise TypeError(f"route không hợp lệ: {type(route).__name__}")
 
 
-def _build_cloud_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
+_REGION_RE = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
+
+
+def valid_region(region: str) -> bool:
+    """Region AWS hợp lệ (vd us-east-1, us-gov-west-1). Region đi vào hostname nên PHẢI khớp chặt."""
+    return bool(isinstance(region, str) and len(region) <= 32 and _REGION_RE.fullmatch(region))
+
+
+def _sdk_http_client(cfg: Dict[str, Any], timeout: float):
+    """httpx client cho SDK: KHÔNG đọc proxy env, KHÔNG follow redirect; base_url tuỳ chỉnh đi qua guard SSRF.
+    Anthropic/Bedrock (SDK 2.x) dùng httpx2; OpenAI-compatible dùng httpx."""
+    from api.services import url_guard
+    provider = cfg.get("provider")
+    lib = "httpx" if provider in ("openai", "openrouter") else "httpx2"
+    if provider == "openai" and (cfg["openai"].get("base_url") or "").strip():
+        return url_guard.guarded_async_client("cloud", timeout=timeout, lib=lib)
+    return url_guard.plain_async_client(lib, timeout=timeout)
+
+
+def _build_cloud_client(cfg: Dict[str, Any], probe: bool = False) -> Tuple[Any, str, str]:
     """Dựng client cloud từ cfg một-provider. Secret chỉ được giải mã ở đây, vào thẳng client."""
     provider = cfg["provider"]
+    http_client = _sdk_http_client(cfg, 10.0 if probe else 180.0)
 
     # ── OpenAI (ChatGPT) & OpenRouter — SDK openai, API tương thích ──
     if provider in ("openai", "openrouter"):
@@ -256,9 +299,12 @@ def _build_cloud_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
         else:
             base_url = (sec.get("base_url") or "").strip() or None
             default_headers = None
+            if base_url:    # [PR-4] URL do ADMIN đặt: kiểm SSRF lúc lưu VÀ lúc gọi (IP ghim, không redirect)
+                from api.services import url_guard
+                base_url = url_guard.check_url(base_url, "cloud")
             model = sec.get("model") or "gpt-4o"
         client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=180.0,
-                             default_headers=default_headers)
+                             default_headers=default_headers, http_client=http_client)
         return client, model, "openai"
 
     import anthropic
@@ -266,6 +312,9 @@ def _build_cloud_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
     timeout = anthropic.Timeout(180.0, connect=10.0)
     if provider == "bedrock":
         b = cfg["bedrock"]
+        if b.get("region") and not valid_region(b["region"]):
+            from api.services import url_guard
+            raise url_guard.UrlRejected("region AWS không hợp lệ")   # region đi vào hostname → chặn injection
         auth_mode = b.get("auth_mode", "aws_chain")
         bedrock_tok = None
         if auth_mode == "bedrock_api_key":
@@ -279,7 +328,7 @@ def _build_cloud_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
             api_key=bedrock_tok,
             aws_region=b.get("region") or None,
             aws_profile=(b.get("aws_profile") or None) if auth_mode == "profile" else None,
-            timeout=timeout,
+            timeout=timeout, http_client=http_client,
             # Bedrock không có server-side `fallbacks` → dùng middleware phía client
             middleware=[anthropic.BetaRefusalFallbackMiddleware([{"model": "anthropic.claude-opus-4-8"}])],
         )
@@ -292,7 +341,7 @@ def _build_cloud_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
         key = get_anthropic_api_key(cfg)
         if not key:
             raise RuntimeError("Chưa cấu hình Anthropic API key (Settings → AI Provider)")
-        client = anthropic.AsyncAnthropic(api_key=key, timeout=timeout)
+        client = anthropic.AsyncAnthropic(api_key=key, timeout=timeout, http_client=http_client)
     elif mode == "wif":
         w = a.get("wif") or {}
         for k in ("federation_rule_id", "organization_id", "identity_token_file"):
@@ -305,7 +354,7 @@ def _build_cloud_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
             service_account_id=w.get("service_account_id") or None,
             workspace_id=w.get("workspace_id") or None,
         )
-        client = anthropic.AsyncAnthropic(credentials=creds, timeout=timeout)
+        client = anthropic.AsyncAnthropic(credentials=creds, timeout=timeout, http_client=http_client)
     else:  # environment — ANTHROPIC_API_KEY / ant auth login profile
-        client = anthropic.AsyncAnthropic(timeout=timeout)
+        client = anthropic.AsyncAnthropic(timeout=timeout, http_client=http_client)
     return client, a.get("model") or "claude-opus-5-5", "anthropic_first"
