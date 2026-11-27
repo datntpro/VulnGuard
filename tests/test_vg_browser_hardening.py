@@ -15,7 +15,8 @@ vb = importlib.import_module("vg_browser")
 
 TOK = "0123456789abcdef0123"
 TOK2 = "fedcba9876543210fedc"      # bắn từ iframe
-APIS = ["Worker", "SharedWorker", "WebSocket", "WebTransport", "RTCPeerConnection", "webkitRTCPeerConnection"]
+APIS = ["Worker", "SharedWorker", "WebSocket", "WebSocketStream", "WebTransport", "RTCPeerConnection", "webkitRTCPeerConnection",
+        "TCPSocket", "UDPSocket", "TCPServerSocket", "UDPServerSocket"]
 
 
 @pytest.mark.parametrize("api", APIS)
@@ -29,26 +30,41 @@ def test_service_workers_still_blocked():
     assert 'service_workers="block"' in pathlib.Path(vb.__file__).read_text()
 
 
-# Trang thử: mỗi API phải ném; nếu cả bảy đều ném thì gọi __vg(token). Worker same-origin /w.js và SharedWorker /w.js trỏ cùng file.
+# Trang thử: mỗi API phải ném đúng SecurityError (không phải TypeError "không tồn tại") ở main frame, iframe about:blank (đồng bộ),
+# popup window.open('') và iframe srcdoc; mỗi ngữ cảnh bắn token riêng qua __vg khi TẤT CẢ API bị chặn.
+# Worker same-origin /w.js và SharedWorker /w.js trỏ cùng file → không được nạp.
 PAGE = """<!doctype html><script>
-var res = {};
-function t(n, f){ try { f(); res[n] = 'allowed'; } catch(e) { res[n] = 'blocked'; } }
+var APIS = @APIS@, res = {};
+function t(n, f){ try { f(); res[n] = 'allowed'; } catch(e) { res[n] = (e && e.name === 'SecurityError') ? 'blocked' : 'other:' + e; } }
+function ctx(name, w){ APIS.forEach(function(a){ t(name + ':' + a, function(){ new w[a]('ws://127.0.0.1:1/'); }); }); }
+function allBlocked(prefix){ return Object.keys(res).filter(function(k){ return k.indexOf(prefix) === 0; })
+  .every(function(k){ return res[k] === 'blocked'; }); }
 t('blob', function(){ new Worker(URL.createObjectURL(new Blob(['postMessage(1)']))); });
 t('file', function(){ new Worker('/w.js'); });
 t('shared', function(){ new SharedWorker('/w.js'); });
-t('ws', function(){ new WebSocket('ws://127.0.0.1:1/'); });
 t('wt', function(){ new WebTransport('https://127.0.0.1:1/'); });
 t('rtc', function(){ new RTCPeerConnection(); });
 t('rtc2', function(){ new webkitRTCPeerConnection(); });
-t('redefine', function(){ Object.defineProperty(window, 'Worker', {value: function(){}}); });
-document.title = JSON.stringify(res);
-if (Object.keys(res).every(function(k){ return res[k] === 'blocked'; })) window.__vg('%s');
-</script><iframe src="/frame"></iframe>"""
+ctx('main', window);
+var f = document.createElement('iframe'); document.documentElement.appendChild(f); ctx('blank', f.contentWindow);
+try { Object.defineProperty(window, 'Worker', {value: function(){}}); res.redefine = 'allowed'; } catch(e) {}
+var pw = window.open('');
+if (pw) { var pr = {}; APIS.forEach(function(a){ try { new pw[a]('ws://127.0.0.1:1/'); pr[a] = 0; } catch(e) { pr[a] = e && e.name === 'SecurityError' ? 1 : 0; } });
+  if (APIS.every(function(a){ return pr[a]; })) window.__vg('@TOK3@'); }
+if (allBlocked('')) window.__vg('@TOK@');
+</script><iframe src="/frame"></iframe><iframe srcdoc="<script>var ok=1;@APIS_ATTR@.forEach(function(a){try{new window[a]('ws://127.0.0.1:1/');ok=0}catch(e){if(!e||e.name!='SecurityError')ok=0}});if(ok)window.parent.__vg('@TOK4@')</script>"></iframe>"""
 FRAME = """<!doctype html><script>
 var ok = 0; try { new Worker('/w.js'); } catch(e) { ok = 1; }
 try { new WebSocket('ws://127.0.0.1:1/'); } catch(e) { ok += 1; }
 if (ok === 2) window.parent.__vg('%s');
 </script>"""
+TOK3, TOK4 = "1111111111111111aaaa", "2222222222222222bbbb"
+
+
+def _page():
+    import json
+    return (PAGE.replace("@APIS_ATTR@", json.dumps(APIS).replace('"', "&quot;")).replace("@APIS@", json.dumps(APIS))
+            .replace("@TOK3@", TOK3).replace("@TOK4@", TOK4).replace("@TOK@", TOK))
 
 
 class _H(BaseHTTPRequestHandler):
@@ -59,7 +75,7 @@ class _H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         _H.hits.append(self.path)
-        body, ct = {"/": (PAGE % TOK, "text/html"), "/frame": (FRAME % TOK2, "text/html"),
+        body, ct = {"/": (_page(), "text/html"), "/frame": (FRAME % TOK2, "text/html"),
                     "/w.js": ("postMessage(1)", "text/javascript")}.get(self.path, ("", "text/plain"))
         self.send_response(200)
         self.send_header("Content-Type", ct)
@@ -85,11 +101,13 @@ def test_real_browser_blocks_workers_and_ws_but_xss_still_fires(monkeypatch):
                       "allowed_hosts": ["127.0.0.1"]})
     finally:
         srv.shutdown()
-    if "error" in out and "Executable doesn't exist" in out["error"]:
+    if "error" in out and "Executable doesn't exist" in out["error"] and not os.environ.get("VG_PINNED_BROWSER"):
         pytest.skip("no Chromium available")
     assert "error" not in out, out
     # __vg gọi được hai lần (trang chính: mọi API bị chặn; iframe: Worker+WebSocket bị chặn) → token đã bắn
-    assert out["fired"] is True and TOK2 in out["fired_tokens"], out
+    assert out["fired"] is True, out
+    for t in (TOK2, TOK3, TOK4):      # iframe src, popup, srcdoc
+        assert t in out["fired_tokens"], (t, out)
     assert "/w.js" not in _H.hits, _H.hits      # không worker nào được nạp
 
 
@@ -127,7 +145,7 @@ def test_real_browser_benign_probe_only_contacts_target(monkeypatch, tmp_path):
         time.sleep(2)
     finally:
         srv.shutdown()
-    if "error" in out and "Executable doesn't exist" in out["error"]:
+    if "error" in out and "Executable doesn't exist" in out["error"] and not os.environ.get("VG_PINNED_BROWSER"):
         pytest.skip("no Chromium available")
     assert "error" not in out, out
     other = sorted({h.split(":")[0] for h in seen if h and h.split(":")[0] != "t.test"})
