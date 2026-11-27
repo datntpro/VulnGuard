@@ -98,6 +98,4 @@
   #st-ai .aiu-sticky { padding: 8px 10px; }
 }
 
-/* 2 tab cũ (Ollama & Model / AI Provider): chỉ hiện khi cờ body.ai-legacy-on bật (backend chưa có /api/ai/settings) */
-#settings-tabs .ai-legacy-tab { display: none; }
-body.ai-legacy-on #settings-tabs .ai-legacy-tab { display: block; }
+

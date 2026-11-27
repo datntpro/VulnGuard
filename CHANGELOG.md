@@ -84,7 +84,7 @@
 - `/export?format=pdf` bỏ qua bộ lọc severity/status/scan_type/diff/scope (có tài liệu + header `X-VG-Filters-Ignored`).
 ### Added — AI PR-5: Settings › AI hợp nhất (web, refs #109)
 - Một tab **AI** thay hai tab "Ollama & Model" / "AI Provider": trạng thái, 5 bước (Local/Hybrid/Cloud → Ollama → Hybrid → Cloud tổ chức → Khoá AI của tôi), mục Chính sách (ADMIN), thanh lưu dính, VI/EN, sáng/tối, 390 px. Điều khiển theo role (không còn bấm-rồi-403); ô key write-only, xoá ngay sau khi gửi, không localStorage, lỗi chỉ hiện mã chuẩn hoá.
-- Hợp đồng API §6 trong `docs/ai-settings-web-contract.md`. Backend khoá-theo-người chưa merge → chế độ "bridge" (mục 1–3 qua endpoint hiện có, mục 4/5 hiển thị "chưa khả dụng", hai tab cũ còn truy cập được); tự chuyển sang "contract" khi có `/api/ai/settings`.
+- Chạy trên API thật của PR-3/PR-3b/PR-4/PR-6 (`docs/ai-settings-web-contract.md`); không còn chế độ bridge/mock; **xoá hai tab cũ** cùng JS/HTML tương ứng. Tile provider: Anthropic, Bedrock, OpenAI, Azure OpenAI (ADMIN ánh xạ deployment→model ở mục Chính sách), Gemini, Vertex (SA JSON, ADMIN), OpenAI-compatible (ADMIN), OpenRouter. Khoá của tôi: tạo/test/xoay/xoá/mặc định (Azure: resource+deployment). ADMIN: chính sách, bảng khoá người dùng + thu hồi, usage 30 ngày. Test Playwright theo role trên backend thật (probe cloud + Ollama giả ở biên).
 
 ### Added — PDF PR-3: tải PDF trực tiếp (Typst)
 - `format=pdf` cho scan / pentest / web scan / doc review dựng bằng engine Typst và trả file đính kèm (tên file an toàn + `filename*` RFC 5987); job nền `POST|GET /api/reports/pdf-jobs` cho báo cáo > 300 phát hiện; `503 pdf_busy` + `Retry-After`; rate-limit + audit log.

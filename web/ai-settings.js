@@ -1,13 +1,12 @@
 /* Settings › AI — trang hợp nhất (PR-5, refs #109).
  *
- * Nói chuyện với API theo hợp đồng §6 của AI-Settings-Plan (docs/ai-settings-web-contract.md).
- * Backend khoá-theo-người (PR-1..PR-4) chưa merge, nên có 2 chế độ, tự dò bằng GET /api/ai/settings:
- *   • "contract" — backend có /api/ai/settings → dùng đầy đủ §6 (các tab cũ ẩn).
- *   • "bridge"   — 404 → ghép mục 1–3 từ endpoint HIỆN CÓ (/api/ai/config, /api/ollama/*); mục 4/5, kiểm tra
- *                  giá trị chưa lưu, tool-calling check… hiển thị "chưa khả dụng" (KHÔNG giả thành công) và 2 tab
- *                  cũ vẫn truy cập được (cờ body.ai-legacy-on). Khi PR-3 land, trang tự chuyển sang "contract".
- * Bí mật: ô key là type=password, đọc vào body request tại thời điểm gửi, xoá ô ngay sau khi gửi; không giữ trong
- * biến/State, không localStorage, không in ra toast/lỗi (lỗi chỉ hiển thị mã chuẩn hoá đã map sang chuỗi i18n, không bao giờ render text của server/provider).
+ * Nói chuyện với API thật của PR-3/PR-4/PR-6 (docs/ai-settings-web-contract.md):
+ *   GET/PUT /api/ai/settings · POST /api/ai/test · POST /api/ai/ollama/check · GET /api/ai/models
+ *   /api/me/ai-credentials* · GET /api/ai/credentials · POST /api/ai/credentials/{id}/revoke · GET /api/ai/usage
+ *   /api/ollama/* (danh sách model đã cài, health, pull, delete).
+ * Bí mật: ô key là type=password (kể cả SA JSON của Vertex), đọc vào body request tại thời điểm gửi, xoá ô ngay sau khi
+ * gửi; không giữ trong biến/State, không localStorage, không in ra toast/lỗi. Lỗi chỉ hiển thị mã chuẩn hoá đã map sang
+ * chuỗi i18n — không bao giờ render text của server/provider.
  */
 (function () {
   'use strict';
@@ -18,24 +17,30 @@
   const setVal = (id, v) => { const e = $(id); if (e) e.value = (v === null || v === undefined) ? '' : v; };
   const esc = (s) => (typeof escHtml === 'function' ? escHtml(String(s)) : String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
 
+  // Tile provider của cấu hình TỔ CHỨC (ADMIN). Vertex + openai_compatible chỉ có ở cấp org (D4).
   const PROVIDERS = [
-    { id: 'anthropic', name: 'Anthropic', sub: 'API key · WIF', legacy: true },
-    { id: 'bedrock', name: 'Amazon Bedrock', sub: 'IAM role · SSO profile · API key', legacy: true },
-    { id: 'openai', name: 'OpenAI', sub: 'API key', legacy: true },
-    { id: 'azure_openai', name: 'Azure OpenAI', sub: 'Key · Entra ID', legacy: false },
-    { id: 'gemini', name: 'Google Gemini / Vertex', sub: 'API key · SA', legacy: false },
-    { id: 'openrouter', name: 'OpenRouter', sub: 'API key', legacy: true },
+    { id: 'anthropic', name: 'Anthropic', sub: 'API key · WIF' },
+    { id: 'bedrock', name: 'Amazon Bedrock', sub: 'IAM role · SSO profile · API key' },
+    { id: 'openai', name: 'OpenAI', sub: 'API key' },
+    { id: 'azure_openai', name: 'Azure OpenAI', sub: 'Key · Entra ID' },
+    { id: 'gemini', name: 'Google Gemini', sub: 'API key' },
+    { id: 'vertex', name: 'Vertex AI', sub: 'Service account' },
+    { id: 'openai_compatible', name: 'OpenAI-compatible', sub: 'vLLM · LiteLLM · …' },
+    { id: 'openrouter', name: 'OpenRouter', sub: 'API key' },
   ];
   const PROV_NAME = { anthropic: 'Anthropic', bedrock: 'Amazon Bedrock', openai: 'OpenAI', azure_openai: 'Azure OpenAI', gemini: 'Gemini', vertex: 'Vertex AI', openrouter: 'OpenRouter', openai_compatible: 'OpenAI-compatible' };
-  const USER_PROVIDERS = ['anthropic', 'bedrock', 'openai', 'openrouter'];   // D4: user không đặt base_url → chỉ provider host cố định
-  const KEY_PLACEHOLDER = { anthropic: 'sk-ant-…', bedrock: 'ABSK…', openai: 'sk-…', openrouter: 'sk-or-…' };
+  const ORG_PROVIDERS = PROVIDERS.map((p) => p.id);
+  const USER_PROVIDERS = ['anthropic', 'bedrock', 'openai', 'openrouter', 'azure_openai', 'gemini'];   // D4/PR-6: user không đặt base_url/endpoint → chỉ host cố định (Azure: chỉ tên resource)
+  const KEY_PLACEHOLDER = { anthropic: 'sk-ant-…', bedrock: 'ABSK…', openai: 'sk-…', openrouter: 'sk-or-…', azure_openai: '••••••••', gemini: 'AIza…', vertex: '{ "type": "service_account", … }', openai_compatible: '••••••••' };
   const MODEL_SUGGEST = {
     anthropic: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
     bedrock: ['us.anthropic.claude-sonnet-5-5', 'anthropic.claude-opus-5-5'],
     openai: ['gpt-4o'],
     openrouter: ['anthropic/claude-3.5-sonnet'],
+    gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
   };
-  const SEV_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 };
+  const SECRET_FIELDS = ORG_PROVIDERS;             // mọi section org có api_key (SA JSON của vertex cũng là "api_key")
+  // Provider có ô key org luôn hiện hay phụ thuộc auth_mode (xem needsKey).
   const SECTION_OF = (k) => (k === 'mode' ? '1' : k.startsWith('ollama.') ? '2' : k.startsWith('hybrid.') ? '2b' : k.startsWith('policy.') ? '5' : '3');
   const HASH_MAP = {
     '#st-ollama': ['aiu-sec-ollama', '#ollama'], '#ollama': ['aiu-sec-ollama', '#ollama'],
@@ -46,12 +51,11 @@
 
   const S = {
     lang: 'vi', dict: { vi: {}, en: {} },
-    mode: 'unknown',        // unknown | contract | bridge
     data: null, base: null,
     sel: 'local_only', prov: 'anthropic',
-    olCheck: null,
-    creds: null, credsState: 'idle',   // idle | ok | unavailable | forbidden | error
-    ukeys: null, usage: null,
+    olCheck: null, lastTest: null,        // lastTest: {at, ok} của lần test cloud trong phiên này
+    creds: null, credsState: 'idle',   // idle | ok | forbidden | error
+    ukeys: null, usage: null, azMap: [],
     rotating: null,
     inited: false, loading: null, saving: false,
     pullAbort: null,
@@ -111,11 +115,13 @@
     const d = r && r.data; if (!d || typeof d !== 'object') return null;
     let c = d.code || (d.detail && typeof d.detail === 'object' && d.detail.code) || null;
     if (!c && typeof d.error === 'string') { const m = /^\[([A-Za-z_]+)\]/.exec(d.error); if (m) c = m[1]; }   // tiền tố "[auth_failed] …" của PR-0: chỉ lấy mã
+    if (!c && typeof d.detail === 'string') { const m = /^([A-Z][A-Z0-9_]{1,40}):/.exec(d.detail); if (m) c = m[1]; }       // PUT /api/ai/settings: "BAD_BASE_URL: …" → chỉ lấy mã, bỏ phần chữ
     c = typeof c === 'string' ? c.toUpperCase() : null;
     return c && KNOWN_CODE.test(c) ? c : null;
   }
   function errText(r) {
     if (!r) return t('err.generic');
+    if (r.status === 429) return t('err.throttled');      // throttle của chính server (kể cả mã RATE_LIMITED) — không phải lỗi provider
     const code = codeOf(r);
     if (code && S.dict.vi['code.' + code] !== undefined) return t('code.' + code);
     if (r.status === 403) return t('err.forbidden');
@@ -136,9 +142,11 @@
   const clearSecrets = () => { $$('#st-ai .aiu-secret').forEach((e) => { e.value = ''; }); };
 
   /* ───────── skeleton: provider blocks ───────── */
-  function keyGroup(p) {
-    return `<div class="aiu-f" id="aiu-${p}-keywrap"><label for="aiu-${p}-key" data-i18n="key"></label>
-      <div class="aiu-row"><input id="aiu-${p}-key" class="aiu-mono aiu-secret aiu-admin" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-testid="aiu-${p}-key" style="flex:1;min-width:0">
+  function keyGroup(p, keyLabel) {
+    // SA JSON của Vertex cũng là input type=password: dán JSON nhiều dòng sẽ bị bỏ xuống dòng, vẫn là JSON hợp lệ (private_key dùng \n dạng escape)
+    const field = `<input id="aiu-${p}-key" class="aiu-mono aiu-secret aiu-admin" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-testid="aiu-${p}-key" style="flex:1;min-width:0">`;
+    return `<div class="aiu-f" id="aiu-${p}-keywrap"><label for="aiu-${p}-key" data-i18n="${keyLabel || 'key'}"></label>
+      <div class="aiu-row">${field}
       <button type="button" class="btn btn-ghost btn-sm aiu-admin" data-act="key-replace" data-p="${p}" data-i18n="replace"></button>
       <button type="button" class="btn btn-ghost btn-sm aiu-admin aiu-danger" data-act="key-remove" data-p="${p}" id="aiu-${p}-remove" data-i18n="remove"></button></div>
       <div class="aiu-hint" id="aiu-${p}-keyhint"></div><div class="aiu-err" id="aiu-${p}-keyerr" role="alert"></div></div>`;
@@ -174,39 +182,44 @@
       openrouter: `<div class="aiu-grid">
         ${modelGroup('openrouter', 'anthropic/claude-3.5-sonnet')}
         ${keyGroup('openrouter')}</div>`,
+      azure_openai: `<div class="aiu-grid">
+        <div class="aiu-f"><label for="aiu-azure_openai-auth" data-i18n="auth"></label><select id="aiu-azure_openai-auth" class="aiu-admin"><option value="api_key" data-i18n="authKey"></option><option value="entra" data-i18n="azEntra"></option></select></div>
+        <div class="aiu-f"><label for="aiu-azure_openai-endpoint" data-i18n="azEndpoint"></label><input id="aiu-azure_openai-endpoint" class="aiu-admin aiu-mono" placeholder="https://myres.openai.azure.com" autocomplete="off"><div class="aiu-hint" data-i18n="azEndpointHint"></div><div class="aiu-err" id="aiu-azure_openai-endpointerr" role="alert"></div></div>
+        <div class="aiu-f"><label for="aiu-azure_openai-deployment" data-i18n="azDeployment"></label><input id="aiu-azure_openai-deployment" class="aiu-admin aiu-mono" placeholder="prod-chat" autocomplete="off"><div class="aiu-hint" data-i18n="azDeploymentHint"></div></div>
+        <div class="aiu-f"><label for="aiu-azure_openai-version" data-i18n="azVersion"></label><input id="aiu-azure_openai-version" class="aiu-admin aiu-mono" placeholder="2024-10-21" autocomplete="off"></div>
+        <div class="aiu-f" id="aiu-azure_openai-tenantwrap"><label for="aiu-azure_openai-tenant">Tenant ID</label><input id="aiu-azure_openai-tenant" class="aiu-admin aiu-mono" autocomplete="off"></div>
+        <div class="aiu-f" id="aiu-azure_openai-clientwrap"><label for="aiu-azure_openai-client">Client ID</label><input id="aiu-azure_openai-client" class="aiu-admin aiu-mono" autocomplete="off"></div>
+        ${keyGroup('azure_openai')}</div>`,
+      gemini: `<div class="aiu-grid">
+        ${modelGroup('gemini', 'gemini-2.5-flash')}
+        ${keyGroup('gemini')}</div>`,
+      vertex: `<div class="aiu-grid">
+        <div class="aiu-f"><label for="aiu-vertex-project">GCP project</label><input id="aiu-vertex-project" class="aiu-admin aiu-mono" autocomplete="off"></div>
+        <div class="aiu-f"><label for="aiu-vertex-location">Location</label><input id="aiu-vertex-location" class="aiu-admin aiu-mono" placeholder="us-central1" autocomplete="off"></div>
+        ${modelGroup('vertex', 'google/gemini-2.5-flash')}
+        ${keyGroup('vertex', 'vxKey')}</div>`,
+      openai_compatible: `<div class="aiu-grid">
+        <div class="aiu-f"><label for="aiu-openai_compatible-base" data-i18n="baseUrl"></label><input id="aiu-openai_compatible-base" class="aiu-admin aiu-mono" placeholder="https://llm.example.com/v1" autocomplete="off"><div class="aiu-err" id="aiu-openai_compatible-baseerr" role="alert"></div></div>
+        ${modelGroup('openai_compatible', 'model-id')}
+        ${keyGroup('openai_compatible')}</div>`,
     };
-    $('aiu-prov-blocks').innerHTML = USER_PROVIDERS.map((p) => `<div class="aiu-prov-block" data-p="${p}">${H[p]}</div>`).join('');
+    $('aiu-prov-blocks').innerHTML = ORG_PROVIDERS.map((p) => `<div class="aiu-prov-block" data-p="${p}">${H[p]}</div>`).join('');
     $('aiu-add-prov').innerHTML = USER_PROVIDERS.map((p) => `<option value="${p}">${esc(PROV_NAME[p])}</option>`).join('');
   }
 
   /* ───────── data ───────── */
-  async function fetchBridge() {
-    const [cfg, ep, models, vis, health] = await Promise.all([
-      aiApi('/api/ai/config'), aiApi('/api/ollama/endpoint'), aiApi('/api/ollama/models'),
-      aiApi('/api/ollama/vision-model'), aiApi('/api/ollama/health'),
-    ]);
-    if (!cfg.ok || !cfg.data) throw new Error('config');
-    const d = JSON.parse(JSON.stringify(cfg.data));
-    const installed = ((models.data && models.data.models) || []).map((m) => ({ name: m.name, size_gb: m.size_gb, tools: null }));
-    d.ollama = {
-      url: (ep.data && ep.data.url) || '', custom: !!(ep.data && ep.data.custom), default_url: (ep.data && ep.data.default) || '',
-      model: (models.data && models.data.active_model) || (health.data && health.data.active_model) || '',
-      vision_model: (vis.data && vis.data.vision_model) || '', installed, reachable: !!models.ok, latency_ms: null, version: null, check: null,
-    };
-    const sec = d[d.provider] || {};
-    const keyless = (d.provider === 'anthropic' && sec.auth_mode !== 'api_key') || (d.provider === 'bedrock' && sec.auth_mode !== 'bedrock_api_key');
-    d.status = {
-      ollama: { reachable: d.ollama.reachable, latency_ms: null, model: d.ollama.model, tools: null },
-      cloud: { provider: d.provider, configured: !!(sec.api_key_set || keyless), last_test_at: null, last_test_ok: null },
-      mine: null,
-    };
-    return d;
-  }
+  // /api/ai/settings trả cấu hình + ollama{url,custom,default_url,model,vision_model}; danh sách model đã cài / reachable
+  // lấy từ /api/ollama/* (GET mở cho mọi role). Tool-calling chỉ biết sau POST /api/ai/ollama/check (ADMIN).
   async function fetchSettings() {
-    const r = await aiApi('/api/ai/settings');
-    if (r.ok && r.data && typeof r.data === 'object' && r.data.mode) { S.mode = 'contract'; return r.data; }
-    if (r.status === 404 || r.status === 405 || r.status === 501 || (r.ok && !(r.data && r.data.mode))) { S.mode = 'bridge'; return fetchBridge(); }
-    const e = new Error('settings'); e.status = r.status; throw e;
+    const [r, models] = await Promise.all([aiApi('/api/ai/settings'), aiApi('/api/ollama/models')]);
+    if (!r.ok || !r.data || typeof r.data !== 'object' || !r.data.mode) { const e = new Error('settings'); e.status = r.status; throw e; }
+    const d = r.data; d.ollama = d.ollama || {};
+    const chk = S.olCheck && S.olCheck.model === d.ollama.model ? S.olCheck : null;
+    d.ollama.installed = ((models.data && models.data.models) || []).map((m) => ({ name: m.name, size_gb: m.size_gb, tools: chk && chk.ok && chk.model === m.name ? chk.tools === true : null }));
+    d.ollama.reachable = !!models.ok;
+    d.status = d.status || {};
+    d.status.ollama = { reachable: d.ollama.reachable, latency_ms: chk && chk.latency_ms != null ? chk.latency_ms : null, model: d.ollama.model, tools: chk && chk.ok ? chk.tools === true : null };
+    return d;
   }
 
   /* ───────── fill ───────── */
@@ -241,16 +254,22 @@
     const h = d.hybrid || {};
     setVal('aiu-h-sev', h.escalate_min_severity || 'MEDIUM'); setVal('aiu-h-lo', h.fp_band_low); setVal('aiu-h-hi', h.fp_band_high);
     const a = sectionData('anthropic'), b = sectionData('bedrock'), oa = sectionData('openai'), orr = sectionData('openrouter');
+    const az = sectionData('azure_openai'), ge = sectionData('gemini'), vx = sectionData('vertex'), oc = sectionData('openai_compatible');
     setVal('aiu-anthropic-auth', a.auth_mode || 'api_key'); setVal('aiu-anthropic-model', a.model);
     const w = a.wif || {};
     setVal('aiu-wif-rule', w.federation_rule_id); setVal('aiu-wif-org', w.organization_id); setVal('aiu-wif-token', w.identity_token_file); setVal('aiu-wif-ws', w.workspace_id); setVal('aiu-wif-sa', w.service_account_id);
     setVal('aiu-bedrock-auth', b.auth_mode || 'aws_chain'); setVal('aiu-bedrock-region', b.region); setVal('aiu-bedrock-profile', b.aws_profile); setVal('aiu-bedrock-model', b.model);
     setVal('aiu-openai-model', oa.model); setVal('aiu-openai-base', oa.base_url);
     setVal('aiu-openrouter-model', orr.model);
+    setVal('aiu-azure_openai-auth', az.auth_mode || 'api_key'); setVal('aiu-azure_openai-endpoint', az.endpoint); setVal('aiu-azure_openai-deployment', az.deployment);
+    setVal('aiu-azure_openai-version', az.api_version); setVal('aiu-azure_openai-tenant', az.tenant_id); setVal('aiu-azure_openai-client', az.client_id);
+    setVal('aiu-gemini-model', ge.model);
+    setVal('aiu-vertex-project', vx.project); setVal('aiu-vertex-location', vx.location); setVal('aiu-vertex-model', vx.model);
+    setVal('aiu-openai_compatible-base', oc.base_url); setVal('aiu-openai_compatible-model', oc.model);
     clearSecrets();
     const pv = d.privacy || {};
     $('aiu-pv-send').checked = !!pv.send_code_context; setVal('aiu-pv-lines', pv.context_lines);
-    const pm = (d.advanced && d.advanced.pentest_models) || {};
+    const pm = (d.advanced && d.advanced.pentest_models) || {};      // chỉ đọc: PUT bỏ qua `advanced`, giá trị do env PENTEST_LLM_*_MODEL
     setVal('aiu-pt-planner', pm.planner); setVal('aiu-pt-executor', pm.executor); setVal('aiu-pt-summarizer', pm.summarizer);
     const p = d.policy || {};
     setVal('aiu-p-byok', p.byok || 'allowed'); setVal('aiu-p-fallback', p.fallback_to_org === false ? '0' : '1');
@@ -259,7 +278,8 @@
     setVal('aiu-p-usd', q.usd_per_user_month == null ? '' : q.usd_per_user_month); setVal('aiu-p-rpm', q.rpm_per_user == null ? '' : q.rpm_per_user);
     setVal('aiu-p-sched', p.scheduled_jobs_credential || 'org'); setVal('aiu-p-baseurl', p.custom_base_url || 'admin_only');
     setVal('aiu-route-cw', (h.tasks && h.tasks.coworker) || 'local');
-    S.olCheck = o.check || null;
+    S.azMap = Object.entries(p.azure_deployment_models || {}).map(([k, m]) => { const i = k.indexOf('/'); return { res: k.slice(0, i), dep: k.slice(i + 1), model: m }; });
+    renderAzMap();
     renderAll();
     S.base = formState();
     updateDirty();
@@ -273,10 +293,15 @@
     f['hybrid.route_cw'] = val('aiu-route-cw'); f['hybrid.sev'] = val('aiu-h-sev'); f['hybrid.lo'] = val('aiu-h-lo'); f['hybrid.hi'] = val('aiu-h-hi');
     f['cloud.provider'] = S.prov;
     ['anthropic-auth', 'anthropic-model', 'bedrock-auth', 'bedrock-region', 'bedrock-profile', 'bedrock-model', 'openai-model', 'openai-base', 'openrouter-model',
-      'wif-rule', 'wif-org', 'wif-token', 'wif-ws', 'wif-sa', 'pt-planner', 'pt-executor', 'pt-summarizer', 'pv-lines'].forEach((k) => { f['cloud.' + k] = val('aiu-' + k); });
+      'azure_openai-auth', 'azure_openai-endpoint', 'azure_openai-deployment', 'azure_openai-version', 'azure_openai-tenant', 'azure_openai-client',
+      'gemini-model', 'vertex-project', 'vertex-location', 'vertex-model', 'openai_compatible-base', 'openai_compatible-model',
+      'wif-rule', 'wif-org', 'wif-token', 'wif-ws', 'wif-sa', 'pv-lines'].forEach((k) => { f['cloud.' + k] = val('aiu-' + k); });
     f['cloud.pv-send'] = $('aiu-pv-send').checked;
-    USER_PROVIDERS.forEach((p) => { f['cloud.key.' + p] = val('aiu-' + p + '-key') ? 'typed' : ''; });   // KHÔNG lưu giá trị key
-    if (isAdmin() && S.mode === 'contract') ['byok', 'fallback', 'allowed', 'usd', 'rpm', 'sched', 'baseurl'].forEach((k) => { f['policy.' + k] = val('aiu-p-' + k); });
+    ORG_PROVIDERS.forEach((p) => { f['cloud.key.' + p] = val('aiu-' + p + '-key') ? 'typed' : ''; });   // KHÔNG lưu giá trị key
+    if (isAdmin()) {
+      ['byok', 'fallback', 'allowed', 'usd', 'rpm', 'sched', 'baseurl'].forEach((k) => { f['policy.' + k] = val('aiu-p-' + k); });
+      f['policy.azmap'] = JSON.stringify(azMapObject());
+    }
     return f;
   }
   function changes() {
@@ -293,14 +318,14 @@
     $('aiu-save').disabled = !ch.length || S.saving;
     $('aiu-discard').disabled = !ch.length || S.saving;
     $('aiu-save').dataset.dirty = ch.length ? '1' : '0';
-    renderPreview(); renderBand();
+    renderBand();
     renderStatus();
   }
 
   /* ───────── render ───────── */
   function renderAll() {
     renderStatus(); renderModes(); renderVisibility(); renderProviders(); renderKeyHints(); renderChecks(); renderInstalled();
-    renderPreview(); renderBand(); renderMine(); renderPolicyBits(); renderBanners(); applyRole(); updatePrivacyWarn();
+    renderBand(); renderMine(); renderPolicyBits(); renderBanners(); applyRole(); updatePrivacyWarn();
   }
   function modeLabel(m) { return m === 'local_only' ? 'Local' : m === 'cloud_only' ? 'Cloud' : 'Hybrid'; }
   function renderStatus() {
@@ -320,8 +345,10 @@
     if (S.sel === 'local_only') pills.push({ c: 'off', b: t('stCloudOff'), s: t('stCloudOffSub') });
     else {
       const nm = PROV_NAME[S.prov] || S.prov;
-      const tested = cl.last_test_at ? t('stCloudTested', { w: rel(cl.last_test_at) }) : t('stCloudNever');
-      pills.push({ c: cl.configured === false ? 'err' : (cl.last_test_ok === false ? 'err' : (cl.last_test_at ? 'ok' : 'warn')), b: t('stCloud', { p: nm }), s: cl.configured === false ? t('stCloudNone') : tested });
+      const lt = S.lastTest && S.lastTest.prov === S.prov ? S.lastTest : null;
+      const at = lt ? lt.at : cl.last_test_at, okk = lt ? lt.ok : cl.last_test_ok;
+      const tested = at ? t('stCloudTested', { w: rel(at) }) : t('stCloudNever');
+      pills.push({ c: cl.configured === false ? 'err' : (okk === false ? 'err' : (at ? 'ok' : 'warn')), b: t('stCloud', { p: nm }), s: cl.configured === false ? t('stCloudNone') : tested });
     }
     if (!isViewer()) {
       if (!me) pills.push({ c: 'off', b: t('stMine', { p: '—' }), s: t('stMineNA') });
@@ -341,53 +368,48 @@
   }
   function availableProviders() {
     const av = S.data && S.data.providers_available;
-    return Array.isArray(av) ? av : USER_PROVIDERS;
+    return Array.isArray(av) ? av : ORG_PROVIDERS;
   }
+  const needsKey = (p) => (p === 'anthropic' ? val('aiu-anthropic-auth') === 'api_key' : p === 'bedrock' ? val('aiu-bedrock-auth') === 'bedrock_api_key'
+    : p === 'azure_openai' ? true : p === 'openai_compatible' ? false : true);
   function renderProviders() {
     const av = availableProviders();
-    $('aiu-prov').innerHTML = PROVIDERS.map((p) => {
-      const ok = av.includes(p.id);
-      return `<button type="button" role="radio" class="aiu-admin" data-prov="${p.id}" aria-checked="${p.id === S.prov}" ${ok ? '' : 'data-soon="1" disabled'}>${esc(p.name)}<small>${ok ? esc(p.sub) : esc(t('soon'))}</small></button>`;
-    }).join('');
+    $('aiu-prov').innerHTML = PROVIDERS.filter((p) => av.includes(p.id)).map((p) =>
+      `<button type="button" role="radio" class="aiu-admin" data-prov="${p.id}" aria-checked="${p.id === S.prov}">${esc(p.name)}<small>${esc(p.sub)}</small></button>`).join('');
     $$('#aiu-prov-blocks .aiu-prov-block').forEach((b) => b.classList.toggle('aiu-hide', b.dataset.p !== S.prov));
-    const a = val('aiu-anthropic-auth'), br = val('aiu-bedrock-auth');
+    const a = val('aiu-anthropic-auth'), br = val('aiu-bedrock-auth'), az = val('aiu-azure_openai-auth');
     $('aiu-anthropic-keywrap').classList.toggle('aiu-hide', a !== 'api_key');
     $('aiu-anthropic-wif').classList.toggle('aiu-hide', a !== 'wif');
     $('aiu-anthropic-envnote').classList.toggle('aiu-hide', a !== 'environment');
     $('aiu-bedrock-profwrap').classList.toggle('aiu-hide', br !== 'profile');
     $('aiu-bedrock-keywrap').classList.toggle('aiu-hide', br !== 'bedrock_api_key');
-    $$('#aiu-prov button').forEach((b) => { if (!b.dataset.soon) b.disabled = !isAdmin(); });
+    $('aiu-azure_openai-tenantwrap').classList.toggle('aiu-hide', az !== 'entra');
+    $('aiu-azure_openai-clientwrap').classList.toggle('aiu-hide', az !== 'entra');
+    $$('#aiu-prov button').forEach((b) => { b.disabled = !isAdmin(); });
   }
   function renderKeyHints() {
-    USER_PROVIDERS.forEach((p) => {
+    ORG_PROVIDERS.forEach((p) => {
       const sec = sectionData(p); const inp = $('aiu-' + p + '-key'); if (!inp) return;
       const set = !!sec.api_key_set;
-      inp.placeholder = set ? '•••• ' + String(sec.api_key_hint || '').replace(/^…/, '') : KEY_PLACEHOLDER[p];
-      const meta = [];
-      if (set && sec.api_key_saved_at) meta.push(t('keySavedAt', { w: rel(sec.api_key_saved_at) }));
-      if (set && sec.api_key_saved_by) meta.push(t('keySavedBy', { u: sec.api_key_saved_by }));
-      $('aiu-' + p + '-keyhint').textContent = set ? (t('keySaved', { h: sec.api_key_hint || '••••' }) + (meta.length ? ' · ' + meta.join(' · ') : '')) : t('keyNone');
+      inp.placeholder = set ? (p === 'vertex' ? '•••• (service account)' : '•••• ' + String(sec.api_key_hint || '').replace(/^…/, '')) : KEY_PLACEHOLDER[p];
+      $('aiu-' + p + '-keyhint').textContent = set ? (p === 'vertex' ? t('keySavedNoHint') : t('keySaved', { h: sec.api_key_hint || '••••' })) : t(p === 'openai_compatible' ? 'keyOptional' : 'keyNone');
       $('aiu-' + p + '-remove').classList.toggle('aiu-hide', !set);
     });
   }
   function checkItem(c, text) { return `<li class="${c}">${esc(text)}</li>`; }
   function renderChecks() {
-    const ul = $('aiu-ol-checks'); const o = (S.data && S.data.ollama) || {}; const c = S.olCheck;
-    if (!c) {
-      ul.innerHTML = checkItem('q', t('ckNone')) + (S.mode === 'bridge' ? checkItem('q', t('ckBridge')) : '');
-      return;
-    }
+    const ul = $('aiu-ol-checks'); const c = S.olCheck;
+    if (!c) { ul.innerHTML = checkItem('q', t('ckNone')); return; }
     const li = [];
-    if (c.ok === false) li.push(checkItem('x', t('ckConn') + ': ' + errText({ data: c })));
+    if (c.ok === false && !c.version && c.model_installed !== false) li.push(checkItem('x', t('ckConn') + ': ' + errText({ data: c })));
     else li.push(checkItem('ok', t('ck1', { ms: c.latency_ms == null ? '—' : c.latency_ms, v: c.version || '—' })));
-    if (c.model_loaded === true) li.push(checkItem('ok', t('ck2')));
-    else if (c.model_loaded === false) li.push(checkItem('x', t('ck2no')));
-    if (c.tools === true) li.push(checkItem('ok', t('ck3')));
-    else if (c.tools === false) li.push(checkItem('x', t(S.sel === 'local_only' ? 'ck3noL' : 'ck3noH')));
-    else li.push(checkItem('q', S.mode === 'bridge' ? t('ckBridge') : t('ck3unk')));
-    if (c.json_total) li.push(checkItem(c.json_ok === c.json_total ? 'ok' : 'q', c.json_ok === c.json_total ? t('ck4ok') : t('ck4', { bad: c.json_total - c.json_ok, n: c.json_total })));
+    if (c.model_installed === true) li.push(checkItem('ok', t('ck2')));
+    else if (c.model_installed === false) li.push(checkItem('x', t('ck2no')));
+    if (c.ok) {
+      li.push(c.tools === true ? checkItem('ok', t('ck3')) : checkItem('x', t(S.sel === 'local_only' ? 'ck3noL' : 'ck3noH')));
+      li.push(c.json === true ? checkItem('ok', t('ck4ok')) : checkItem('q', t('ck4bad')));
+    }
     ul.innerHTML = li.join('');
-    void o;
   }
   function renderInstalled() {
     const o = (S.data && S.data.ollama) || {}; const inst = o.installed || []; const admin = isAdmin();
@@ -405,37 +427,24 @@
     const b = $('aiu-h-band'); const a = Math.min(lo, hi), z = Math.max(lo, hi);
     b.style.left = a + '%'; b.style.width = (z - a) + '%';
   }
-  function renderPreview() {
-    const el = $('aiu-h-preview'); const pv = S.data && S.data.preview;
-    el.className = 'aiu-res warn';
-    if (!pv || !Array.isArray(pv.items) || !pv.items.length) { el.textContent = t('hPreviewNone'); return; }
-    const min = SEV_RANK[val('aiu-h-sev')] || 2; const lo = parseInt(val('aiu-h-lo'), 10), hi = parseInt(val('aiu-h-hi'), 10);
-    const n = pv.items.filter((it) => (SEV_RANK[it[0]] || 0) >= min || (it[1] != null && !isNaN(lo) && !isNaN(hi) && it[1] >= Math.min(lo, hi) && it[1] <= Math.max(lo, hi))).length;
-    el.textContent = t('hPreviewTxt', { n, total: pv.items.length, pct: Math.round(100 * n / pv.items.length) });
-    el.parentElement.querySelector('label').textContent = t('hPreviewL', { total: pv.items.length });
-  }
   function updatePrivacyWarn() {
     $('aiu-pv-warn').classList.toggle('aiu-hide', !($('aiu-pv-send').checked && S.sel !== 'local_only'));
     $('aiu-pv-warn').textContent = t('pvWarn', { p: PROV_NAME[S.prov] || S.prov });
   }
   function renderBanners() {
-    const br = $('aiu-bridge');
-    if (S.mode === 'bridge' && isAdmin()) { br.classList.remove('aiu-hide'); br.textContent = t('bridge'); } else br.classList.add('aiu-hide');
     const ro = $('aiu-ro');
     if (isAdmin()) ro.classList.add('aiu-hide'); else { ro.classList.remove('aiu-hide'); ro.textContent = t(isViewer() ? 'roViewer' : 'ro'); }
   }
   function applyRole() {
-    const admin = isAdmin(); const contract = S.mode === 'contract';
-    $$('#st-ai .aiu-admin').forEach((e) => {
-      if (e.dataset.soon) return;
-      e.disabled = !admin || (e.classList.contains('aiu-contract') && !contract);
-    });
+    const admin = isAdmin();
+    $$('#st-ai .aiu-admin').forEach((e) => { e.disabled = !admin; });
     $$('#aiu-modes .aiu-mode').forEach((b) => { b.disabled = !admin; b.setAttribute('aria-disabled', String(!admin)); });
     $('aiu-pv-redact').disabled = true;
     $('aiu-sec-mine').classList.toggle('aiu-hide', isViewer());
     $('aiu-sec-policy').classList.toggle('aiu-hide', !admin);
     $('aiu-savebar').classList.toggle('aiu-hide', !admin);
     $('aiu-ol-manage').querySelectorAll('button[data-act="ol-del"]').forEach((b) => { b.disabled = !admin; });
+    $$('#aiu-azmap input, #aiu-azmap button').forEach((e) => { e.disabled = !admin; });
     $$('#aiu-prov-blocks .aiu-admin-link').forEach((a) => a.classList.toggle('aiu-hide', !admin));
     const mineOK = S.credsState === 'ok' && !isViewer();
     $('aiu-add-btn').disabled = !mineOK || byokOff();
@@ -453,8 +462,9 @@
   }
   function statusTag(c) {
     const when = rel(c.last_validated_at);
+    const bad = c.status !== 'valid' && c.last_error_code && S.dict.vi['code.' + c.last_error_code] !== undefined ? ' · ' + t('code.' + c.last_error_code) : '';
     const m = { valid: ['ok', 'stValid'], invalid: ['err', 'stInvalid'], forbidden: ['err', 'stForbidden'], rate_limited: ['warn', 'stRate'], revoked: ['err', 'stRevoked'], disabled: ['warn', 'stDisabled'], unknown: ['', 'stUnknown'] }[c.status] || ['', 'stUnknown'];
-    return `<span class="aiu-tag ${m[0]}">${esc(t(m[1]))}${when ? ' · ' + esc(when) : ''}</span>`;
+    return `<span class="aiu-tag ${m[0]}">${esc(t(m[1]))}${when ? ' · ' + esc(when) : ''}${esc(bad)}</span>`;
   }
   function renderMine() {
     const note = $('aiu-policy-note'); const pp = (S.data && (S.data.policy_public || S.data.policy)) || null;
@@ -473,7 +483,7 @@
     const rows = list.map((c) => {
       const rot = S.rotating === c.id;
       return `<tr data-id="${esc(c.id)}"><td>${esc(PROV_NAME[c.provider] || c.provider)}${c.label ? ' <small>' + esc(c.label) + '</small>' : ''} ${c.is_default ? `<span class="aiu-tag b">${esc(t('default'))}</span>` : ''}</td>
-        <td class="aiu-mono">${esc(c.key_hint || '••••')}</td><td class="aiu-mono">${esc(c.model || '—')}</td><td>${statusTag(c)}</td>
+        <td class="aiu-mono">${esc(c.key_hint || '••••')}</td><td class="aiu-mono">${esc(c.provider === 'azure_openai' ? (c.deployment || c.model || '—') : (c.model || '—'))}${c.region ? ' <small>' + esc(c.region) + '</small>' : ''}</td><td>${statusTag(c)}</td>
         <td><div class="aiu-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="c-test" data-id="${esc(c.id)}">${esc(t('test'))}</button>
         <button type="button" class="btn btn-ghost btn-sm" data-act="c-rot" data-id="${esc(c.id)}">${esc(t('rotate'))}</button>
         ${!c.is_default && list.length > 1 ? `<button type="button" class="btn btn-ghost btn-sm" data-act="c-def" data-id="${esc(c.id)}">${esc(t('makeDefault'))}</button>` : ''}
@@ -488,7 +498,6 @@
     try {
       const r = await aiApi('/api/me/ai-credentials');
       if (r.ok && r.data) { S.creds = Array.isArray(r.data) ? r.data : (r.data.credentials || []); S.credsState = 'ok'; }
-      else if (r.status === 404 || r.status === 405 || r.status === 501) S.credsState = 'unavailable';
       else if (r.status === 403) S.credsState = 'forbidden';
       else S.credsState = 'error';
     } catch (e) { S.credsState = 'error'; }
@@ -496,9 +505,6 @@
   }
   async function loadAdminTables() {
     if (!isAdmin()) return;
-    const ok = S.mode === 'contract';
-    const uk = $('aiu-ukeys'), us = $('aiu-usage');
-    if (!ok) { uk.innerHTML = ''; us.innerHTML = ''; return; }
     try {
       const [k, u] = await Promise.all([aiApi('/api/ai/credentials'), aiApi('/api/ai/usage?scope=all&days=30')]);
       S.ukeys = k.ok && k.data ? (Array.isArray(k.data) ? k.data : (k.data.credentials || [])) : null;
@@ -508,8 +514,8 @@
   }
   function renderAdminTables() {
     const uk = $('aiu-ukeys'), us = $('aiu-usage');
-    const hk = `<tr><th>${esc(t('thUser'))}</th><th>${esc(t('thProv'))}</th><th>${esc(t('thCred'))}</th><th>${esc(t('thStatus'))}</th><th>${esc(t('lastUsed'))}</th><th></th></tr>`;
-    uk.innerHTML = S.ukeys == null ? `<tr><td>${esc(t('err.unavailable'))}</td></tr>` : hk + (S.ukeys.map((c) => `<tr><td>${esc((c.owner && (c.owner.email || c.owner.id)) || c.owner_user_id || '—')}</td><td>${esc(PROV_NAME[c.provider] || c.provider)}</td><td class="aiu-mono">${esc(c.key_hint || '••••')}</td><td>${statusTag(c)}</td><td>${esc(rel(c.last_used_at) || '—')}</td><td>${c.status === 'revoked' ? '' : `<button type="button" class="btn btn-ghost btn-sm aiu-danger" data-act="uk-revoke" data-id="${esc(c.id)}">${esc(t('revoke'))}</button>`}</td></tr>`).join('') || `<tr><td colspan="6">${esc(t('noKeys'))}</td></tr>`);
+    const hk = `<tr><th>${esc(t('thUser'))}</th><th>${esc(t('thProv'))}</th><th>${esc(t('thCred'))}</th><th>${esc(t('thStatus'))}</th><th>${esc(t('lastUsed'))}</th><th>${esc(t('thCalls30'))}</th><th></th></tr>`;
+    uk.innerHTML = S.ukeys == null ? `<tr><td>${esc(t('err.unavailable'))}</td></tr>` : hk + (S.ukeys.map((c) => `<tr><td>${esc((c.owner && (c.owner.email || c.owner.id)) || c.owner_user_id || '—')}</td><td>${esc(PROV_NAME[c.provider] || c.provider)}</td><td class="aiu-mono">${esc(c.key_hint || '••••')}</td><td>${statusTag(c)}</td><td>${esc(rel(c.last_used_at) || '—')}</td><td>${esc(c.calls_30d == null ? '—' : c.calls_30d)}</td><td>${c.status === 'revoked' || c.status === 'disabled' ? '' : `<button type="button" class="btn btn-ghost btn-sm aiu-danger" data-act="uk-revoke" data-id="${esc(c.id)}">${esc(t('revoke'))}</button>`}</td></tr>`).join('') || `<tr><td colspan="7">${esc(t('noKeys'))}</td></tr>`);
     const hu = `<tr><th>${esc(t('thUser'))}</th><th>${esc(t('thCred'))}</th><th>${esc(t('thCalls'))}</th><th>${esc(t('thCost'))}</th></tr>`;
     us.innerHTML = S.usage == null ? `<tr><td>${esc(t('err.unavailable'))}</td></tr>` : hu + (S.usage.map((u) => {
       const own = u.credential_scope === 'user' || u.scope === 'own';
@@ -518,65 +524,104 @@
       return `<tr><td>${esc(who)}</td><td><span class="aiu-tag ${own ? 'b' : ''}">${esc(own ? t('own') : t('org'))}</span> ${esc(PROV_NAME[u.provider] || u.provider || '')} ${esc(u.key_hint || '')}</td><td>${esc(u.calls == null ? '—' : u.calls)}</td><td>${esc(cost)}${u.quota_pct != null ? ` <span class="aiu-tag warn">${esc(u.quota_pct)}%</span>` : ''}</td></tr>`;
     }).join('') || `<tr><td colspan="4">—</td></tr>`);
   }
-  function renderPolicyBits() {
-    $('aiu-policy-unavail').classList.toggle('aiu-hide', S.mode === 'contract');
-    const hasData = S.mode === 'contract';
-    if (!hasData) { $('aiu-ukeys').innerHTML = ''; $('aiu-usage').innerHTML = ''; } else renderAdminTables();
+  function renderPolicyBits() { if (isAdmin() && (S.ukeys || S.usage)) renderAdminTables(); }
+
+  /* ── Azure OpenAI: ánh xạ deployment → model thật (policy.azure_deployment_models, ADMIN) ── */
+  const AZ_KEY = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  function azMapObject() {
+    const o = {};
+    S.azMap.forEach((r) => { const a = String(r.res || '').trim().toLowerCase(), d = String(r.dep || '').trim().toLowerCase(), m = String(r.model || '').trim(); if (a && d && m) o[a + '/' + d] = m; });
+    return o;
+  }
+  function renderAzMap() {
+    const box = $('aiu-azmap'); if (!box) return;
+    box.innerHTML = S.azMap.length ? S.azMap.map((r, i) => `<div class="aiu-row aiu-azrow" data-i="${i}" style="margin-bottom:6px">
+      <input class="aiu-mono aiu-admin" data-az="res" value="${esc(r.res)}" placeholder="resource" aria-label="${esc(t('azResource'))}" style="width:30%">
+      <input class="aiu-mono aiu-admin" data-az="dep" value="${esc(r.dep)}" placeholder="deployment" aria-label="${esc(t('azDeployment'))}" style="width:30%">
+      <span>→</span><input class="aiu-mono aiu-admin" data-az="model" value="${esc(r.model)}" placeholder="gpt-4o" aria-label="${esc(t('model'))}" style="flex:1;min-width:0">
+      <button type="button" class="btn btn-ghost btn-sm aiu-admin aiu-danger" data-act="az-del" data-i="${i}">${esc(t('remove'))}</button></div>`).join('')
+      : `<div class="aiu-hint">${esc(t('azMapNone'))}</div>`;
+    $$('#aiu-azmap input, #aiu-azmap button').forEach((e) => { e.disabled = !isAdmin(); });
   }
 
   /* ───────── validation ───────── */
+  const URL_RE = /^https?:\/\/[^\s/@?#]+(:\d+)?(\/.*)?$/i;
   function validate() {
     let ok = true;
     const err = (id, msg) => { const e = $(id); if (e) e.textContent = msg || ''; if (msg) ok = false; };
-    ['aiu-ol-url-err', 'aiu-h-err', 'aiu-openai-baseerr'].forEach((i) => err(i, ''));
-    USER_PROVIDERS.forEach((p) => err('aiu-' + p + '-keyerr', ''));
+    ['aiu-ol-url-err', 'aiu-h-err', 'aiu-openai-baseerr', 'aiu-openai_compatible-baseerr', 'aiu-azure_openai-endpointerr'].forEach((i) => err(i, ''));
+    ORG_PROVIDERS.forEach((p) => err('aiu-' + p + '-keyerr', ''));
     const u = val('aiu-ol-url').trim();
-    if (u && !/^https?:\/\/[^\s/@?#]+(:\d+)?(\/.*)?$/i.test(u)) err('aiu-ol-url-err', t('errUrl'));
+    if (u && !URL_RE.test(u)) err('aiu-ol-url-err', t('errUrl'));
     const ob = val('aiu-openai-base').trim();
-    if (ob && !/^https?:\/\/[^\s/@?#]+/i.test(ob)) err('aiu-openai-baseerr', t('errUrl'));
+    if (ob && !URL_RE.test(ob)) err('aiu-openai-baseerr', t('errUrl'));
+    const oc = val('aiu-openai_compatible-base').trim();
+    if (oc && !URL_RE.test(oc)) err('aiu-openai_compatible-baseerr', t('errUrl'));
+    const ae = val('aiu-azure_openai-endpoint').trim();
+    if (ae && !/^https:\/\/[a-z0-9-]+\.(openai\.azure\.com|cognitiveservices\.azure\.com)\/?$/i.test(ae)) err('aiu-azure_openai-endpointerr', t('errAzEndpoint'));
     if (S.sel === 'hybrid') {
       const lo = parseInt(val('aiu-h-lo'), 10), hi = parseInt(val('aiu-h-hi'), 10);
       if (isNaN(lo) || isNaN(hi) || lo < 0 || hi > 100 || lo > hi) err('aiu-h-err', t('errBand'));
     }
     if (S.sel !== 'local_only') {
       const p = S.prov; const sec = sectionData(p); const typed = !!val('aiu-' + p + '-key');
-      const needs = (p === 'anthropic' && val('aiu-anthropic-auth') === 'api_key') || (p === 'bedrock' && val('aiu-bedrock-auth') === 'bedrock_api_key') || p === 'openai' || p === 'openrouter';
-      if (needs && !typed && !sec.api_key_set) err('aiu-' + p + '-keyerr', t('errKeyNeeded'));
+      if (needsKey(p) && !typed && !sec.api_key_set) err('aiu-' + p + '-keyerr', t('errKeyNeeded'));
     }
+    const bad = S.azMap.some((r) => (r.res || r.dep || r.model) && !(AZ_KEY.test(String(r.res).trim().toLowerCase()) && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(String(r.dep).trim().toLowerCase()) && String(r.model).trim()));
+    if (bad) { ok = false; toast(t('errAzMap'), 'warn'); }
     return ok;
   }
 
   /* ───────── payload ───────── */
+  const trimmed = (id) => val(id).trim();
+  const orUndef = (id) => trimmed(id) || undefined;
+  // giá trị của MỘT provider (dùng cho PUT và POST /api/ai/test); key chỉ đưa vào khi có gõ
+  function providerSection(p) {
+    const o = {
+      anthropic: () => ({ auth_mode: val('aiu-anthropic-auth'), model: orUndef('aiu-anthropic-model'),
+        wif: { federation_rule_id: trimmed('aiu-wif-rule'), organization_id: trimmed('aiu-wif-org'), identity_token_file: trimmed('aiu-wif-token'), workspace_id: trimmed('aiu-wif-ws'), service_account_id: trimmed('aiu-wif-sa') } }),
+      bedrock: () => ({ auth_mode: val('aiu-bedrock-auth'), region: trimmed('aiu-bedrock-region'), aws_profile: trimmed('aiu-bedrock-profile'), model: orUndef('aiu-bedrock-model') }),
+      openai: () => ({ model: orUndef('aiu-openai-model'), base_url: trimmed('aiu-openai-base') }),
+      openrouter: () => ({ model: orUndef('aiu-openrouter-model') }),
+      azure_openai: () => ({ auth_mode: val('aiu-azure_openai-auth'), endpoint: trimmed('aiu-azure_openai-endpoint'), deployment: trimmed('aiu-azure_openai-deployment'),
+        api_version: orUndef('aiu-azure_openai-version'), tenant_id: trimmed('aiu-azure_openai-tenant'), client_id: trimmed('aiu-azure_openai-client') }),
+      gemini: () => ({ model: orUndef('aiu-gemini-model') }),
+      vertex: () => ({ project: trimmed('aiu-vertex-project'), location: orUndef('aiu-vertex-location'), model: orUndef('aiu-vertex-model') }),
+      openai_compatible: () => ({ base_url: trimmed('aiu-openai_compatible-base'), model: trimmed('aiu-openai_compatible-model') }),
+    }[p]();
+    return o;
+  }
+  function secretOf(p) { const k = val('aiu-' + p + '-key'); return p === 'vertex' ? k.trim() : k.trim(); }
   function buildPayload() {
     const lo = parseInt(val('aiu-h-lo'), 10), hi = parseInt(val('aiu-h-hi'), 10);
     const pl = {
       mode: S.sel, provider: S.prov,
-      anthropic: { auth_mode: val('aiu-anthropic-auth'), model: val('aiu-anthropic-model').trim() || undefined,
-        wif: { federation_rule_id: val('aiu-wif-rule').trim(), organization_id: val('aiu-wif-org').trim(), identity_token_file: val('aiu-wif-token').trim(), workspace_id: val('aiu-wif-ws').trim(), service_account_id: val('aiu-wif-sa').trim() } },
-      bedrock: { auth_mode: val('aiu-bedrock-auth'), region: val('aiu-bedrock-region').trim(), aws_profile: val('aiu-bedrock-profile').trim(), model: val('aiu-bedrock-model').trim() || undefined },
-      openai: { model: val('aiu-openai-model').trim() || undefined, base_url: val('aiu-openai-base').trim() },
-      openrouter: { model: val('aiu-openrouter-model').trim() || undefined },
-      hybrid: { escalate_min_severity: val('aiu-h-sev'), fp_band_low: isNaN(lo) ? 0 : lo, fp_band_high: isNaN(hi) ? 100 : hi },
+      hybrid: { escalate_min_severity: val('aiu-h-sev'), fp_band_low: isNaN(lo) ? 0 : lo, fp_band_high: isNaN(hi) ? 100 : hi, tasks: { coworker: val('aiu-route-cw') } },   // plan §4.11 A1
       privacy: { send_code_context: $('aiu-pv-send').checked, context_lines: Math.max(0, parseInt(val('aiu-pv-lines'), 10) || 0), redact_secrets: true },
+      ollama: { url: trimmed('aiu-ol-url'), model: val('aiu-ol-model'), vision_model: val('aiu-ol-vision') },
     };
-    USER_PROVIDERS.forEach((p) => { const k = val('aiu-' + p + '-key').trim(); if (k) pl[p].api_key = k; });   // write-only: chỉ gửi khi gõ key mới
-    return pl;
-  }
-  function buildContractPayload() {
-    const pl = buildPayload();
-    pl.ollama = { url: val('aiu-ol-url').trim(), model: val('aiu-ol-model'), vision_model: val('aiu-ol-vision') };
-    pl.hybrid.tasks = { coworker: val('aiu-route-cw') };   // plan §4.11 A1: hybrid.tasks.coworker = local|cloud
-    pl.advanced = { pentest_models: { planner: val('aiu-pt-planner').trim(), executor: val('aiu-pt-executor').trim(), summarizer: val('aiu-pt-summarizer').trim() } };
+    ORG_PROVIDERS.forEach((p) => { pl[p] = providerSection(p); const k = secretOf(p); if (k) pl[p].api_key = k; });   // write-only: chỉ gửi khi gõ key mới
     if (isAdmin()) {
-      const usd = val('aiu-p-usd').trim(), rpm = val('aiu-p-rpm').trim();
+      const usd = trimmed('aiu-p-usd'), rpm = trimmed('aiu-p-rpm');
       pl.policy = {
         byok: val('aiu-p-byok'), fallback_to_org: val('aiu-p-fallback') === '1',
-        allowed: val('aiu-p-allowed').split(',').map((s) => s.trim()).filter(Boolean),
+        allowed: val('aiu-p-allowed').split(',').map((x) => x.trim()).filter(Boolean),
         org_quota: { usd_per_user_month: usd === '' ? null : Number(usd), rpm_per_user: rpm === '' ? null : Number(rpm) },
         scheduled_jobs_credential: val('aiu-p-sched'), custom_base_url: val('aiu-p-baseurl'),
+        azure_deployment_models: azMapObject(),          // REPLACE (xoá mục = bỏ khỏi object)
       };
     }
     return pl;
+  }
+  // Body của POST /api/ai/test: giá trị CHƯA LƯU của provider đang chọn (trường lạ bị server coi là "đổi nơi gửi khoá")
+  function buildTestBody() {
+    const p = S.prov; const b = { provider: p };
+    const sec = providerSection(p);
+    ['model', 'base_url', 'auth_mode', 'region', 'aws_profile', 'endpoint', 'deployment', 'api_version', 'tenant_id', 'client_id', 'project', 'location'].forEach((k) => {
+      if (typeof sec[k] === 'string' && sec[k] !== '') b[k] = sec[k];
+    });
+    const k = secretOf(p); if (k) b.api_key = k;
+    return b;
   }
 
   /* ───────── actions ───────── */
@@ -584,46 +629,33 @@
     if (S.loading) return S.loading;
     if (S.inited && !force && S.data) { applyRole(); return; }
     S.loading = (async () => {
-      const errBox = $('aiu-loaderr'); errBox.classList.add('aiu-hide');
+      const errBox = $('aiu-loaderr'); errBox.classList.add('aiu-hide'); $('st-ai').dataset.busy = '1';
       try {
         if (!S.dict.vi || !Object.keys(S.dict.vi).length) await loadDict('vi');
         if (S.lang === 'en') await loadDict('en');
         applyLang();
         S.data = await fetchSettings();
-        document.body.classList.toggle('ai-legacy-on', S.mode === 'bridge' || /[?&]ai_legacy=1/.test(location.search));
         S.inited = true;
         fill();
         loadCreds(); loadAdminTables();
       } catch (e) {
         errBox.classList.remove('aiu-hide'); errBox.textContent = t('loadErr');
-      } finally { S.loading = null; }
+      } finally { S.loading = null; delete $('st-ai').dataset.busy; }
     })();
     return S.loading;
-  }
-  async function saveBridge(pl, ch) {
-    const out = { ok: true, msgs: [] };
-    const cfg = await aiApi('/api/ai/config', { method: 'PUT', body: pl });
-    if (!cfg.ok) return { ok: false, msg: errText(cfg) };
-    if (ch.includes('ollama.url')) { const r = await aiApi('/api/ollama/endpoint', { method: 'PUT', body: { url: val('aiu-ol-url').trim() } }); if (!r.ok) return { ok: false, msg: t('errOllamaUrl') + ' ' + errText(r) }; }
-    if (ch.includes('ollama.model') && val('aiu-ol-model')) { const r = await aiApi('/api/ollama/active-model', { method: 'PUT', body: { model: val('aiu-ol-model') } }); if (!r.ok) return { ok: false, msg: errText(r) }; }
-    if (ch.includes('ollama.vision_model') && val('aiu-ol-vision')) { const r = await aiApi('/api/ollama/vision-model', { method: 'PUT', body: { model: val('aiu-ol-vision') } }); if (!r.ok) return { ok: false, msg: errText(r) }; }
-    return out;
   }
   async function save() {
     if (S.saving || !isAdmin()) return;
     if (!validate()) { toast(t('errFix'), 'warn'); return; }
-    const ch = changes();
     S.saving = true; $('aiu-save').disabled = true;
     let res;
     try {
-      const pr = S.mode === 'contract'
-        ? aiApi('/api/ai/settings', { method: 'PUT', body: buildContractPayload() }).then((r) => (r.ok ? { ok: true } : { ok: false, msg: errText(r) }))
-        : saveBridge(buildPayload(), ch);
+      const pr = aiApi('/api/ai/settings', { method: 'PUT', body: buildPayload() }).then((r) => (r.ok ? { ok: true } : { ok: false, msg: errText(r) }));
       clearSecrets();     // key đã nằm trong body request → xoá khỏi DOM ngay, trước khi chờ phản hồi
       res = await pr;
     } catch (e) { res = { ok: false, msg: t('err.network') }; }
     S.saving = false;
-    if (res.ok) { toast(t('saved'), 'success'); await load(true); }
+    if (res.ok) { toast(t('saved'), 'success'); S.lastTest = null; await load(true); }
     else { toast(t('saveFail', { m: res.msg }), 'error'); updateDirty(); }
   }
   function discard() { if (S.data) { fill(); $('aiu-cloud-res').classList.add('aiu-hide'); } }
@@ -631,38 +663,37 @@
   function showRes(el, kind, text) { el.className = 'aiu-res ' + kind; el.textContent = text; }
   async function testCloud() {
     const el = $('aiu-cloud-res'); const btn = $('aiu-cloud-test');
-    const cloudDirty = changes().some((k) => SECTION_OF(k) === '3');
-    if (S.mode === 'bridge' && cloudDirty) { showRes(el, 'warn', t('testDirtyBridge')); return; }
     btn.disabled = true; showRes(el, 'warn', t('testing'));
+    const prov = S.prov;
     try {
-      const body = S.mode === 'contract' ? buildPayload() : undefined;      // key chưa lưu đi trong body, không giữ lại ở đâu
-      const r = await aiApi('/api/ai/test', { method: 'POST', body });
+      const r = await aiApi('/api/ai/test', { method: 'POST', body: buildTestBody() });     // giá trị CHƯA LƯU; key chỉ đi trong body (ô nhập giữ nguyên để còn Lưu)
       const d = r.data || {};
       if (r.ok && d.ok) {
         const bits = [(PROV_NAME[d.provider] || d.provider || ''), d.model, d.latency_ms != null ? d.latency_ms + ' ms' : null, d.json === true ? 'JSON ✓' : d.json === false ? 'JSON ✗' : null, d.tools === true ? 'tools ✓' : d.tools === false ? 'tools ✗' : null].filter(Boolean);
         showRes(el, d.tools === false ? 'warn' : 'ok', '✓ ' + bits.join(' · '));
-      } else if (r.ok && d.ok === false) {
+        S.lastTest = { prov, at: new Date().toISOString(), ok: true };
+      } else {
         showRes(el, 'err', '✗ ' + errText({ status: r.status, data: d }));
-      } else showRes(el, 'err', '✗ ' + errText(r));
+        S.lastTest = { prov, at: new Date().toISOString(), ok: false };
+      }
     } catch (e) { showRes(el, 'err', '✗ ' + t('err.network')); }
-    btn.disabled = !isAdmin();
+    btn.disabled = !isAdmin(); renderStatus();
   }
   async function testOllama() {
     const btn = $('aiu-ol-test'); const url = val('aiu-ol-url').trim();
     $('aiu-ol-url-err').textContent = '';
-    if (url && !/^https?:\/\/[^\s/@?#]+/i.test(url)) { $('aiu-ol-url-err').textContent = t('errUrl'); return; }
+    if (url && !URL_RE.test(url)) { $('aiu-ol-url-err').textContent = t('errUrl'); return; }
     btn.disabled = true; $('aiu-ol-checks').innerHTML = checkItem('q', t('testing'));
     try {
-      if (S.mode === 'contract') {
-        const r = await aiApi('/api/ai/ollama/check', { method: 'POST', body: { url: url || undefined, model: val('aiu-ol-model') || undefined } });
-        S.olCheck = r.ok && r.data ? r.data : { ok: false, code: (r.data && r.data.code) || (r.status === 429 ? 'RATE_LIMITED' : 'NETWORK') };
-      } else {
-        if (changes().includes('ollama.url')) { S.olCheck = null; $('aiu-ol-checks').innerHTML = checkItem('q', t('testDirtyBridge')); btn.disabled = !isAdmin(); return; }
-        const t0 = performance.now(); const [h, m] = await Promise.all([aiApi('/api/ollama/health'), aiApi('/api/ollama/models')]);
-        const names = ((m.data && m.data.models) || []).map((x) => x.name); const cur = val('aiu-ol-model');
-        S.olCheck = h.ok ? { ok: true, latency_ms: Math.round(performance.now() - t0), version: null, model_loaded: cur ? names.includes(cur) : null, tools: null } : { ok: false, code: 'NETWORK' };
-      }
+      const r = await aiApi('/api/ai/ollama/check', { method: 'POST', body: { url: url || undefined, model: val('aiu-ol-model') || undefined, force: true } });
+      S.olCheck = r.ok && r.data ? r.data : { ok: false, code: (r.data && (r.data.code || (r.data.detail && r.data.detail.code))) || (r.status === 429 ? 'RATE_LIMITED' : 'NETWORK') };
     } catch (e) { S.olCheck = { ok: false, code: 'NETWORK' }; }
+    if (S.data && S.olCheck && S.olCheck.ok) {      // tag tools ✓/✗ cho model vừa kiểm
+      const st = S.data.status.ollama;
+      if (S.olCheck.model === st.model) { st.tools = S.olCheck.tools === true; if (S.olCheck.latency_ms != null) st.latency_ms = S.olCheck.latency_ms; }
+      (S.data.ollama.installed || []).forEach((m) => { if (m.name === S.olCheck.model) m.tools = S.olCheck.tools === true; });
+      fillOllamaSelects(val('aiu-ol-model'), val('aiu-ol-vision')); renderInstalled(); renderStatus();
+    }
     renderChecks(); btn.disabled = !isAdmin();
   }
   async function loadModels(p) {
@@ -670,8 +701,9 @@
     try {
       const r = await aiApi('/api/ai/models?provider=' + encodeURIComponent(p));
       if (!r.ok) { note.textContent = errText(r); return; }
-      $('aiu-' + p + '-dl').innerHTML = ((r.data && r.data.models) || []).map((m) => `<option value="${esc(m)}"></option>`).join('');
-      note.textContent = t(r.data && r.data.source === 'api' ? 'modelsApi' : 'modelsStatic', { n: ((r.data && r.data.models) || []).length });
+      const list = (r.data && r.data.models) || [];
+      $('aiu-' + p + '-dl').innerHTML = list.map((m) => `<option value="${esc(typeof m === 'string' ? m : (m && m.id) || '')}"></option>`).join('');
+      note.textContent = t(r.data && r.data.source === 'api' ? 'modelsApi' : 'modelsStatic', { n: list.length });
       $('aiu-' + p + '-model').focus();
     } catch (e) { note.textContent = t('err.network'); }
   }
@@ -708,9 +740,7 @@
   }
   async function removeOrgKey(p) {
     if (!isAdmin() || !confirm(t('keyDelConfirm', { p: PROV_NAME[p] }))) return;
-    const r = S.mode === 'contract'
-      ? await aiApi('/api/ai/settings', { method: 'PUT', body: { [p]: { clear_api_key: true } } })
-      : await aiApi('/api/ai/config', { method: 'PUT', body: { [p]: { clear_api_key: true } } });
+    const r = await aiApi('/api/ai/settings', { method: 'PUT', body: { [p]: { clear_api_key: true } } });
     if (r.ok) { toast(t('keyRemoved'), 'success'); await load(true); } else toast(errText(r), 'error');
   }
 
@@ -726,9 +756,12 @@
   function onAddProv() {
     const p = val('aiu-add-prov');
     $('aiu-add-key').placeholder = KEY_PLACEHOLDER[p] || '';
+    const az = p === 'azure_openai';
     $('aiu-add-region-wrap').classList.toggle('aiu-hide', p !== 'bedrock');
+    ['aiu-add-az-wrap', 'aiu-add-dep-wrap', 'aiu-add-ver-wrap'].forEach((id) => $(id).classList.toggle('aiu-hide', !az));
+    $('aiu-add-model-wrap').classList.toggle('aiu-hide', az);       // Azure: tên deployment thay cho model
     $('aiu-add-models').innerHTML = (MODEL_SUGGEST[p] || []).map((m) => `<option value="${esc(m)}"></option>`).join('');
-    $('aiu-add-model').value = (MODEL_SUGGEST[p] || [''])[0];
+    $('aiu-add-model').value = (MODEL_SUGGEST[p] || [''])[0] || '';
   }
   async function addKey() {
     const err = $('aiu-add-err'); err.textContent = '';
@@ -737,6 +770,10 @@
     if (/^sk-ant-oat/i.test(k)) { err.textContent = t('errOauth'); $('aiu-add-key').value = ''; return; }   // token subscription OAuth: không nhận
     const body = { provider: p, model: val('aiu-add-model').trim() || undefined, label: val('aiu-add-label').trim() || undefined, secret: k, is_default: !(S.creds || []).length };
     if (p === 'bedrock') body.region = val('aiu-add-region').trim();
+    if (p === 'azure_openai') {
+      body.model = undefined; body.resource = val('aiu-add-resource').trim().toLowerCase(); body.deployment = val('aiu-add-deployment').trim(); body.api_version = val('aiu-add-version').trim() || undefined;
+      if (!body.resource || !body.deployment) { err.textContent = t('errAzNeeded'); return; }
+    }
     const btn = $('aiu-add-go'); btn.disabled = true;
     let r;
     try { const pr = aiApi('/api/me/ai-credentials', { method: 'POST', body }); clearSecrets(); r = await pr; }
@@ -774,8 +811,7 @@
     }
   }
   async function refreshMe() {   // cập nhật pill "Khoá của bạn" sau khi đổi khoá
-    if (S.mode !== 'contract') return;
-    try { const r = await aiApi('/api/ai/settings'); if (r.ok && r.data && r.data.status) { S.data.status = r.data.status; renderStatus(); } } catch (e) { /* giữ */ }
+    try { const r = await aiApi('/api/ai/settings'); if (r.ok && r.data && r.data.status) { S.data.status = Object.assign({}, S.data.status, { mine: r.data.status.mine, cloud: r.data.status.cloud }); renderStatus(); } } catch (e) { /* giữ */ }
   }
   async function revokeUserKey(id) {
     if (!isAdmin() || !confirm(t('revokeConfirm'))) return;
@@ -792,11 +828,11 @@
     $('aiu-prov').addEventListener('click', (e) => { const b = e.target.closest('button[data-prov]'); if (!b || b.disabled) return; S.prov = b.dataset.prov; $('aiu-cloud-res').classList.add('aiu-hide'); renderProviders(); updatePrivacyWarn(); updateDirty(); });
     root.addEventListener('input', (e) => {
       if (e.target.closest('#aiu-add,#aiu-mine-table')) return;
-      if (e.target.id === 'aiu-anthropic-auth' || e.target.id === 'aiu-bedrock-auth') renderProviders();
+      if (e.target.id === 'aiu-anthropic-auth' || e.target.id === 'aiu-bedrock-auth' || e.target.id === 'aiu-azure_openai-auth') renderProviders();
       if (e.target.id === 'aiu-pv-send') updatePrivacyWarn();
       updateDirty();
     });
-    root.addEventListener('change', (e) => { if (e.target.id === 'aiu-anthropic-auth' || e.target.id === 'aiu-bedrock-auth') renderProviders(); if (e.target.id === 'aiu-add-prov') onAddProv(); updateDirty(); });
+    root.addEventListener('change', (e) => { if (e.target.id === 'aiu-anthropic-auth' || e.target.id === 'aiu-bedrock-auth' || e.target.id === 'aiu-azure_openai-auth') renderProviders(); if (e.target.id === 'aiu-add-prov') onAddProv(); updateDirty(); });
     root.addEventListener('click', (e) => {
       const a = e.target.closest('[data-act]'); if (!a) return;
       const act = a.dataset.act;
@@ -807,6 +843,9 @@
       else if (act === 'uk-revoke') revokeUserKey(a.dataset.id);
       else if (act.startsWith('c-')) credAct(act, a.dataset.id);
     });
+    $('aiu-azmap-add').addEventListener('click', () => { S.azMap.push({ res: '', dep: '', model: '' }); renderAzMap(); updateDirty(); const rows = $$('#aiu-azmap .aiu-azrow'); const l = rows[rows.length - 1]; if (l) l.querySelector('input').focus(); });
+    $('aiu-azmap').addEventListener('input', (e) => { const row = e.target.closest('.aiu-azrow'); if (!row || !e.target.dataset.az) return; S.azMap[+row.dataset.i][e.target.dataset.az] = e.target.value; updateDirty(); });
+    $('aiu-azmap').addEventListener('click', (e) => { const b = e.target.closest('[data-act="az-del"]'); if (!b) return; S.azMap.splice(+b.dataset.i, 1); renderAzMap(); updateDirty(); });
     $('aiu-cloud-test').addEventListener('click', testCloud);
     $('aiu-ol-test').addEventListener('click', testOllama);
     $('aiu-pull-btn').addEventListener('click', pull);
