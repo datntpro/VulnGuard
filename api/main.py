@@ -234,6 +234,8 @@ app.include_router(compare.router)
 app.include_router(ollama.router)
 app.include_router(settings.router)
 app.include_router(report.router)
+from api.routes import pdf_jobs  # noqa: E402  PDF PR-3
+app.include_router(pdf_jobs.router)
 app.include_router(domains.router)
 app.include_router(coworker.router)
 app.include_router(coworker_agent.router)

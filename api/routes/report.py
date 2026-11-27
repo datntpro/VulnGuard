@@ -41,7 +41,7 @@ def _fmt_vn(dt: datetime) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(VN_TZ).strftime("%d/%m/%Y %H:%M")
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -500,31 +500,8 @@ def _tools_section(scan) -> str:
             f'<tbody>{rows}</tbody></table></div>')
 
 
-PDF_DISABLED_DETAIL = {
-    "code": "pdf_export_disabled",
-    "message": ("Xuất PDF trực tiếp đang tạm tắt để vá lỗi bảo mật renderer. Tạm thời dùng "
-                "⬇ PDF nhanh hoặc ⬇ JSON/SARIF; bản PDF mới sẽ có trong bản cập nhật tới."),
-}
-
-
-@router.get("/{scan_id}/report", response_class=HTMLResponse)
-def generate_report(
-    scan_id: str,
-    download: bool = Query(default=False, description="True để download file .html"),
-    format: str = Query(default="html", description="html (pdf tạm tắt → 503)"),
-    db: Session = Depends(get_db),
-):
-    """
-    Tạo báo cáo bảo mật HTML hoàn chỉnh từ kết quả scan.
-    - Dedup vulns tìm thấy bởi nhiều tools
-    - Group theo package (SCA) / rule (SAST) / loại bí mật (Secrets) / IaC check
-    - Tích hợp AI explanation và fix suggestion
-    - Ngôn ngữ tiếng Việt
-    """
-    if format == "pdf":
-        # PR-0: renderer Chromium CLI (SSRF/LFI) đã bị gỡ; không bao giờ trả HTML cho format=pdf.
-        raise HTTPException(status_code=503, detail=PDF_DISABLED_DETAIL)
-
+def load_report_data(db: Session, scan_id: str):
+    """Load + validate scan/project/vulns and group them (shared by the HTML and PDF reports)."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan không tồn tại")
@@ -545,14 +522,42 @@ def generate_report(
         .order_by(Vulnerability.severity)
         .all()
     )
-
-    # Dedup + group
     grouped = _dedup_and_group(vulns)
-
-    # Severity counts (raw, before dedup — matches summary)
     severity_counts: dict = {s.value: 0 for s in Severity}
     for v in vulns:
         severity_counts[v.severity.value] += 1
+    return project, scan, vulns, grouped, severity_counts
+
+
+@router.get("/{scan_id}/report.pdf")
+def generate_report_pdf(scan_id: str, request: Request, async_: bool = Query(default=False, alias="async"),
+                        db: Session = Depends(get_db)):
+    """Alias của /report?format=pdf."""
+    from api.services import pdf_export
+    return pdf_export.pdf_response("scan", scan_id, request, db, {}, want_async=async_)
+
+
+@router.get("/{scan_id}/report", response_class=HTMLResponse)
+def generate_report(
+    scan_id: str,
+    request: Request,
+    async_: bool = Query(default=False, alias="async", description="PDF: luôn tạo bằng job nền"),
+    download: bool = Query(default=False, description="True để download file .html"),
+    format: str = Query(default="html", description="html | pdf (Typst, tải trực tiếp)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Tạo báo cáo bảo mật HTML hoàn chỉnh từ kết quả scan.
+    - Dedup vulns tìm thấy bởi nhiều tools
+    - Group theo package (SCA) / rule (SAST) / loại bí mật (Secrets) / IaC check
+    - Tích hợp AI explanation và fix suggestion
+    - Ngôn ngữ tiếng Việt
+    """
+    if format == "pdf":
+        from api.services import pdf_export
+        return pdf_export.pdf_response("scan", scan_id, request, db, {}, want_async=async_)
+
+    project, scan, vulns, grouped, severity_counts = load_report_data(db, scan_id)
 
     from scanner import report_pro
     html = report_pro.render(

@@ -270,7 +270,6 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Báo cáo bảo mật — {_esc(project.name)} — Scan #{getattr(scan,'scan_number','')}</title>
 <style>{css}</style></head><body>
-<div class="print-footer">{_esc(footer_text)} · {_esc(confidential)}</div>
 
 <!-- TRANG BÌA -->
 <section class="cover page">
@@ -333,8 +332,8 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
   dương/âm tính giả. Tài liệu thuộc loại {_esc(confidential)}.</p>
 </section>
 
-<div class="actions no-print">
-  <button onclick="window.print()">🖨️ Lưu PDF / In</button>
+<div class="actions">
+  <a class="pdf-link" href="/api/scans/{_esc(scan.id)}/report?format=pdf">⬇ Tải PDF</a>
 </div>
 </body></html>"""
 
@@ -380,16 +379,6 @@ h3{color:__ACCENT__;font-size:15px;margin:18px 0 8px}
 .dtable th,.dtable td{border-bottom:1px solid #eef2f7;padding:8px 14px;vertical-align:top;font-size:13px}
 .dtable tr:last-child th,.dtable tr:last-child td{border-bottom:none}
 .actions{max-width:900px;margin:0 auto 30px;text-align:right}
-.actions button{background:__ACCENT__;color:#fff;border:none;padding:9px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}
-.print-footer{display:none}
-@media print{
-  body{background:#fff}
-  .page{box-shadow:none;margin:0;max-width:none;padding:26px 30px;border-radius:0;page-break-after:always}
-  .page:last-of-type{page-break-after:auto}
-  .no-print{display:none!important}
-  .finding{break-inside:avoid}
-  .conclusion,.finding-head,.data-table thead th,.sev-table td{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .print-footer{display:block;position:fixed;bottom:6px;left:0;right:0;text-align:center;font-size:9px;color:#94a3b8}
-  @page{margin:16mm 12mm 14mm}
-}
+.actions a.pdf-link{display:inline-block;background:__ACCENT__;color:#fff;text-decoration:none;padding:9px 18px;border-radius:6px;font-size:13px;font-weight:600}
+
 """
