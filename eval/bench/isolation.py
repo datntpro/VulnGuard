@@ -53,6 +53,10 @@ _BUILD_ALLOWED = frozenset(("context", "dockerfile", "args", "target"))
 _HEALTH_ALLOWED = frozenset(("test", "interval", "timeout", "retries", "start_period", "start_interval", "disable"))
 _DEP_ALLOWED = frozenset(("condition", "required", "restart"))
 _NET_TOP_ALLOWED = frozenset(("name", "driver", "internal", "external"))   # external chỉ nhận giá trị false (kiểm riêng bên dưới)
+_VOL_SUB_ALLOWED = frozenset(("nocopy",))
+_TMPFS_SUB_ALLOWED = frozenset(("size", "mode"))
+_DOCKER_ENV_ALLOWED = frozenset(("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
+                                 "DOCKER_BUILDKIT", "DOCKER_DEFAULT_PLATFORM"))
 _VOL_LONG_ALLOWED = frozenset(("type", "source", "target", "read_only", "tmpfs", "volume"))
 _NAMED = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _SAFE_DOLLAR = "${FLAG}"
@@ -133,6 +137,14 @@ def _check_volume_entry(name: str, v, declared) -> None:
             raise UnsafeCompose(f"service {name}: volume phải có type volume|tmpfs, có {t!r}")
         if t == "volume" and str(v.get("source")) not in declared:
             raise UnsafeCompose(f"service {name}: volume nguồn phải là named volume đã khai báo: {v.get('source')!r}")
+        for sub, allowed in (("volume", _VOL_SUB_ALLOWED), ("tmpfs", _TMPFS_SUB_ALLOWED)):
+            if sub not in v:
+                continue
+            d = v[sub]
+            if not isinstance(d, dict) or set(map(str, d)) - allowed:
+                raise UnsafeCompose(f"service {name}: volumes.{sub} chỉ được chứa {sorted(allowed)}")
+            if any(isinstance(x, bool) != (sub == "volume") or not isinstance(x, (bool, int, str)) for x in d.values()):
+                raise UnsafeCompose(f"service {name}: volumes.{sub} giá trị phải là scalar đơn giản")
         return
     parts = str(v).split(":")
     if len(parts) < 2 or len(parts) > 3 or parts[0] not in declared or not _NAMED.match(parts[0]) or not parts[1].startswith("/") \
@@ -309,8 +321,8 @@ def rewrite_and_check(cfg: Dict, ip: str, entry: Optional[str] = None) -> Dict:
 
 
 def minimal_env(**extra: str) -> Dict[str, str]:
-    """Môi trường TỐI THIỂU cho `docker compose`/build: PATH, HOME (+ DOCKER_* để tới daemon/context) và `extra` (vd FLAG). KHÔNG chuyển
+    """Môi trường TỐI THIỂU cho `docker compose`/build: PATH, HOME (+ allowlist DOCKER_* chính xác để tới daemon/context; KHÔNG DOCKER_PASSWORD/AUTH_CONFIG…) và `extra` (vd FLAG). KHÔNG chuyển
     tiếp phần còn lại của os.environ (khoá API, token CI…) vào compose/build của benchmark bên thứ ba."""
-    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("DOCKER_")}
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k in _DOCKER_ENV_ALLOWED}
     env.update(extra)
     return env
