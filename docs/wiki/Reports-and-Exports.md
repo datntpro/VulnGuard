@@ -64,7 +64,7 @@ Không có endpoint export riêng. Dữ liệu run, finding và traffic lấy qu
 
 ## Xuất báo cáo PDF: engine Typst (đóng gói và kiểm tra)
 
-PDF được dựng bằng **Typst** (wheel `typst==0.15.2` trong lockfile có hash `api/requirements.txt`), chạy trong tiến trình con đã giới hạn RAM/CPU/thời gian, **không cần trình duyệt và không cần mạng** lúc dựng. Font nằm trong repo (`scanner/assets/fonts`, DejaVu; Be Vietnam Pro + JetBrains Mono sẽ đi kèm template) và được nhúng đầy đủ nên tiếng Việt hiển thị đúng.
+PDF được dựng bằng **Typst** (wheel `typst==0.15.2` trong lockfile có hash `api/requirements.txt`), chạy trong tiến trình con đã giới hạn RAM/CPU/thời gian, **không cần trình duyệt và không cần mạng** lúc dựng. Font nằm trong repo (`scanner/pdf/templates/fonts`: Be Vietnam Pro + JetBrains Mono, DejaVu dự phòng) và được nhúng đầy đủ nên tiếng Việt hiển thị đúng.
 
 **Self-test** (dựng 1 trang tiếng Việt trong worker, kiểm `%PDF-`, chữ "Đối tượng kiểm thử", font nhúng Type0/FontFile2 thuộc bộ font của ta, và `@preview` bị chặn):
 
@@ -85,5 +85,8 @@ python3 scripts/setup.py --check      # liệt kê tool + chạy self-test này 
 
 - `GET /api/scans/{id}/report?format=pdf` (alias `/report.pdf`, `/api/projects/scans/{id}/export?format=pdf`), `/api/pentest/runs/{id}/report?format=pdf`, `/api/webscans/{id}/export?format=pdf`, `/api/docreview/versions/{id}/export?format=pdf` trả `application/pdf` với `Content-Disposition: attachment; filename="VulnGuard_<slug>_Scan<N>_<YYYYMMDD>.pdf"; filename*=UTF-8''…` (tên tiếng Việt qua RFC 5987), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`.
 - Quyền xem giống báo cáo HTML/JSON (VIEWER xuất được những gì xem được; engagement đã xoá mềm chỉ ADMIN). Giới hạn `VG_PDF_RATE_PER_MIN` (mặc định 10/phút/user); mỗi lần xuất ghi 1 dòng log `vulnguard.audit` (`pdf_export user=… kind=… outcome=…`).
-- Trên `VG_PDF_ASYNC_THRESHOLD` phát hiện (mặc định 300) hoặc `?async=1`: trả `202 {job_id}`; `GET /api/reports/pdf-jobs/{job_id}` (trạng thái, số trang), `GET …/file` (tải). Job gắn với user tạo (người khác nhận 404), tối đa 3 job/user, file giữ 1 giờ trong `storage/reports/pdf-jobs` (0600).
+- Trên `VG_PDF_ASYNC_THRESHOLD` phát hiện (mặc định 300) hoặc `?async=1`: trả `202 {job_id}`; `GET /api/reports/pdf-jobs/{job_id}` (trạng thái, số trang), `GET …/file` (tải). Job gắn với user tạo (người khác nhận 404), tối đa 3 job/user, file giữ 1 giờ trong `storage/reports/pdf-jobs/<w{pid}-{rand}>/` (0600; mỗi worker/instance chỉ ghi và dọn thư mục con của chính nó, không bao giờ xoá file của worker khác).
+- **Bộ lọc:** `GET /api/scans/{id}/export?format=pdf` **bỏ qua** `severity`, `status`, `scan_type`, `diff`, `scope`: PDF luôn là báo cáo đầy đủ của scan (các bộ lọc này chỉ áp dụng cho json/csv/md/sarif/ai). Khi có bộ lọc bị bỏ qua, response kèm header `X-VG-Filters-Ignored`.
+- **Làm sạch trường văn bản:** mô tả/khắc phục/vị trí (`description`, `remediation`, `matched_at`…) được che secret bằng cùng bộ redactor của pentest và cắt ≤ 8 192 ký tự (vị trí ≤ 600) trước khi dàn trang.
+- **Email báo cáo định kỳ:** file PDF đính kèm do cùng engine Typst dựng; nếu engine không khả dụng, email vẫn được gửi nhưng không có đính kèm (không có renderer dự phòng).
 - Lỗi: `503 pdf_busy` + `Retry-After` khi hết slot dựng; `pdf_compile_error` / `pdf_timeout` / `pdf_worker_killed` / `pdf_input_too_large` là JSON `{code, message}` không kèm đường dẫn; không bao giờ trả HTML hay mở hộp thoại in.

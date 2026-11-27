@@ -120,7 +120,7 @@ def test_typst_follows_symlinks_hence_root_must_be_symlink_free(canary):
 def test_font_dir_license_and_other_files_not_copied(tmp_path):
     fd = tmp_path / "fonts"
     fd.mkdir()
-    src = Path(__file__).resolve().parent.parent / "scanner" / "assets" / "fonts" / "DejaVuSans.ttf"
+    src = Path(__file__).resolve().parent.parent / "scanner" / "pdf" / "templates" / "fonts" / "DejaVuSans.ttf"
     (fd / "DejaVuSans.ttf").write_bytes(src.read_bytes())
     (fd / "OFL.txt").write_text("license")
     (fd / "README.md").write_text("x")
