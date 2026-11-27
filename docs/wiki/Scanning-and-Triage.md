@@ -37,6 +37,8 @@ Scan đang `PENDING`/`RUNNING` khi app restart sẽ chuyển `FAILED`.
 | CONTAINER | `trivy` | `trivy image` cho từng `image:` tìm thấy trong `docker-compose*.yml/yaml` |
 | CONTAINER | `grype` | `grype dir:<path>` |
 
+**Bundled rules (13, offline)** trong `scanner/rules/python-security.yaml`: `sql-injection-string-concat`, `sql-injection-format`, `subprocess-shell-true`, `os-system-injection`, `pickle-loads`, `yaml-unsafe-load`, `weak-hash-md5`, `weak-hash-sha1`, `hardcoded-password-variable`, `open-with-user-input`, `flask-debug-true`, `django-debug-true`, `requests-with-user-url`. Mỗi rule có fixture trong `tests/fixtures/semgrep_rules/`. Lưu ý: semgrep mặc định (`.semgrepignore` built-in) **bỏ qua thư mục `tests/` và `test/`** của repo được quét — finding trong các thư mục đó sẽ không xuất hiện.
+
 Secrets: finding có giá trị công khai/placeholder (Google OAuth client ID `.apps.googleusercontent.com`, `changeme`, `placeholder`, `dummy`, `example`, `<...>`, `${...}`, `test_key`…) bị hạ xuống `INFO`; finding nằm trong đường dẫn test/fixture/example/mock/spec bị hạ xuống `LOW`. Mô tả finding có thêm dòng `[Giảm FP]`.
 
 ## Tính trung thực của kết quả
