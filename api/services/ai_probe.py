@@ -172,7 +172,7 @@ async def probe_cloud(route, *, timeout: float = PROBE_TIMEOUT) -> ProbeResult:
             # allowlist theo model THẬT: deployment đặt tên rẻ/được phép nhưng thực chất là model khác → từ chối
             from api.services import ai_policy
             pol = ai_policy.get_policy()
-            if not ai_policy.is_allowed(pol, "azure_openai", real):
+            if not ai_policy.is_allowed_model(pol, "azure_openai", real):
                 return done(False, NO_MODEL_ACCESS, model, tools, real)
         return done(True, VALID, model, tools, real)
     except RouteRefused:

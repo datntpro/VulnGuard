@@ -250,7 +250,7 @@ def _org_cloud(ctx: LLMContext, cfg: Dict[str, Any], policy: Dict[str, Any], *, 
     r = _cloud_route(cfg, ctx)
     if isinstance(r, Refuse):
         return r
-    if not ai_policy.is_allowed(policy, r.provider, ai_policy.policy_model(policy, r.provider, r.credential.public_params(), r.model)):
+    if not ai_policy.is_allowed_model(policy, r.provider, ai_policy.policy_model(policy, r.provider, r.credential.public_params(), r.model)):
         return Refuse(AI_NOT_ALLOWED, "ai.error.not_allowed")
     if check_quota and ctx.user_id:
         from api.database import SessionLocal
@@ -270,7 +270,7 @@ def _user_cloud(db, row, ctx: LLMContext, policy: Dict[str, Any], *, act_as: Opt
     from api.services.ai_credentials import CredentialError
     model, family = _model_family(row.provider, row.params or {})
     from api.services import ai_policy
-    if not ai_policy.is_allowed(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, model)):
+    if not ai_policy.is_allowed_model(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, model)):
         return Refuse(deny_code, "ai.error.cred_revoked" if deny_code == AI_CRED_REVOKED else "ai.error.not_allowed")
     from api.auth_models import User
     owner = db.get(User, row.owner_user_id)
@@ -327,7 +327,7 @@ def _resolve_user_cloud(ctx: LLMContext, cfg, policy) -> Route:
             if row is not None:
                 from api.services import ai_policy
                 model, _ = _model_family(row.provider, row.params or {})
-                if ai_policy.is_allowed(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, model)):
+                if ai_policy.is_allowed_model(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, model)):
                     return _user_cloud(db, row, ctx, policy)
                 # default bị policy chặn → coi như không có (rơi sang org nếu policy cho)
         if policy["byok"] != "required" and policy["fallback_to_org"]:
@@ -483,7 +483,7 @@ def describe_effective(user_id: Optional[str]) -> Dict[str, Any]:
         try:
             if policy["byok"] != "off":
                 row = _default_row(db, user_id, policy)
-                if row is not None and ai_policy.is_allowed(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, _model_family(row.provider, row.params or {})[0])):
+                if row is not None and ai_policy.is_allowed_model(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, _model_family(row.provider, row.params or {})[0])):
                     return {"source": "own", "provider": row.provider, "hint": row.key_hint}
         finally:
             db.close()
@@ -509,7 +509,7 @@ def pin_for_user(user_id: Optional[str], *, include_org: bool = False) -> Option
     try:
         if policy["byok"] != "off":
             row = _default_row(db, user_id, policy)
-            if row is not None and ai_policy.is_allowed(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, _model_family(row.provider, row.params or {})[0])):
+            if row is not None and ai_policy.is_allowed_model(policy, row.provider, ai_policy.policy_model(policy, row.provider, row.params, _model_family(row.provider, row.params or {})[0])):
                 return row.id
         if include_org and policy["byok"] != "required" and policy["fallback_to_org"]:
             return cfg.get("org_credential_id") or None

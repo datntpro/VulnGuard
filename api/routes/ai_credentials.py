@@ -170,7 +170,7 @@ def _check_policy(provider: str, model: str, params: Optional[Dict[str, Any]] = 
     if pol["byok"] == "off":
         raise _err(403, "AI_BYOK_OFF")
     # [PR-6 S2] Azure: allowlist theo model THẬT của deployment (ánh xạ ADMIN), không theo tên do user đặt
-    if not ai_policy.is_allowed(pol, provider, ai_policy.policy_model(pol, provider, params, model)):
+    if not ai_policy.is_allowed_model(pol, provider, ai_policy.policy_model(pol, provider, params, model)):
         raise _err(422, "AI_NOT_ALLOWED")
 
 

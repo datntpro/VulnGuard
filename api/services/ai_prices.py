@@ -41,6 +41,7 @@ _PROVIDER_FAMILY = {"anthropic": "anthropic", "bedrock": "anthropic", "openai": 
                     "azure_openai": "openai", "openai_compatible": "openai", "gemini": "google", "vertex": "google"}
 DEFAULT = tuple(max(v[i] for v in _FAMILY_DEFAULT.values()) for i in range(3))   # không rõ provider → đắt nhất toàn bảng
 
+UNMAPPED = "unmapped/"
 _PREFIX = re.compile(r"^(?:(?:us|eu|apac|global|au|jp)\.)?(?:anthropic|openai|google|azure|models)[./:]", re.I)
 _SUFFIXES = (re.compile(r"-v\d+(?::\d+)?$"), re.compile(r"@\d{8}$"), re.compile(r"-\d{8}$"),
              re.compile(r"-\d{4}-\d{2}-\d{2}$"), re.compile(r"-latest$"))
@@ -49,12 +50,13 @@ _SUFFIXES = (re.compile(r"-v\d+(?::\d+)?$"), re.compile(r"@\d{8}$"), re.compile(
 def normalize_model(model: str) -> str:
     """'anthropic.claude-opus-5-5-v1:0' → 'claude-opus-5-5'; 'openai/gpt-4o-2024-08-06' → 'gpt-4o'. Không đoán thêm."""
     m = (model or "").strip().lower()
+    if m.startswith(UNMAPPED):      # [re-verify L3] marker "deployment chưa ánh xạ" được GIỮ nguyên → không bao giờ trông như model rẻ
+        return m
     for _ in range(3):
         n = _PREFIX.sub("", m)
         if n == m:
             break
         m = n
-    m = m.rsplit("/", 1)[-1]
     changed = True
     while changed:
         changed = False

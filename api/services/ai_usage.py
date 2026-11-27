@@ -248,7 +248,7 @@ class Meter:
                 if dead:
                     self._event("refused", AI_CRED_REVOKED)
                     raise RouteRefused(AI_CRED_REVOKED, "ai.error.cred_revoked")
-            if self.provider and not ai_policy.is_allowed(policy, self.provider, self.model):
+            if self.provider and not ai_policy.is_allowed_model(policy, self.provider, self.model):
                 self._event("refused", AI_CRED_REVOKED)
                 raise RouteRefused(AI_CRED_REVOKED, "ai.error.cred_revoked")
             # 2. reserve nguyên tử (USD tháng của key org + rpm) — job không có user: không giới hạn theo user

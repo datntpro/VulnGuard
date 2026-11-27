@@ -197,6 +197,10 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
                 if update[sec].pop("clear_api_key", False):
                     cfg[sec]["api_key_enc"] = None
         cfg = _deep_merge(cfg, update)
+        up = update.get("policy")
+        if isinstance(up, dict) and "azure_deployment_models" in up:
+            # [re-verify L2] ánh xạ deployment→model là REPLACE (không merge) để ADMIN xoá được mục; giá trị null cũng xoá
+            cfg.setdefault("policy", {})["azure_deployment_models"] = copy.deepcopy(up["azure_deployment_models"])
 
         if cfg["provider"] not in PROVIDERS:
             raise ValueError("provider phải thuộc: " + ", ".join(PROVIDERS))

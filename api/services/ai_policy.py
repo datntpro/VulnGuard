@@ -81,6 +81,8 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise ValueError("policy.azure_deployment_models phải là object <resource>/<deployment> → model")
     clean = {}
     for k, v in m.items():
+        if v is None:                      # null = xoá mục này (semantics xoá tường minh)
+            continue
         k2 = str(k).strip().lower()
         if not _AZ_KEY.match(k2) or not isinstance(v, str) or not _MODEL_ID.match(v.strip()):
             raise ValueError("policy.azure_deployment_models: khoá phải dạng <resource>/<deployment>, giá trị là model id hợp lệ")
@@ -124,6 +126,18 @@ def is_allowed(policy: Dict[str, Any], provider: str, model: Optional[str]) -> b
             pat += ":*"
         if fnmatch.fnmatchcase(target, pat):
             return True
+    return False
+
+
+def is_allowed_model(policy: Dict[str, Any], provider: str, model: Optional[str]) -> bool:
+    """is_allowed theo id gốc HOẶC (Azure) id đã chuẩn hoá: Azure báo model có hậu tố ngày (`gpt-4o-2024-08-06`) nên mục
+    allowlist `azure_openai:gpt-4o` phải khớp. Marker `unmapped/…` được giữ nguyên qua chuẩn hoá (không bao giờ khớp rẻ)."""
+    if is_allowed(policy, provider, model):
+        return True
+    if provider == "azure_openai" and model:
+        from api.services.ai_prices import normalize_model
+        n = normalize_model(model)
+        return n != (model or "").lower() and is_allowed(policy, provider, n)
     return False
 
 

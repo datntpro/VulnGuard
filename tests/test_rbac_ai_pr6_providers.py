@@ -1011,3 +1011,82 @@ def test_s1_azure84_patterns_are_linear_and_no_false_positive_on_plain_text():
     benign = "The quick brown fox " + "a" * 30 + " jumps; file sha=" + "0" * 64 + " version 1.2.3 JQQJ99 alone"
     assert redact_text_basic(benign) == benign
     assert redact_text_basic("api-key: short") == "api-key: short"
+
+
+# ─────────────────────────────────────────────
+# Re-verify round: probe/Meter normalise Azure's versioned model; mapping removable; unmapped marker survives normalisation
+# ─────────────────────────────────────────────
+def test_rv1_probe_accepts_versioned_azure_model_against_exact_allowlist(stub, monkeypatch, tmp_path):
+    from api.services import ai_config, ai_policy
+    monkeypatch.setenv("AI_CONFIG_FILE", str(tmp_path / "ai.json"))
+    importlib.reload(ai_config)
+    ai_config.validate_and_save({"policy": {"allowed": ["azure_openai:gpt-4o"]}})
+    real_probe = ai_probe._openai_chat
+
+    async def chat(client, model, info=None):          # Azure thật trả model nền có hậu tố ngày
+        r = await real_probe(client, model, info)
+        info["model"] = "gpt-4o-2024-08-06"
+        return r
+    monkeypatch.setattr(ai_probe, "_openai_chat", chat)
+    r = _probe(_route("azure_openai", KEY_AZ, **AZ))
+    assert (r.ok, r.code, r.real_model) == (True, "VALID", "gpt-4o-2024-08-06"), r
+
+    async def chat2(client, model, info=None):         # model KHÁC vẫn bị từ chối
+        r = await real_probe(client, model, info)
+        info["model"] = "o3-pro-2025-06-10"
+        return r
+    monkeypatch.setattr(ai_probe, "_openai_chat", chat2)
+    r = _probe(_route("azure_openai", KEY_AZ, **AZ))
+    assert (r.ok, r.code) == (False, "NO_MODEL_ACCESS")
+    pol = ai_policy.normalize({"allowed": ["azure_openai:gpt-4o"]})
+    assert ai_policy.is_allowed_model(pol, "azure_openai", "gpt-4o-2024-08-06")
+    assert not ai_policy.is_allowed_model(pol, "azure_openai", "gpt-4o-mini-2024-07-18")      # không khớp tiền tố
+    assert not ai_policy.is_allowed_model(pol, "azure_openai", "unmapped/gpt-4o")              # marker không bao giờ khớp rẻ
+    assert not ai_policy.is_allowed_model(pol, "openai", "gpt-4o-2024-08-06")                  # chỉ nới cho Azure
+
+
+def test_rv1_meter_policy_uses_same_normalisation(monkeypatch, tmp_path):
+    from api.services import ai_config, ai_policy, ai_usage
+    monkeypatch.setenv("AI_CONFIG_FILE", str(tmp_path / "ai.json"))
+    importlib.reload(ai_config)
+    ai_config.validate_and_save({"policy": {"allowed": ["azure_openai:gpt-4o"],
+                                            "azure_deployment_models": {"myres/gpt-4o-prod": "gpt-4o-2024-08-06"}}})
+    m = ai_usage.Meter(_route("azure_openai", KEY_AZ, **AZ))
+    assert m.model == "gpt-4o-2024-08-06"
+    assert ai_policy.is_allowed_model(ai_policy.get_policy(), "azure_openai", m.model)
+
+
+def test_rv2_admin_can_remove_or_replace_deployment_mappings(tmp_path, monkeypatch):
+    from api.services import ai_config, ai_policy
+    monkeypatch.setenv("AI_CONFIG_FILE", str(tmp_path / "ai.json"))
+    importlib.reload(ai_config)
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"a/one": "gpt-4o", "a/two": "o3-pro", "a/three": "gpt-4.1"}}})
+    assert set(ai_policy.get_policy()["azure_deployment_models"]) == {"a/one", "a/two", "a/three"}
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"a/one": "gpt-4o"}}})           # replace: bỏ two, three
+    assert ai_policy.get_policy()["azure_deployment_models"] == {"a/one": "gpt-4o"}
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"a/one": "gpt-4o", "a/two": "o3-pro"}}})
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"a/two": None, "a/one": "gpt-4o"}}})   # null xoá mục
+    assert ai_policy.get_policy()["azure_deployment_models"] == {"a/one": "gpt-4o"}
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {}}})                            # {} xoá hết
+    assert ai_policy.get_policy()["azure_deployment_models"] == {}
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"a/one": "gpt-4o"}}})
+    ai_config.validate_and_save({"policy": {"byok": "allowed"}})                                        # không đụng tới key → giữ nguyên
+    assert ai_policy.get_policy()["azure_deployment_models"] == {"a/one": "gpt-4o"}
+    with pytest.raises(ValueError):
+        ai_config.validate_and_save({"policy": {"azure_deployment_models": {"bad key": "gpt-4o"}}})
+    assert ai_policy.get_policy()["azure_deployment_models"] == {"a/one": "gpt-4o"}                      # lỗi → không ghi
+
+
+def test_rv3_unmapped_marker_prices_at_top_tier_even_with_cheap_name():
+    from api.services import ai_usage
+    from api.services.ai_prices import _lookup, est_cost_usd, normalize_model
+    top = (20.00, 80.00, 20.00)
+    for cheap in ("gpt-4o-mini", "o3", "x/o3", "gemini-2.5-flash-lite", "claude-haiku-5-5", "gpt-4o-mini-2024-07-18"):
+        assert normalize_model(f"unmapped/{cheap}") == f"unmapped/{cheap}".lower()
+        assert _lookup(f"unmapped/{cheap}", "azure_openai") == top, cheap
+        assert _lookup(f"UNMAPPED/{cheap}", "azure_openai") == top
+    assert normalize_model("openai/gpt-4o") == "gpt-4o" and normalize_model("anthropic/claude-opus-5-5") == "claude-opus-5-5"
+    assert _lookup("x/o3", "openrouter") == top and _lookup("evil/gpt-4o-mini", "openrouter") == top   # chỉ bỏ tiền tố đã biết
+    m = ai_usage.Meter(_route("azure_openai", KEY_AZ, **{**AZ, "deployment": "gpt-4o-mini"}))
+    assert m.model == "unmapped/gpt-4o-mini"
+    assert est_cost_usd(m.model, 1_000_000, 0, provider="azure_openai") == pytest.approx(20.0)
