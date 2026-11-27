@@ -31,9 +31,35 @@ jobs:
           python -m venv "$RUNNER_TEMP/pipaudit"
           "$RUNNER_TEMP/pipaudit/bin/pip" install -q --require-hashes -r docker/scanners/pip-audit.txt
           "$RUNNER_TEMP/pipaudit/bin/pip-audit" -r api/requirements.txt --require-hashes --disable-pip
+      - name: PDF engine self-test (native, same check as Docker build / setup.py --check)
+        run: python -m scanner.pdf.selftest
       - name: Run tests
         env:
           AUTH_ENABLED: "true"
         run: pytest tests/ -q
       - name: Bandit gate (fail on HIGH severity, HIGH confidence)
         run: bandit -r api scanner mcp_server scripts -lll -ii -q
+
+  # PR-4: API image must build AND pass the PDF (Typst) self-test on both architectures. The self-test is a
+  # RUN step in api/Dockerfile, so a broken wheel/font/sandbox fails the build. arm64 runs on a native
+  # arm runner (no QEMU). Verifies the hashed lockfile resolves a typst wheel for linux/aarch64 + x86_64.
+  pdf-docker:
+    name: pdf-docker (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build API image (runs python -m scanner.pdf.selftest)
+        run: docker build --build-arg TARGETARCH=${{ matrix.arch }} -f api/Dockerfile -t vulnguard-api:pdfcheck .
+      - name: Re-run PDF self-test in the image (non-root, read-only rootfs, no network)
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python \
+            vulnguard-api:pdfcheck -m scanner.pdf.selftest

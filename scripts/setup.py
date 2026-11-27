@@ -286,6 +286,23 @@ def check_tools():
     hr()
 
 
+def pdf_engine_check(strict: bool = False) -> bool:
+    """Chạy self-test PDF (Typst) bằng Python của venv. In 'PDF engine: typst X OK' hoặc lỗi + lệnh sửa."""
+    if IS_WIN and platform.machine().upper() in ("ARM64", "AARCH64"):
+        y("  ⚠ PDF engine: Windows ARM64 chưa có wheel typst — dùng Python x64 hoặc Docker.")
+    py = venv_python() if (ROOT / ".venv").exists() else sys.executable
+    res = subprocess.run([py, "-m", "scanner.pdf.selftest", "--quiet"], cwd=str(ROOT),
+                         capture_output=True, text=True)
+    out = (res.stdout + res.stderr).strip()
+    if res.returncode == 0:
+        g("  " + (out.splitlines() or ["PDF engine OK"])[-1])
+        return True
+    r("  ✗ PDF engine (Typst) lỗi:")
+    print("\n".join("    " + ln for ln in out.splitlines()[-8:]))
+    y(f"  → Sửa: {py} -m pip install --require-hashes -r api/requirements.txt  (Windows ARM64: dùng Python x64 hoặc Docker)")
+    return False
+
+
 def ensure_venv():
     if not Path(".venv").exists():
         g("Tạo virtualenv + cài API dependencies…")
@@ -360,7 +377,8 @@ def main():
     interactive = a.tools is None and a.mode is None and not a.docker
 
     if a.check:
-        check_tools(); return
+        check_tools()
+        sys.exit(0 if pdf_engine_check() else 1)
 
     g("🛡️  VulnGuard — Cài đặt"); hr()
     print(f"OS: {platform.system()} ({ARCH}) · Trình quản lý gói: {pkg_mgr() or 'không rõ'}")
@@ -417,6 +435,7 @@ def main():
 
     set_env()   # mặc định storage ngay trong thư mục cài — chạy được ở bất kỳ đâu
     check_tools()
+    pdf_engine_check()
 
     email = a.admin_email or os.environ.get("ADMIN_EMAIL")
     if not email and interactive and not a.skip_admin:
