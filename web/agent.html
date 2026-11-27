@@ -419,7 +419,7 @@ async function drive(extra = {}) {
       logEl.appendChild(el("step", '<span class="head">⚠ Đạt giới hạn số bước cho lượt này.</span>'));
     } else if (data.status === "awaiting_confirmation") {
       if (autoApprove()) {                                    // ⚡ tự duyệt
-        return drive({ approved: { action: data.pending.action, args: data.pending.args } });
+        return drive({ approved: { pending_id: data.pending.id } });
       }
       renderConfirm(data.pending);                            // hỏi tay → dừng lặp
     }
@@ -445,7 +445,7 @@ async function sendMessage() {
 }
 
 function approve(pending) {
-  startTurn({ approved: { action: pending.action, args: pending.args } });
+  startTurn({ approved: { pending_id: pending.id } });
 }
 
 function reject() {

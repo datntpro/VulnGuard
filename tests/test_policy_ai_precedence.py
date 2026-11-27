@@ -625,18 +625,18 @@ def test_coworker_no_silent_cloud_when_local_or_default_hybrid(env):
             assert isinstance(resolve(_cw()), LocalOllama)
 
 
-def test_coworker_backend_refuses_cloud_until_pr3b_and_never_runs_local_instead(env):
+def test_coworker_backend_cloud_is_cloud_tool_backend_and_never_local_instead(env):
+    """PR-3b: cloud route → CloudToolBackend (hết 409 AI_COWORKER_CLOUD_UNAVAILABLE); không bao giờ LocalJsonBackend thay thế."""
     from api.routes import coworker_agent
     _tools_ok()
-    with pytest.raises(RouteRefused) as e:
-        coworker_agent._backend("c1", user_id="u1")
-    assert e.value.code == "AI_COWORKER_CLOUD_UNAVAILABLE"
+    assert coworker_agent._backend("c1", user_id="u1").__class__.__name__ == "CloudToolBackend"
     _cfg(mode="local_only")
     assert coworker_agent._backend("c1", user_id="u1").__class__.__name__ == "LocalJsonBackend"
     _cfg(mode="cloud_only", hybrid={"tasks": {"coworker": "local"}})
-    with pytest.raises(RouteRefused) as e:
-        coworker_agent._backend("c1", user_id="u1", pinned_route_kind="cloud")
-    assert e.value.code == "AI_COWORKER_CLOUD_UNAVAILABLE"
+    assert coworker_agent._backend("c1", user_id="u1", pinned_route_kind="cloud").__class__.__name__ == "CloudToolBackend"
+    with pytest.raises(RouteRefused) as e:                      # /step stateless không bao giờ gửi lịch sử của client lên cloud
+        coworker_agent._backend("c1", user_id="u1", allow_cloud=False)
+    assert e.value.code == "AI_COWORKER_USE_CONVERSATION_STEP"
 
 
 # ── resolver không làm rò secret ─────────────────────────────────────────────

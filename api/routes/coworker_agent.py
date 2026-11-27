@@ -64,8 +64,20 @@ class ChatMessage(BaseModel):
 
 
 class ApprovedAction(BaseModel):
-    action: str          # "write_file" | "exec"
-    args: Dict[str, Any]
+    """[AI PR-3b] Chỉ `pending_id` có hiệu lực: action/args do SERVER giữ (client không bao giờ được tin)."""
+    pending_id: Optional[str] = None
+    action: Optional[str] = None             # tương thích cũ — bị bỏ qua
+    args: Optional[Dict[str, Any]] = None    # tương thích cũ — bị bỏ qua
+
+
+class ConversationStepRequest(BaseModel):
+    """[AI PR-3b] Bước trên hội thoại do server giữ transcript. Đúng một trong: message | approve | reject | (rỗng = tiếp tục).
+    Mọi trường khác (messages, assistant/tool turn, approved.args, provider, route…) bị BỎ QUA."""
+    message: Optional[str] = None
+    approve: Optional[str] = None            # pending_id
+    reject: Optional[str] = None             # pending_id
+    folder_id: Optional[str] = None          # chỉ có hiệu lực ở bước đầu tiên
+    skill_id: Optional[str] = None           # chỉ có hiệu lực ở bước đầu tiên
 
 
 class AgentStepRequest(BaseModel):
@@ -155,10 +167,44 @@ class LocalJsonBackend(CoworkBackend):
             return data.get("message", {}).get("content", ""), model
 
 
+class CloudToolBackend(CoworkBackend):
+    """[AI PR-3b] Co-work trên model cloud: native tool-calling qua LLMDriver (Anthropic/Bedrock/OpenAI-compatible).
+    Mọi lần gửi đi qua coworker_cloud_send() (che secret/PII bắt buộc). Meter của driver ghi usage/quota."""
+    native = True
+
+    def __init__(self, route, conversation_id: Optional[str] = None, user_id: Optional[str] = None):
+        self.route = route
+        self.conv = conversation_id
+        self.user = user_id
+        self._drv = None
+
+    @property
+    def driver(self):
+        if self._drv is None:
+            from scanner.pentest.llm import make_driver
+            self._drv = make_driver(self.route)
+        return self._drv
+
+    async def chat(self, messages, skill_body=None):   # giao thức JSON-in-text không dùng cho cloud
+        raise NotImplementedError("CloudToolBackend dùng turn()")
+
+    async def turn(self, transcript: List[dict], skill_body: Optional[str] = None):
+        from api.services.coworker_cloud import CLOUD_SYSTEM_PROMPT, coworker_cloud_send
+        system = CLOUD_SYSTEM_PROMPT
+        if skill_body:
+            system += f"\n\n# ── SKILL NGHIỆP VỤ ĐANG ÁP DỤNG ──\n{skill_body}"
+        r = self.route
+        return await coworker_cloud_send(self.driver, system, transcript,
+                                         ctx={"conv": self.conv, "user": self.user, "cred": r.credential_id,
+                                              "provider": r.provider, "model": r.model})
+
+
 def _backend(conversation_id: Optional[str] = None, user_id: Optional[str] = None,
-             pinned_route_kind: Optional[str] = None, pinned_credential_id: Optional[str] = None) -> CoworkBackend:
-    """Chọn backend qua resolver (§4.11: Co-work đi theo Settings › AI). Local → LocalJsonBackend.
-    Cloud: CloudToolBackend là PR-3b — chưa có thì TỪ CHỐI (không bao giờ lặng lẽ chạy local thay cho cloud)."""
+             pinned_route_kind: Optional[str] = None, pinned_credential_id: Optional[str] = None,
+             *, allow_cloud: bool = True) -> CoworkBackend:
+    """Chọn backend qua resolver (§4.11: Co-work đi theo Settings › AI). Local → LocalJsonBackend; cloud →
+    CloudToolBackend (chỉ cho hội thoại có transcript phía server: allow_cloud=False cho /step stateless).
+    Không bao giờ lặng lẽ chạy local thay cho cloud."""
     from api.services.llm_resolver import LLMContext, LocalOllama, RouteRefused, resolve
     route = resolve(LLMContext(feature="coworker", user_id=user_id, job_kind="coworker_conversation",
                                job_id=conversation_id, needs_tools=True, pinned_route_kind=pinned_route_kind,
@@ -166,12 +212,17 @@ def _backend(conversation_id: Optional[str] = None, user_id: Optional[str] = Non
     if isinstance(route, LocalOllama):
         return LocalJsonBackend(route)
     if getattr(route, "kind", None) == "cloud":
-        raise RouteRefused("AI_COWORKER_CLOUD_UNAVAILABLE", "ai.error.coworker_cloud_unavailable")   # PR-3b
+        if not allow_cloud:
+            raise RouteRefused("AI_COWORKER_USE_CONVERSATION_STEP", "ai.error.coworker_use_conversation_step")
+        return CloudToolBackend(route, conversation_id, user_id)
     raise RouteRefused(getattr(route, "code", "AI_ROUTE"), getattr(route, "message_key", ""))
 
 
 async def _chat_ollama(messages: List[Dict[str, str]], skill_body: Optional[str] = None) -> tuple[str, str]:
-    return await _backend().chat(messages, skill_body=skill_body)
+    """Phân loại skill: LUÔN local (không bao giờ cloud) — resolver trả Ollama cho job_kind khác 'coworker_conversation'."""
+    from api.services.llm_resolver import LLMContext, resolve
+    route = resolve(LLMContext(feature="coworker", job_kind="coworker_route"))
+    return await LocalJsonBackend(route).chat(messages, skill_body=skill_body)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -444,7 +495,7 @@ async def _advance(folder_id: str, llm_messages: List[Dict[str, str]], skill_bod
     Chỉ tự retry NỘI BỘ khi model trả JSON sai định dạng (tối đa MAX_PARSE_RETRY lần).
     """
     model = None
-    backend = backend or _backend(user_id=user_id)
+    backend = backend or _backend(user_id=user_id, allow_cloud=False)
     for _ in range(MAX_PARSE_RETRY):
         raw, model = await backend.chat(llm_messages, skill_body=skill_body)
         llm_messages.append({"role": "assistant", "content": raw})
@@ -500,17 +551,52 @@ def _resolve_skill_body(skill_id: Optional[str]) -> Optional[str]:
     return s["body"] if s else None
 
 
+def _new_pending(db, *, owner, conv_id, folder_id, kind, action, args, tool_use_id=None, extra_ids=None, warning=None):
+    from api.agent_conversation_models import AgentPendingAction
+    row = AgentPendingAction(owner_user_id=owner, conversation_id=conv_id, folder_id=folder_id, kind=kind,
+                             action=action, args=dict(args or {}), tool_use_id=tool_use_id,
+                             extra_ids=list(extra_ids or []), warning=warning, status="open")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _take_pending(db, pending_id: Optional[str], *, owner, conv_id, to_status: str):
+    """Lấy + KHOÁ (open → done|rejected, nguyên tử) một pending action. id lạ / của người khác / của hội thoại khác /
+    đã dùng → 409 (không lộ sự tồn tại). Args luôn là args do SERVER lưu."""
+    from api.agent_conversation_models import AgentPendingAction as P
+    bad = HTTPException(status_code=409, detail={"code": "AI_PENDING_INVALID", "message_key": "ai.error.pending_invalid"})
+    if not pending_id or not isinstance(pending_id, str):
+        raise bad
+    row = db.query(P).filter(P.id == pending_id).first()
+    if row is None or row.owner_user_id != owner or row.conversation_id != conv_id or row.status != "open":
+        raise bad
+    n = db.query(P).filter(P.id == pending_id, P.status == "open").update({"status": to_status}, synchronize_session=False)
+    db.commit()
+    if n != 1:
+        raise bad
+    db.refresh(row)
+    return row
+
+
+def _pending_view(row, preview: Dict[str, Any]) -> Dict[str, Any]:
+    return {"id": row.id, "action": row.action, "args": row.args, "preview": preview, "kind": row.kind,
+            "warning": row.warning}
+
+
 @router.post("/step")
-async def agent_step(req: AgentStepRequest, request: Request):
+async def agent_step(req: AgentStepRequest, request: Request, db: Session = Depends(get_db)):
+    """Bước STATELESS cũ — CHỈ cho backend local (giữ một bản phát hành). Hội thoại cloud phải dùng
+    POST /conversations/{id}/step (transcript phía server). `approved` chỉ hợp lệ khi kèm `pending_id` do server cấp."""
+    uid = _uid(request)
     llm_messages = _to_llm_messages(req.messages)
     skill_body = _resolve_skill_body(req.skill_id)
 
-    # Nếu user vừa duyệt một hành động ghi/exec → thực thi, ghi observation, rồi loop tiếp
     if req.approved is not None:
-        if req.approved.action not in WRITE_ACTIONS:
-            raise HTTPException(status_code=400, detail=f"Hành động không duyệt được: {req.approved.action}")
+        row = _take_pending(db, req.approved.pending_id, owner=uid, conv_id=None, to_status="done")
         try:
-            obs = await _run_sideeffect(req.folder_id, req.approved.action, req.approved.args)
+            obs = await _run_sideeffect(row.folder_id or req.folder_id, row.action, row.args)
         except HTTPException:
             raise
         except Exception as e:
@@ -518,8 +604,13 @@ async def agent_step(req: AgentStepRequest, request: Request):
         llm_messages.append({"role": "user", "content": f"OBSERVATION:\n{obs}"})
 
     try:
-        return await _advance(req.folder_id, llm_messages, skill_body=skill_body,
-                              user_id=getattr(getattr(request.state, "user", None), "id", None))
+        out = await _advance(req.folder_id, llm_messages, skill_body=skill_body, user_id=uid)
+        if out.get("status") == "awaiting_confirmation":
+            p = out["pending"]
+            row = _new_pending(db, owner=uid, conv_id=None, folder_id=req.folder_id, kind="side_effect",
+                               action=p["action"], args=p["args"])
+            p["id"] = row.id
+        return out
     except HTTPException:
         raise
     except RouteRefused:      # [AI PR-3] → 409 {code} qua exception handler (không biến thành 500)
@@ -656,9 +747,10 @@ async def save_conversation(req: SaveConversationRequest, request: Request, db: 
         conv.owner_user_id = _uid(request)
         db.add(conv)
     conv.title = title
-    conv.folder_id = req.folder_id
-    conv.skill_id = req.skill_id
-    conv.messages = msgs
+    if conv.transcript is None:      # [AI PR-3b] hội thoại có transcript phía server: client KHÔNG ghi đè lịch sử/folder
+        conv.folder_id = req.folder_id
+        conv.skill_id = req.skill_id
+        conv.messages = msgs
     db.commit()
     db.refresh(conv)
     return {"id": conv.id, "title": conv.title, "updated_at": conv.updated_at.isoformat()}
@@ -687,12 +779,386 @@ async def list_conversations(request: Request, db: Session = Depends(get_db)):
 async def get_conversation(conv_id: str, request: Request, db: Session = Depends(get_db)):
     r = _scoped(db, request, conv_id)
     return {"id": r.id, "title": r.title, "skill_id": r.skill_id, "folder_id": r.folder_id,
-            "messages": r.messages or []}
+            "messages": _display_messages(r) if r.transcript is not None else (r.messages or []),
+            "route_kind": r.route_kind}
 
 
 @router.delete("/conversations/{conv_id}")
 async def delete_conversation(conv_id: str, request: Request, db: Session = Depends(get_db)):
     r = _scoped(db, request, conv_id)
+    from api.agent_conversation_models import AgentPendingAction
+    db.query(AgentPendingAction).filter(AgentPendingAction.conversation_id == r.id).delete(synchronize_session=False)
     db.delete(r)
     db.commit()
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────
+# [AI PR-3b] Hội thoại có transcript phía server (local + cloud) — §4.11.3
+# ─────────────────────────────────────────────────────────────
+_CONV_LOCKS: Dict[str, Any] = {}
+
+
+def _conv_lock(conv_id: str):
+    import asyncio
+    return _CONV_LOCKS.setdefault(conv_id, asyncio.Lock())
+
+
+def _block_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    out = []
+    for b in content or []:
+        if isinstance(b, dict) and b.get("type") == "text":
+            out.append(b.get("text", ""))
+    return "\n".join(out)
+
+
+def _display_messages(conv) -> List[Dict[str, str]]:
+    """Dạng xem ĐỌC-CHỈ của transcript (đã che) cho UI."""
+    out: List[Dict[str, str]] = []
+    for m in conv.transcript or []:
+        role, c = m.get("role"), m.get("content")
+        if role == "tool":
+            out.append({"role": "user", "content": "OBSERVATION:\n" + str(c)})
+        elif role == "assistant" and isinstance(c, list):
+            txt = _block_text(c)
+            uses = [f"{b['name']}({json.dumps(b.get('input', {}), ensure_ascii=False)[:200]})"
+                    for b in c if isinstance(b, dict) and b.get("type") == "tool_use"]
+            out.append({"role": "assistant", "content": "\n".join(x for x in [txt] + uses if x)})
+        elif role == "user" and isinstance(c, list):
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    out.append({"role": "user", "content": "OBSERVATION:\n" + str(b.get("content", ""))})
+                elif isinstance(b, dict) and b.get("type") == "text":
+                    out.append({"role": "user", "content": b.get("text", "")})
+        elif role in ("user", "assistant"):
+            out.append({"role": role, "content": c if isinstance(c, str) else _block_text(c)})
+    return out
+
+
+def _conv_resolve(conv, uid):
+    """Route HIỆN TẠI của hội thoại theo Settings, so với route đã ghim. Raise RouteRefused khi bị từ chối / đổi route.
+    Không bao giờ leo local→cloud, không bao giờ rơi cloud→local hay sang key khác."""
+    from api.services.llm_resolver import (AI_CRED_REVOKED, AI_ROUTE_CHANGED, LLMContext, LocalOllama, Refuse,
+                                           RouteRefused, resolve)
+    pinned = conv.route_kind
+    route = resolve(LLMContext(feature="coworker", user_id=uid, job_kind="coworker_conversation", job_id=conv.id,
+                               needs_tools=True, pinned_route_kind=pinned,
+                               pinned_credential_id=conv.ai_credential_id if pinned == "cloud" else None))
+    if isinstance(route, Refuse):
+        raise RouteRefused(route.code, route.message_key)
+    is_local = isinstance(route, LocalOllama)
+    if pinned == "local" and not is_local or pinned == "cloud" and is_local:
+        raise RouteRefused(AI_ROUTE_CHANGED, "ai.error.route_changed")
+    if pinned == "cloud":
+        if route.provider != conv.provider or route.model != conv.model:
+            raise RouteRefused(AI_ROUTE_CHANGED, "ai.error.route_changed")
+        if route.credential_id != conv.ai_credential_id:
+            raise RouteRefused(AI_CRED_REVOKED, "ai.error.cred_revoked")
+    return route
+
+
+def _route_info(conv, uid) -> Dict[str, Any]:
+    from api.services import ai_policy
+    from api.services.ai_config import load_config
+    from api.services.llm_resolver import LocalOllama, RouteRefused
+    cfg = load_config()
+    desired = ai_policy.coworker_route(cfg)
+    info: Dict[str, Any] = {"pinned": conv.route_kind is not None, "settings_route": desired,
+                            "mode": cfg.get("mode", "local_only"),
+                            "coworker_row": ((cfg.get("hybrid") or {}).get("tasks") or {}).get("coworker", "local"),
+                            "settings_changed": bool(conv.route_kind == "local" and desired == "cloud")}
+    try:
+        r = _conv_resolve(conv, uid)
+    except RouteRefused as e:
+        info.update({"state": "refused", "code": e.code, "message_key": e.message_key,
+                     "route_kind": conv.route_kind, "provider": conv.provider, "model": conv.model,
+                     "data_leaves_machine": conv.route_kind == "cloud"})
+        return info
+    if isinstance(r, LocalOllama):
+        info.update({"state": "ok", "route_kind": "local", "provider": "ollama", "model": r.model,
+                     "key_scope": None, "key_hint": None, "data_leaves_machine": False})
+    else:
+        cred = r.credential
+        info.update({"state": "ok", "route_kind": "cloud", "provider": r.provider, "model": r.model,
+                     "key_scope": cred.scope, "key_hint": cred.hint if cred.scope == "user" else None,
+                     "data_leaves_machine": True})
+    return info
+
+
+@router.get("/route-preview")
+async def route_preview(request: Request):
+    """Route mà một hội thoại MỚI sẽ nhận (không gọi LLM)."""
+    from api.agent_conversation_models import AgentConversation
+    return _route_info(AgentConversation(id=None), _uid(request))
+
+
+@router.get("/conversations/{conv_id}/route")
+async def conversation_route(conv_id: str, request: Request, db: Session = Depends(get_db)):
+    """ĐỌC-CHỈ: hội thoại đang chạy ở đâu và vì sao (không gọi LLM, không đổi trạng thái)."""
+    conv = _scoped(db, request, conv_id)
+    return _route_info(conv, _uid(request))
+
+
+def _audit_action(conv, uid, action: str, outcome: str) -> None:
+    from api.services.coworker_cloud import audit
+    audit.info("coworker_action conv=%s user=%s route=%s cred=%s action=%s outcome=%s",
+               conv.id, uid, conv.route_kind, conv.ai_credential_id, action, outcome)
+
+
+def _pin_route(db, conv, route) -> None:
+    from api.services.llm_resolver import LocalOllama
+    if conv.route_kind is not None:
+        return
+    if isinstance(route, LocalOllama):
+        conv.route_kind, conv.provider, conv.model, conv.ai_credential_id = "local", "ollama", route.model, None
+    else:
+        conv.route_kind, conv.provider, conv.model = "cloud", route.provider, route.model
+        conv.ai_credential_id = route.credential_id
+    db.commit()
+
+
+def _suspicion(state: dict, kinds: List[str], hosts: List[str]) -> None:
+    if not kinds:
+        return
+    sus = state.setdefault("suspicious", {"signals": [], "hosts": []})
+    sus["signals"] = sorted(set(sus["signals"]) | set(kinds))[:20]
+    sus["hosts"] = sorted(set(sus["hosts"]) | set(hosts))[:20]
+
+
+def _warning_for(state: dict) -> Optional[Dict[str, Any]]:
+    sus = state.get("suspicious")
+    if not sus or not sus.get("signals"):
+        return None
+    return {"suspicious": True, "banner": "Đề xuất sau khi đọc nội dung đáng ngờ / Proposed after suspicious content",
+            "signals": sus["signals"], "hosts": sus["hosts"]}
+
+
+def _tool_results_entries(driver, first_id: str, text: str, is_err: bool, extra_ids: List[str]) -> List[dict]:
+    res = [(first_id, text, is_err)] + [(i, "Bỏ qua: mỗi lượt chỉ thực hiện MỘT hành động. Hãy gọi lại nếu cần.", True)
+                                       for i in extra_ids or []]
+    return driver.tool_result_entries(res)
+
+
+def _attach_user_text(driver, entries: List[dict], text: str) -> None:
+    if entries and driver.family == "anthropic":
+        entries[-1]["content"].append({"type": "text", "text": text})
+    else:
+        entries.append({"role": "user", "content": text})
+
+
+async def _exec_pending(row, cap_read: int) -> str:
+    """Thực thi (sau khi người dùng duyệt) bằng args do SERVER lưu. Mọi lỗi → text (tool_use luôn có tool_result)."""
+    try:
+        if row.kind == "sensitive_read":
+            return await _run_readonly(row.folder_id, "read_file", row.args)
+        return await _run_sideeffect(row.folder_id, row.action, row.args)
+    except HTTPException as e:
+        return f"LỖI khi thực thi: {e.detail}"
+    except Exception as e:
+        return f"LỖI khi thực thi: {e}"
+
+
+@router.post("/conversations/{conv_id}/step")
+async def conversation_step(conv_id: str, req: ConversationStepRequest, request: Request, db: Session = Depends(get_db)):
+    from api.services import coworker_cloud as cc
+    uid = _uid(request)
+    conv = _scoped(db, request, conv_id)
+    if uid is not None and conv.owner_user_id != uid:
+        raise HTTPException(status_code=404, detail="Không tìm thấy hội thoại")   # hàng cũ (owner NULL) không step được
+    given = [x for x in (req.message, req.approve, req.reject) if x]
+    if len(given) > 1 or (req.message is not None and not req.message.strip()):
+        raise HTTPException(status_code=400, detail="Gửi đúng một trong: message | approve | reject (hoặc rỗng để tiếp tục)")
+    if req.message and len(req.message) > cc.MAX_USER_MESSAGE_CHARS:
+        raise HTTPException(status_code=413, detail="Tin nhắn quá dài")
+
+    async with _conv_lock(conv.id):
+        db.refresh(conv)
+        route = _conv_resolve(conv, uid)        # từ chối TRƯỚC khi đụng bất cứ thứ gì (kể cả approve)
+        _pin_route(db, conv, route)
+        if conv.folder_id is None:
+            if not req.folder_id:
+                raise HTTPException(status_code=400, detail="Thiếu folder_id")
+            conv.folder_id = req.folder_id
+        if conv.skill_id is None and req.skill_id and not conv.transcript:
+            conv.skill_id = req.skill_id
+        skill_body = _resolve_skill_body(conv.skill_id)
+        try:
+            if conv.route_kind == "cloud":
+                backend = CloudToolBackend(route, conv.id, uid)
+                return await _cloud_step(db, conv, uid, req, backend, skill_body)
+            return await _local_conv_step(db, conv, uid, req, LocalJsonBackend(route), skill_body)
+        except (HTTPException, RouteRefused):
+            raise
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=503, detail=f"Không gọi được Ollama: {e}")
+        except Exception:
+            logger.exception("Co-work conversation step lỗi")
+            raise HTTPException(status_code=500, detail="Lỗi agent")
+
+
+def _open_pending(db, conv):
+    from api.agent_conversation_models import AgentPendingAction as P
+    return db.query(P).filter(P.conversation_id == conv.id, P.status == "open").first()
+
+
+async def _local_conv_step(db, conv, uid, req, backend, skill_body):
+    tx = list(conv.transcript or [])
+    open_p = _open_pending(db, conv)
+    if req.approve:
+        row = _take_pending(db, req.approve, owner=uid, conv_id=conv.id, to_status="done")
+        obs = await _exec_pending(row, MAX_OBS_CHARS)
+        _audit_action(conv, uid, row.action, "approved")
+        tx.append({"role": "user", "content": f"OBSERVATION:\n{obs}"})
+    elif req.reject:
+        _take_pending(db, req.reject, owner=uid, conv_id=conv.id, to_status="rejected")
+        tx.append({"role": "user", "content": "[Người dùng từ chối hành động vừa rồi] Hãy thử cách khác hoặc giải thích thay vì thực hiện."})
+    elif req.message:
+        if open_p is not None:
+            _take_pending(db, open_p.id, owner=uid, conv_id=conv.id, to_status="rejected")
+        tx.append({"role": "user", "content": req.message})
+    else:
+        if open_p is not None:
+            raise HTTPException(status_code=409, detail={"code": "AI_PENDING_OPEN", "message_key": "ai.error.pending_open"})
+        if not tx or tx[-1].get("role") != "user":
+            raise HTTPException(status_code=409, detail={"code": "AI_NOTHING_TO_CONTINUE", "message_key": "ai.error.nothing_to_continue"})
+    conv.transcript = tx
+    if not conv.title:
+        conv.title = next((m["content"].strip()[:80] for m in tx if m["role"] == "user"
+                           and not m["content"].startswith(("OBSERVATION:", "[Người dùng"))), None)
+    db.commit()
+    out = await _advance(conv.folder_id, tx, skill_body=skill_body, backend=backend, user_id=uid)
+    conv.transcript = list(out["messages"])
+    db.commit()
+    res = {k: v for k, v in out.items() if k != "messages"}
+    if out.get("status") == "awaiting_confirmation":
+        p = out["pending"]
+        row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind="side_effect",
+                           action=p["action"], args=p["args"])
+        res["pending"] = _pending_view(row, p.get("preview", {}))
+    res["route_kind"] = "local"
+    return res
+
+
+async def _cloud_step(db, conv, uid, req, backend, skill_body):
+    from api.services import coworker_cloud as cc
+    driver = backend.driver
+    tx = list(conv.transcript or [])
+    state = dict(conv.cloud_state or {})
+    state.setdefault("steps", 0)
+    state.setdefault("sent_bytes", 0)
+    open_p = _open_pending(db, conv)
+    sent = 0
+
+    def _count(entries):
+        return len(json.dumps(entries, ensure_ascii=False).encode("utf-8"))
+
+    if req.approve or req.reject:
+        row = _take_pending(db, req.approve or req.reject, owner=uid, conv_id=conv.id,
+                            to_status="done" if req.approve else "rejected")
+        if req.approve:
+            obs = await _exec_pending(row, MAX_OBS_CHARS)
+            _audit_action(conv, uid, row.action, "approved")
+            cap = MAX_FILE_CHARS + 500 if row.kind == "sensitive_read" else MAX_OBS_CHARS
+            text, kinds, hosts = cc.wrap_observation(obs, cap=cap)
+            _suspicion(state, kinds, hosts)
+            entries = _tool_results_entries(driver, row.tool_use_id, text, obs.startswith("LỖI"), row.extra_ids or [])
+        else:
+            _audit_action(conv, uid, row.action, "rejected")
+            entries = _tool_results_entries(driver, row.tool_use_id, "Người dùng từ chối hành động này. Hãy thử cách khác hoặc giải thích.",
+                                            True, row.extra_ids or [])
+        tx += entries
+        sent += _count(entries)
+    elif req.message:
+        entries: List[dict] = []
+        if open_p is not None:      # gõ tin nhắn mới khi còn hành động chờ duyệt = từ chối nó
+            row = _take_pending(db, open_p.id, owner=uid, conv_id=conv.id, to_status="rejected")
+            entries = _tool_results_entries(driver, row.tool_use_id, "Người dùng không duyệt hành động này.", True,
+                                            row.extra_ids or [])
+        text = _redact_user_text(req.message)
+        _attach_user_text(driver, entries, text) if entries else entries.append({"role": "user", "content": text})
+        tx += entries
+        sent += _count(entries)
+        if not conv.title:
+            conv.title = req.message.strip()[:80]
+    else:
+        if open_p is not None:
+            raise HTTPException(status_code=409, detail={"code": "AI_PENDING_OPEN", "message_key": "ai.error.pending_open"})
+        if not tx or tx[-1].get("role") == "assistant":
+            raise HTTPException(status_code=409, detail={"code": "AI_NOTHING_TO_CONTINUE", "message_key": "ai.error.nothing_to_continue"})
+
+    state["sent_bytes"] += sent
+    conv.transcript, conv.cloud_state = tx, state
+    db.commit()
+    if state["sent_bytes"] > cc.UPLOAD_BUDGET_BYTES:
+        raise RouteRefused("AI_UPLOAD_BUDGET", "ai.error.upload_budget")
+    if state["steps"] >= cc.MAX_STEPS:
+        raise RouteRefused("AI_STEP_CAP", "ai.error.step_cap")
+
+    raw = await backend.turn(tx, skill_body)        # Meter: quota/usage; lỗi → raise (transcript giữ nguyên, thử lại được)
+    state["steps"] += 1
+    res = driver.parse(raw)
+    meta = {"model": conv.model, "route_kind": "cloud"}
+    if res.refused:
+        conv.cloud_state = state
+        db.commit()
+        return {"status": "done", "answer": "Model từ chối yêu cầu này (safety).", "refused": True, **meta}
+    tx.append(cc.serialize_assistant(driver, raw))
+    conv.transcript, conv.cloud_state = tx, state
+    db.commit()
+    if not res.tool_calls:
+        return {"status": "done", "answer": res.text, **meta}
+
+    first, extras = res.tool_calls[0], [c.id for c in res.tool_calls[1:]]
+    name, args = first.name, (first.input if isinstance(first.input, dict) else {})
+    thought = res.text
+
+    async def _finish_step(text_for_model: str, is_err: bool, observation: str, extra: Dict[str, Any] = None):
+        entries = _tool_results_entries(driver, first.id, text_for_model, is_err, extras)
+        conv.transcript = tx + entries
+        state["sent_bytes"] += _count(entries)
+        conv.cloud_state = state
+        db.commit()
+        return {"status": "step", "step": {"action": name, "args": args, "thought": thought,
+                                           "observation": observation, **(extra or {})}, **meta}
+
+    if name not in cc.TOOL_NAMES:
+        return await _finish_step(f"LỖI: tool '{name}' không tồn tại. Chỉ dùng: find_files, list_dir, read_file, write_file, exec.",
+                                  True, f"LỖI: tool '{name}' không tồn tại")
+
+    if name in READ_ONLY_ACTIONS:
+        if name == "read_file" and cc.is_sensitive_path(str(args.get("path", ""))):
+            row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind="sensitive_read",
+                               action="read_file", args={"path": str(args.get("path", ""))},
+                               tool_use_id=first.id, extra_ids=extras)
+            return {"status": "awaiting_confirmation", "thought": thought, **meta,
+                    "pending": _pending_view(row, {"kind": "sensitive_read", "path": row.args["path"],
+                                                   "prompt": "Gửi nội dung file nhạy cảm này lên cloud? / Send this sensitive file to the cloud?"})}
+        try:
+            obs = await _run_readonly(conv.folder_id, name, args)
+        except HTTPException as e:
+            obs = f"LỖI: {e.detail}"
+        except Exception as e:
+            obs = f"LỖI: {e}"
+        cap = MAX_FILE_CHARS + 500 if name == "read_file" else MAX_OBS_CHARS
+        text, kinds, hosts = cc.wrap_observation(obs, cap=cap)
+        _suspicion(state, kinds, hosts)
+        return await _finish_step(text, obs.startswith("LỖI"), obs[:cap],
+                                  {"suspicious": bool(kinds)})
+
+    # write_file / exec — KHÔNG tự chạy
+    if name == "write_file" and (cc.has_redaction_markers(args.get("content")) or cc.has_redaction_markers(args.get("path"))):
+        msg = ("write_file bị TỪ CHỐI: nội dung chứa marker che dữ liệu ([REDACTED…], [EMAIL], [CCCD]…). Ghi nội dung này sẽ "
+               "đè giá trị thật bằng giá trị đã che. Hãy nhờ người dùng tự sửa các giá trị đó hoặc bỏ phần che khỏi đề xuất.")
+        _audit_action(conv, uid, "write_file", "refused_markers")
+        return await _finish_step(msg, True, msg, {"refused": True})
+    preview = await _build_preview(conv.folder_id, name, args)
+    row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind="side_effect", action=name,
+                       args=args, tool_use_id=first.id, extra_ids=extras, warning=_warning_for(state))
+    return {"status": "awaiting_confirmation", "thought": thought, **meta, "pending": _pending_view(row, preview)}
+
+
+def _redact_user_text(text: str) -> str:
+    from scanner.cloud_ai import redact
+    return redact(text)
