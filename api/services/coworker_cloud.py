@@ -136,6 +136,7 @@ _KEYWORDS = (r"pass(?:word|wd|phrase)?|pwd|secret|token|api[_\-]?key|apikey|acce
              r"webhook(?:[_\-]?url)?|signing[_\-]?key|encryption[_\-]?key|master[_\-]?key|salt|dsn|connection[_\-]?string|requirepass")
 _KV = re.compile(r"(?i)(\b[\w.\-]{0,40}(?:" + _KEYWORDS + r")s?[\"']?\s*[:=](?![=~>])\s*)(\"[^\"\n]*\"|'[^'\n]*'|[^\s#,;]+)")
 _HDR = re.compile(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key|x-auth-token|x-amz-security-token|x-csrf-token)(\s*[:=]\s*[\"']?)([^\"'\n]+)")
+_HDR_WS = re.compile(r"(?i)\b((?:proxy_set_header|add_header|more_set_headers|header|-H)?\s*['\"]?(?:x-api-key|api-key|x-auth-token|x-amz-security-token|authorization|proxy-authorization))(\s+)(['\"]?)([^\s'\";]+)")
 _BEARER_E = re.compile(r"(?i)\b(bearer|basic|digest)(\s+)([A-Za-z0-9._~+/=\-]{6,})")
 _COOKIE = re.compile(r"(?i)\b(set-cookie|cookie)(\s*:\s*)([^\"'\n]+)")
 _COOKIE_Q = re.compile(r"(?i)\b(set-cookie|cookie)(\s+)(\"[^\"\n]*\"|'[^'\n]*')")
@@ -146,6 +147,7 @@ _COOKIE_TAB = re.compile(r"(?i)^(\s*[\w.\-]{0,40}(?:session|sess|sid|auth|token|
 # Flag CLI mang mật khẩu: --requirepass X, --password=X, --pass X, --token X, --api-key X, -u user:pass đã có _CURL_USER
 _CLI_FLAG = re.compile(r"(?i)((?:^|\s)--?(?:requirepass|masterauth|password|passwd|pass|pwd|token|auth-?token|access-?token|secret|"
                        r"client-?secret|api-?key|apikey|private-?key)(?:=|\s+)[\"']?)([^\s\"']+)")
+_LOGIN_P = re.compile(r"((?:^|\s)-p\s+[\"']?)([^\s\"']+)")
 _REDIS_A = re.compile(r"((?:^|\s)-a\s+[\"']?)([^\s\"']+)")
 _MYSQL_P = re.compile(r"((?:^|\s)-p)([^\s\-][^\s]*)")
 _HASHES = re.compile(r"\$(?:apr1|2[abxy]|1|5|6|y|argon2(?:id|i|d))\$[./A-Za-z0-9$,=+\-]{8,}|\{(?:SHA|SSHA|SHA256|SSHA512)\}[A-Za-z0-9+/=]{10,}")
@@ -213,13 +215,13 @@ def _kv_cb(m):
         return m.group(0)
     v = m.group(2)
     inner = v.strip("\"'")
-    if "[REDACTED" in v or not inner or _SKIP_VAL.match(v):
+    if "[REDACTED" in v or not inner or _SKIP_VAL.match(v) or re.search(r"<[^>\s]{1,40}>", v):
         return m.group(0)
     line, key_part = m.string, m.group(1)
     before = line[:m.start()].rstrip()
-    if before.endswith(":") or before.endswith("->"):      # `db: Session = Depends(..)`: "Session" là KIỂU, không phải tên khoá
+    if re.search(r"\w\s*:\s+$", line[:m.start()]) or before.endswith("->"):      # `db: Session = Depends(..)`: "Session" là KIỂU, không phải tên khoá
         return m.group(0)
-    if "#" in line[:m.start()] or "//" in line[:m.start()]:  # chú thích / văn xuôi
+    if "#" in line[:m.start()] or re.search(r"(?:^|\s)//\s", line[:m.start()]):  # chú thích / văn xuôi
         return m.group(0)
     if inner.lower() in key_part.lower():                  # SECRETS = "SECRETS", "detect-secrets": "detect-secrets"
         return m.group(0)
@@ -235,7 +237,7 @@ def _kv_cb(m):
             return m.group(0)                              # mã hằng: "WSTG-ATHN-02", "T1078", "A07"
         return m.group(1) + _quoted_like(v, _R)
     core = inner.rstrip("):,]}")
-    if v[0] in "([{" or v[:2] in ('f"', "f'") or _CODE_VAL.match(v) or v.endswith(")") or _TYPE_VAL.match(core):
+    if v[0] in "([{" or v[:2] in ('f"', "f'") or _CODE_VAL.match(v) or v.endswith(")") or (_TYPE_VAL.match(core) and key_part.rstrip().endswith(":")):
         return m.group(0)                                  # API_KEY = os.environ[..], x = requests.Session(), session: Session
     if code_line and re.fullmatch(r"[A-Za-z_][\w.]*", core) and not has_digit:
         return m.group(0)                                  # f(secret=plain, ...), {"token": token}, salt=salt, **kw)
@@ -263,6 +265,15 @@ def _big_cb(m):
     return t
 
 
+def _hdr_ws_cb(m):
+    name, v = m.group(1).lower(), m.group(4)
+    if "[REDACTED" in v or v.lower() in ("bearer", "basic", "token", "digest") or _PLACEHOLDER.match(v):
+        return m.group(0)
+    if "authorization" in name and not (re.fullmatch(r"[A-Za-z0-9._~+/=\-]{8,}", v) and re.search(r"[0-9A-Z]", v)):
+        return m.group(0)               # văn xuôi: "authorization revoked", "Authorization Schema"
+    return m.group(1) + m.group(2) + m.group(3) + _R
+
+
 def _redact_line(line: str) -> str:
     low = line.lower()
     if _PGPASS.match(line):
@@ -275,11 +286,14 @@ def _redact_line(line: str) -> str:
     line = _WEBHOOK.sub(_R, line)
     line = _URL_USERINFO.sub(lambda m: m.group(1) + _R + m.group(3), line)
     line = _HDR.sub(lambda m: m.group(0) if ("[REDACTED" in m.group(3) or _PLACEHOLDER.match(m.group(3))) else m.group(1) + m.group(2) + _R, line)
+    line = _HDR_WS.sub(_hdr_ws_cb, line)
     line = _COOKIE.sub(lambda m: m.group(1) + m.group(2) + _R if "[REDACTED" not in m.group(3) else m.group(0), line)
     line = _COOKIE_Q.sub(lambda m: m.group(1) + m.group(2) + ('"' + _R + '"' if "[REDACTED" not in m.group(3) else m.group(3)), line)
     line = _COOKIE_FLAG.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
     line = _CURL_USER.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
     line = _CLI_FLAG.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
+    if "login" in low:       # docker/podman/nerdctl/helm/skopeo login -u user -p PASSWORD
+        line = _LOGIN_P.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
     if "redis" in low:
         line = _REDIS_A.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
     if "mysql" in low or "mariadb" in low:
@@ -350,7 +364,7 @@ def redact_egress(text: str) -> str:
     text = _HASHES.sub(_R, text)     # TRƯỚC redact(): mẫu PII (số điện thoại…) không được cắt đôi một hash
     for pat in cloud_ai._SECRET_PATTERNS:      # PEM nhiều dòng + khoá có tiền tố (AKIA, sk-…, ABSK, ghp_…, JWT…)
         text = pat.sub(lambda m: cloud_ai._mask(m.group(0)), text)
-    text = cloud_ai.redact_pii(text)           # PII VN (CCCD, SĐT, email, IP nội bộ). `key="x"` do _KV xử lý (có ngữ cảnh)
+    text = _redact_pii_egress(text)            # PII VN (CCCD, SĐT, email, IP nội bộ). `key="x"` do _KV xử lý (có ngữ cảnh)
     k8s = bool(_K8S_SECRET.search(text))
     netrc = bool(_NETRC_CTX.search(text))
     jsoncookies = bool(_JSON_COOKIE_CTX.search(text)) and '"value"' in text
@@ -374,6 +388,21 @@ def redact_egress(text: str) -> str:
                     in_data = False
         out.append(line)
     return "\n".join(out)
+
+
+_IP4 = (r"(?<![\d.])10(?:\.\d{1,3}){3}(?![\d.]*\d)|(?<![\d.])192\.168(?:\.\d{1,3}){2}(?!\.?\d)|"
+        r"(?<![\d.])172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}(?!\.?\d)")   # RFC1918 đủ 4 octet (loopback/metadata không phải PII)
+_IP4_RE = re.compile(_IP4)
+
+
+def _redact_pii_egress(text: str) -> str:
+    """PII VN như scanner.cloud_ai.redact_pii, nhưng IP nội bộ chỉ khi là IPv4 ĐỦ 4 octet (không che số thực `10.0`; loopback/link-local không phải PII)."""
+    from scanner import cloud_ai
+    for pat, tag in cloud_ai._PII_PATTERNS:
+        if tag == "[IP_NỘI_BỘ]":
+            continue
+        text = pat.sub(tag, text)
+    return _IP4_RE.sub("[IP_NỘI_BỘ]", text)
 
 
 def _redact_str(s: str) -> str:

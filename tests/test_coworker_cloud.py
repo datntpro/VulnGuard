@@ -685,6 +685,24 @@ dave:$6$saltsalt$hashhashhashhashhashhashhashhashhashhashhash
 ]
 """, ["jsonCookieVal-111", "dark-but-still-masked-222"]),
     ".pgpass": ("db.example.com:5432:app:bob:pgpassPw-4321\n", ["pgpassPw-4321"]),
+    "nginx-apikey.conf": ("""location /api/ {
+  proxy_set_header X-Api-Key nginxHdrKey9876;
+  proxy_set_header Authorization "Bearer nginxBearerTok4321";
+  proxy_set_header X-Auth-Token nginxAuthTok555;
+}
+""", ["nginxHdrKey9876", "nginxBearerTok4321", "nginxAuthTok555"]),
+    "docker-login": ("""docker login -u deploy -p dockerShortPw456 ghcr.io
+docker login registry.example.com --username ci --password dockerLongPw789
+docker login --password=dockerEqPw012 -u ci reg.example.com
+echo ok | docker login --password-stdin -u ci reg.example.com
+""", ["dockerShortPw456", "dockerLongPw789", "dockerEqPw012"]),
+    ".npmrc": ("""registry=https://corp.example/
+//corp.example/:_password=bnBtQ29ycFBhc3M=
+//corp.example/:username=deploy
+//corp.example/:_auth=ZGVwbG95OnNlY3JldHB3
+//corp.example/:_authToken=npm_corpAuthTokenValue0123456789abcdef
+_auth=YmFzZTY0QXV0aFZhbHVl
+""", ["bnBtQ29ycFBhc3M=", "ZGVwbG95OnNlY3JldHB3", "npm_corpAuthTokenValue0123456789abcdef", "YmFzZTY0QXV0aFZhbHVl"]),
     "teams.txt": ("https://contoso.webhook.office.com/webhookb2/abcd-1234@efgh/IncomingWebhook/secretpart/xyz\n", ["secretpart"]),
 }
 
@@ -886,7 +904,7 @@ def test_real_repo_code_is_left_alone():
             out = cc.redact_egress(src)
             for a, b in zip(src.split("\n"), out.split("\n")):
                 tot += 1
-                changed += (a != b and "[IP_NỘI_BỘ]" not in b)
+                changed += (a != b)
     assert tot > 20000 and changed / tot < 0.001, (changed, tot)
     code = """def f(db: Session = Depends(get_db), token: str = None, password: Optional[str] = None):
     session = requests.Session()
@@ -952,3 +970,10 @@ def test_host_creates_dir_and_token_lazily_when_started(tmp_path, monkeypatch):
     assert not (tmp_path / "d").exists()
     m._startup_materialize()                                                 # hook startup của uvicorn
     assert (tmp_path / "d" / "token").read_text().strip() == m.COWORKER_TOKEN == m.get_token()
+
+
+def test_float_literals_and_partial_ips_are_not_masked_but_real_ips_are():
+    assert cc.redact_egress("timeout=httpx.Timeout(connect=10.0, write=10.0) v=127.0 x=10.1") == \
+        "timeout=httpx.Timeout(connect=10.0, write=10.0) v=127.0 x=10.1"
+    out = cc.redact_egress("db 10.1.2.3 gw 192.168.1.5 lan 172.16.0.9 lo 127.0.0.1 meta 169.254.169.254 pub 8.8.8.8")
+    assert out.count("[IP_NỘI_BỘ]") == 3 and "8.8.8.8" in out and "127.0.0.1" in out
