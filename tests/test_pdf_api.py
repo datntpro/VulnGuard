@@ -115,7 +115,7 @@ CRAFTED = [
     'a"; filename="evil.exe',
     "n\r\nSet-Cookie: s=1",
     "../../etc/passwd",
-    "tên‮gpj.exe",
+    "t\u00ean\u202egpj.exe",
     "%0d%0aX-Evil: 1",
     "a;b,c'd\\e",
 ]

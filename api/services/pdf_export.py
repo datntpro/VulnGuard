@@ -43,7 +43,7 @@ _SAFE_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff
 
 # ───────────────────────── filenames / headers ─────────────────────────
 _VN_MAP = str.maketrans({"đ": "d", "Đ": "D"})
-_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏ -‮⁦-⁩﻿]")
+_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
 
 
 def slugify(s: Any, max_len: int = 60) -> str:
