@@ -22,6 +22,7 @@ from api import pentest_models  # noqa: F401
 from api import asset_models  # noqa: F401
 from api import connector_models  # noqa: F401
 from api import scm_models  # noqa: F401
+from api import ai_cred_models  # noqa: F401  [AI PR-2]
 
 # Tạo DB tables
 Base.metadata.create_all(bind=engine)
@@ -80,6 +81,10 @@ def _run_migrations():
 _run_migrations()
 from api.pentest_migrations import run as _pentest_migrate  # P1-0: api/pentest_migrations/
 _pentest_migrate(engine)
+
+# [AI PR-2] che secret trong log + chặn debug SDK ở production + migrate cấu hình AI org → ai_credentials
+from api.services import ai_credentials as _ai_creds
+_ai_creds.startup()
 
 
 def _cleanup_stale_scans():

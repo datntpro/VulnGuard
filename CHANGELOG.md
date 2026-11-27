@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added — AI PR-2: kho credential + mã hoá (Refs #109)
+- Bảng `ai_credentials` / `ai_usage_events` (`api/ai_cred_models.py`) và kho `api/services/ai_credentials.py`: Fernet với sub-key riêng (`vulnguard-ai-cred:v1:` + secret key, `MultiFernet` để xoay khoá), envelope gắn chủ `{cid, owner, provider}` — ciphertext bị hoán đổi giữa hàng hoặc sai chủ bị từ chối. Không có getter plaintext: chỉ `open_for_call()` (giải mã đúng lúc → `ResolvedCredential`). Trạng thái `revoked`/`disabled` xoá secret ngay, purge sau 30 ngày.
+- Startup migrate cấu hình AI của org (idempotent, cờ `migrations.creds_v1`, `org_credential_id`); `api_key_enc` cũ giữ nguyên một release để rollback; lỗi giữa chừng → rollback. Resolver vẫn org-only (không đổi hành vi); chưa có endpoint người dùng/policy (PR-3).
+- Log: bộ lọc che key (`sk-ant-`, `sk-`, `sk-or-`, `ABSK`, `ksk_`, `AIza`, `ghp_`/`github_pat_`, Bearer, `x-api-key`, `?key=`) ở MỌI record, kể cả traceback; production từ chối khởi động nếu `ANTHROPIC_LOG`/`OPENAI_LOG=debug`. Mẫu che prompt thêm Azure 32-hex, Google service-account.
+
 ### Changed — AI PR-1: LLM resolver seam (không đổi hành vi, Refs #109)
 - Mọi lời gọi LLM (triage, reanalyze, `/api/ai/test`, Pentest, Document Review, Co-work, File Assistant) đi qua `api/services/llm_resolver.py`: `resolve(LLMContext) → Route` (`LocalOllama` | `Cloud(ResolvedCredential)` | `Refuse`). Vẫn chỉ cấu hình org; định tuyến theo `mode` y như trước. Client SDK chỉ dựng ở `open_client()` (`build_client` bị gỡ khỏi `cloud_ai`).
 - `ResolvedCredential` che trong repr, không pickle/copy/JSON được; `cfg` của Pentest chỉ mang route + ctx (không secret). `make_driver(route)`; Ollama là route native cho agent (`{url}/v1`, không cần key).

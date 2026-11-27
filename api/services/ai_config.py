@@ -173,11 +173,25 @@ def validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
             if key:
                 cfg[sec]["api_key_enc"] = encrypt_secret(key)
 
-        path = _path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        _write_raw(cfg)
+        return cfg
+
+
+def _write_raw(cfg: Dict[str, Any]) -> None:
+    path = _path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def update_raw(mutator) -> Dict[str, Any]:
+    """[AI PR-2] Đọc-sửa-ghi nguyên tử (cùng lock với validate_and_save) cho dữ liệu nội bộ không qua validate
+    (cờ migrations, org_credential_id). `mutator(cfg)` sửa tại chỗ; KHÔNG đụng api_key_enc cũ (giữ để rollback)."""
+    with _lock:
+        cfg = load_config()
+        mutator(cfg)
+        _write_raw(cfg)
         return cfg

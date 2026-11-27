@@ -37,6 +37,8 @@ _CLOUD_PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter")
 AI_NO_CREDENTIAL = "AI_NO_CREDENTIAL"
 AI_BAD_PROVIDER = "AI_BAD_PROVIDER"
 AI_UNKNOWN_FEATURE = "AI_UNKNOWN_FEATURE"
+AI_CRED_REVOKED = "AI_CRED_REVOKED"        # [AI PR-2] credential đã revoked/disabled
+AI_CRED_FORBIDDEN = "AI_CRED_FORBIDDEN"    # [AI PR-2] credential của user khác
 
 _OLLAMA_DUMMY_KEY = "ollama"   # SDK openai bắt buộc api_key khác rỗng; Ollama bỏ qua — người dùng KHÔNG phải nhập
 
