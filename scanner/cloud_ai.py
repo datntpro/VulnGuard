@@ -83,7 +83,7 @@ _SECRET_PATTERNS = [
     # [AI PR-2] Azure OpenAI key (32 hex) đứng sau `api-key`; Google service-account JSON (private_key_id / client_email)
     re.compile(r"(?i)\bapi-key[\"':= ]{1,4}[0-9a-f]{32}\b"),
     re.compile(r"\"private_key_id\"\s*:\s*\"[0-9a-f]{20,}\""),
-    re.compile(r"[A-Za-z0-9\-]+@[A-Za-z0-9\-]+\.iam\.gserviceaccount\.com"),
+    re.compile(r"[A-Za-z0-9\-]{1,64}@[A-Za-z0-9\-]{1,64}\.iam\.gserviceaccount\.com"),
 ]
 _ASSIGN_PATTERN = re.compile(
     r"""(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)"""

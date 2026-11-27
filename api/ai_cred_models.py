@@ -29,6 +29,9 @@ class AiCredential(Base):
         Index("uq_ai_cred_default_per_user", "owner_user_id", unique=True,
               sqlite_where=text("is_default = 1 AND owner_user_id IS NOT NULL"),
               postgresql_where=text("is_default AND owner_user_id IS NOT NULL")),
+        # mỗi provider tối đa MỘT hàng org (owner NULL không được UNIQUE thường bảo vệ)
+        Index("uq_ai_cred_org_provider", "provider", unique=True,
+              sqlite_where=text("scope = 'org'"), postgresql_where=text("scope = 'org'")),
     )
 
     id = Column(String(36), primary_key=True, default=gen_id)

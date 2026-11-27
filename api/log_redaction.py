@@ -14,11 +14,18 @@ _BEARER = re.compile(r"(?i)\b(bearer|x-api-key:?|api-key:?|authorization:?)\s+[A
 _QS = re.compile(r"(?i)([?&](?:key|api[_-]?key|token|access_token|sig|signature)=)[^&\s'\"]+")
 # tên "giống khoá" + dấu : / = (cho phép dict-repr: 'x-api-key': 'abc') → che GIÁ TRỊ
 _KEYISH = re.compile(
-    r"""(?i)(\b(?:x-api-key|api[_-]?key|authorization|access[_-]?key|secret[_-]?key|client[_-]?secret|secret|token|password|passwd)"""
+    r"""(?i)((?<![A-Za-z0-9])(?:x-api-key|api[_-]?key|authorization|access[_-]?key|secret[_-]?key|client[_-]?secret|secret|token|password|passwd)"""
     r"""['"]?\s*[:=]\s*['"]?)([^'"\s,}&)]{6,})""")
-# token entropy cao (chữ thường + HOA + số, ≥40 ký tự) đứng riêng — bắt khoá lạ; hash hex thường không dính
-_HIGH_ENTROPY = re.compile(r"\b(?=[A-Za-z0-9_\-]{40,}\b)(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[a-z])(?=[A-Za-z0-9_\-]*[A-Z])[A-Za-z0-9_\-]{40,}")
+# token dài ≥40 ký tự: chỉ QUÉT bằng regex tuyến tính, kiểm tra thường+HOA+số trong callback (tránh lookahead bậc hai)
+_LONG_TOKEN = re.compile(r"[A-Za-z0-9_\-]{40,}")
+MAX_SCAN = 32 * 1024     # trần ký tự quét mỗi record (regex khoá cũ có thể chậm trên chuỗi dài) — phần dư bị cắt
 _NO_DEBUG_ENV = ("ANTHROPIC_LOG", "OPENAI_LOG")
+
+
+def _entropy_cb(m) -> str:
+    t = m.group(0)
+    return "[REDACTED-KEY]" if (any(c.isdigit() for c in t) and any(c.islower() for c in t)
+                                 and any(c.isupper() for c in t)) else t
 
 
 def mask(text: str) -> str:
@@ -26,11 +33,13 @@ def mask(text: str) -> str:
     if not text or not isinstance(text, str):
         return text
     from scanner import cloud_ai
+    if len(text) > MAX_SCAN:   # che phần đầu rồi cắt: dòng log khổng lồ không được làm nghẽn logging
+        return mask(text[:MAX_SCAN]) + f"…[truncated {len(text) - MAX_SCAN} chars]"
     for pat in cloud_ai._SECRET_PATTERNS:
         text = pat.sub("[REDACTED-KEY]", text)
     text = _BEARER.sub(lambda m: m.group(1) + " [REDACTED]", text)
     text = _KEYISH.sub(lambda m: m.group(1) + "[REDACTED]", text)
-    text = _HIGH_ENTROPY.sub("[REDACTED-KEY]", text)
+    text = _LONG_TOKEN.sub(_entropy_cb, text)
     return _QS.sub(lambda m: m.group(1) + "[REDACTED]", text)
 
 

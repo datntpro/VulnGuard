@@ -417,6 +417,15 @@ def startup() -> None:
     from api.config import settings
     log_redaction.install()
     log_redaction.check_sdk_debug_env(settings.app_env)
+    try:   # DB cũ (tạo trước khi có index này): thêm nếu chưa có; trùng dữ liệu → log, không chặn boot
+        from sqlalchemy import text
+        from api.database import engine
+        with engine.connect() as conn:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_cred_org_provider "
+                              "ON ai_credentials (provider) WHERE scope = 'org'"))
+            conn.commit()
+    except Exception:
+        logger.error("[ai-cred] không tạo được unique index org/provider (có hàng org trùng?)")
     try:
         migrate_org_config()
     except Exception:

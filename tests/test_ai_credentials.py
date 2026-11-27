@@ -463,3 +463,48 @@ def test_b2_no_false_positive_on_hashes_and_plain_text(masked_log, caplog):
     caplog.set_level(logging.DEBUG)
     masked_log.info("sha %s scan done in 12s user=alice", "a" * 40)
     assert "a" * 40 in caplog.text and "scan done" in caplog.text
+
+
+# ── re-verify round: linear masking, env-style names, org unique ─────────────────────────────────────
+@pytest.mark.parametrize("line", ["ANTHROPIC_API_KEY=abcd1234efgh5678", "OPENAI_API_KEY: 'zz11yy22xx33ww44'",
+                                  "export OPENROUTER_API_KEY=plainvalue12345", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI12345"])
+def test_env_style_assignments_masked(masked_log, caplog, line):
+    caplog.set_level(logging.DEBUG)
+    masked_log.info(line)
+    for leak in ("abcd1234efgh5678", "zz11yy22xx33ww44", "plainvalue12345", "wJalrXUtnFEMI12345"):
+        assert leak not in caplog.text
+
+
+@pytest.mark.parametrize("payload", [
+    "-".join(["abcDEF123"] * 120_000),            # chuỗi nối bằng '-' (trường hợp bậc hai cũ)
+    "_".join(["x1Y"] * 330_000),
+    "A" * 1_000_000,
+    "sk-" + "a1B" * 330_000,
+    "eyJ" + "a" * 1_000_000,
+])
+def test_mask_is_linear_on_1mb_line(payload):
+    import time
+    from api import log_redaction
+    t = time.perf_counter()
+    out = log_redaction.mask(payload[:1_000_000])
+    dt = time.perf_counter() - t
+    assert dt < 0.1, f"mask took {dt:.3f}s"
+    assert len(out) < 40_000 and "truncated" in out
+
+
+def test_entropy_rule_still_masks_inside_cap(masked_log, caplog):
+    caplog.set_level(logging.DEBUG)
+    masked_log.info("pad " + "x " * 100 + "aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5kL7mN")
+    assert "aB3dE5gH7jK9" not in caplog.text
+
+
+def test_org_row_unique_per_provider(svc, db):
+    from sqlalchemy.exc import IntegrityError
+    svc.create(db, scope="org", provider="anthropic", label="a", secret=KEY, admin_path=True)
+    db.commit()
+    with pytest.raises(IntegrityError):
+        svc.create(db, scope="org", provider="anthropic", label="b", secret=KEY, admin_path=True)
+        db.commit()
+    db.rollback()
+    svc.create(db, scope="org", provider="openai", label="a", secret=KEY, admin_path=True)   # provider khác OK
+    db.commit()
