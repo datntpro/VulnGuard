@@ -32,6 +32,8 @@ DEFAULT_POLICY: Dict[str, Any] = {
 }
 _AZ_KEY = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?/[a-z0-9][a-z0-9._\-]{0,63}$")
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,119}$")
+# [PR-7] base_url_allowlist: "host" | "host:port" | "*.suffix[:port]" — wildcard chỉ ở đầu, không scheme/path/userinfo
+_ALLOW_ENTRY = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9_-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9_-]*[a-z0-9])?)*(:\d{1,5})?$")
 
 
 def _num(v: Any, name: str, *, integer: bool = False, maximum: float = 1e6) -> Optional[float]:
@@ -75,7 +77,11 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise ValueError("policy.scheduled_jobs_credential phải là org | owner | local_only")
     if p["custom_base_url"] not in ("admin_only", "off"):
         raise ValueError("policy.custom_base_url phải là admin_only | off")
-    p["base_url_allowlist"] = _str_list(p["base_url_allowlist"], "policy.base_url_allowlist")
+    p["base_url_allowlist"] = [e.lower() for e in _str_list(p["base_url_allowlist"], "policy.base_url_allowlist")]
+    for e in p["base_url_allowlist"]:
+        port = e.rsplit(":", 1)[1] if ":" in e else None
+        if not _ALLOW_ENTRY.match(e) or (port is not None and not 0 < int(port) < 65536):
+            raise ValueError("policy.base_url_allowlist: mỗi mục phải là host hoặc host:port, wildcard chỉ dạng *.suffix ở đầu")
     m = p["azure_deployment_models"]
     if not isinstance(m, dict) or len(m) > 200:
         raise ValueError("policy.azure_deployment_models phải là object <resource>/<deployment> → model")

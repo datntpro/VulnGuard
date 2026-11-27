@@ -73,12 +73,12 @@ Web scan chạy Nuclei với `-duc` (không tự cập nhật). Cập nhật tem
 
 ## AI đám mây lỗi
 
-- Chưa nhập API key đúng provider (Settings → AI Provider), hoặc dùng nút **Test** (`POST /api/ai/test`).
+- Chưa nhập API key đúng provider (Settings › AI), hoặc dùng nút **Test** (`POST /api/ai/test`). Khoá riêng của bạn: Settings › AI › Khoá AI của tôi. Mã lỗi: [[Per-user AI keys|AI-Per-User-Keys]].
 - Pentest Agent chỉ chạy với Anthropic hoặc Bedrock. OpenAI/OpenRouter/Ollama không dùng được cho agent.
 
 ## Ollama không kết nối
 
-Chạy `ollama serve` trên host hoặc trỏ địa chỉ khác ở Settings → Ollama. Trong Docker, `OLLAMA_URL` là `http://host.docker.internal:11434`.
+Chạy `ollama serve` trên host hoặc trỏ địa chỉ khác ở Settings › AI › Ollama. Trong Docker, `OLLAMA_URL` là `http://host.docker.internal:11434`.
 
 ## MCP HTTP bị từ chối
 

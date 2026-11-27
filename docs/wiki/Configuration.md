@@ -79,7 +79,7 @@ Mẫu: `.env.example` (Docker) và `.env.native.example` (Native). Không commit
 | Coworker Host | `8765` | `127.0.0.1` |
 | SonarQube (profile `sonar`) | `9000` | compose publish |
 
-## AI provider (Settings → AI Provider, chỉ ADMIN)
+## AI provider (Settings › AI, chỉ ADMIN sửa org; mọi người dùng khoá riêng — xem [[Per-user AI keys|AI-Per-User-Keys]])
 
 Lưu trong `storage/ai_config.json` (ghi với quyền 600). API key được mã hoá Fernet, API chỉ trả `api_key_set` và `api_key_hint`, không bao giờ trả nguyên văn.
 

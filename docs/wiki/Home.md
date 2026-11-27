@@ -62,6 +62,9 @@ Mật khẩu ADMIN nằm trong `storage/admin_credentials.txt` (chmod 600). Đă
 - [[Installation]]: yêu cầu, cài Native / Docker / systemd / demo
 - [[Configuration]]: biến môi trường, AI provider, Ollama, SonarQube, SMTP, cổng, binding
 - [[Features]]: tính năng theo nhóm
+- [[Per-user AI keys|AI-Per-User-Keys]]: khoá AI theo người dùng, chính sách, thứ tự chọn khoá (VI+EN)
+- [[Kiro: Bedrock via IAM Identity Center|AI-Kiro-Bedrock-IAM-Identity-Center]]: cấp Bedrock cho người dùng Kiro
+- [[AI key rotation runbook|AI-Key-Rotation-Runbook]]: xoay khoá AI và secret key
 - [[Authentication and Roles|Authentication-and-Roles]]: đăng nhập, RBAC, phiên
 - [[Security and Data Flow|Security-and-Data-Flow]]: cơ chế bảo vệ, dữ liệu nào rời máy
 - [[Scanning and Triage|Scanning-and-Triage]]: quét SAST / SCA / Secrets / IaC / Container, triage, so sánh scan

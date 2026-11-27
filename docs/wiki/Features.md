@@ -44,7 +44,7 @@
 - Connector XDR/EDR/NAC (Trellix XDR, Trend Micro Vision One, FortiNAC) + [[MCP server|MCP-Server]] read-only.
 
 ## AI
-Ollama local hoặc cloud (Claude/Bedrock/OpenAI/OpenRouter): giảm false positive, giải thích + gợi ý fix tiếng Việt. Pentest Agent chỉ chạy với Claude (Anthropic API hoặc Bedrock).
+Ollama local hoặc cloud (Claude/Bedrock/OpenAI/OpenRouter/Azure OpenAI/Gemini/Vertex): giảm false positive, giải thích + gợi ý fix tiếng Việt. Cấu hình ở Settings › AI; mỗi người có thể dùng khoá riêng. Xem [[Per-user AI keys|AI-Per-User-Keys]] và [[Kiro: Bedrock via IAM Identity Center|AI-Kiro-Bedrock-IAM-Identity-Center]]. Pentest Agent cần model có tool-calling (đã qua probe).
 
 ## Module phụ (tắt được bằng feature flag)
 - **Document Review**: review tài liệu SRS/HLD/API spec theo checklist OWASP ASVS bằng Ollama, có version và so sánh version.

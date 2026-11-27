@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added — AI PR-7: tài liệu, runbook, deprecation (Refs #109)
+- **Tài liệu (VI+EN)**: `docs/wiki/AI-Per-User-Keys.md` (vai trò, thêm/xoay/thu hồi khoá, thứ tự chọn khoá, policy, mã lỗi, giới hạn đã biết), `AI-Kiro-Bedrock-IAM-Identity-Center.md` (permission set `BedrockInvoke`, tạo Bedrock API key short/long-term, quota + cross-region; mục chưa có nguồn AWS chính thức ghi rõ **chưa xác minh**), `AI-Key-Rotation-Runbook.md` (xoay khoá AI, xoay secret key bằng `VULNGUARD_SECRET_KEY_PREVIOUS` + `reencrypt_all`, backup và secret key cất riêng, phạm vi: secret hộp chung KHÔNG được xoay tự động). Con trỏ ở README, Home, Sidebar, Configuration, Features, API-Reference, Troubleshooting.
+- **Deprecation (không đổi hành vi)**: `GET/PUT /api/ai/config`, `GET/PUT /api/ollama/endpoint`, `PUT /api/ollama/active-model`, `GET/PUT /api/ollama/vision-model`, `GET /api/ollama/health` trả thêm `Deprecation: true`, `Sunset: Wed, 31 Mar 2027 00:00:00 GMT`, `Link: <thay thế>; rel="successor-version"` và log WARNING `vulnguard.deprecation` một lần/route/process. Gỡ không sớm hơn **2027-03-31**. `/api/ollama/models|pull|models/{name}` chưa deprecated (Settings › AI còn dùng).
+- **#109 LOW**: `policy.base_url_allowlist` được kiểm từng mục khi lưu (`host`, `host:port`, `*.suffix`; không scheme/path/userinfo/wildcard giữa chuỗi) → 422 khi sai.
+
 ### Added — #101 PR-B: smoke scanner trong image CI
 - `python -m scanner.scanners.selftest` chạy từng scanner đóng gói (semgrep bundled rules, bandit, checkov, hadolint, gitleaks, detect-secrets, trivy-iac + `--version` của trivy/grype/pip-audit) trên fixture có lỗi đã biết và đòi số finding tối thiểu; bước mới trong job `pdf-docker` (amd64 + arm64, non-root, rootfs read-only, không mạng). Tool hỏng im lặng (vd gitleaks 8.18.4 từ chối `--quiet`) làm CI đỏ.
 - Mọi check bắt buộc đạt (#120 đã sửa gitleaks `--quiet` và trivy-iac); selftest vẫn hỗ trợ `--xfail` cho trường hợp tạm. trivy SCA/pip-audit cần tải DB nên chỉ kiểm `--version`.
