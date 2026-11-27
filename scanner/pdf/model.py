@@ -30,6 +30,8 @@ def normalize_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
     for k in ("subtitle", "org", "generated"):
         meta.setdefault(k, "")
     meta.setdefault("kv", [])
+    if isinstance(meta.get("org"), str) and len(meta["org"]) > 60:
+        meta["org"] = meta["org"][:59] + "…"  # keeps the footer on one line
     d["meta"] = meta
     findings = []
     n_detail = 0
@@ -37,6 +39,9 @@ def normalize_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
         g = dict(f) if isinstance(f, Mapping) else {"title": str(f)}
         g["severity"] = _sev(g.get("severity"))
         g.setdefault("id", f"VG-{i:03d}")
+        t = str(g.get("title") or "")
+        # TOC/heading entry stays ~1 line; the full title is repeated inside the card when clipped
+        g["title_short"] = t if len(t) <= 90 else t[:89] + "…"
         want = g.get("detail")
         want = (g["severity"] in DETAIL_SEVS) if want is None else bool(want)
         if want and n_detail < MAX_DETAIL_CARDS:

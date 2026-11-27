@@ -14,7 +14,7 @@
         stack(spacing: 3pt, sev-pill(d, sev),
           if badge != "" { text(size: 5.8pt, weight: "bold", fill: rgb("#15803d"), tracking: 0.3pt, badge) }),
         heading(level: 2, outlined: true, bookmarked: true,
-          f.at("id", default: "") + " · " + f.at("title", default: "")))
+          f.at("id", default: "") + " · " + f.at("title_short", default: f.at("title", default: ""))))
     ]
     #let cells = f.at("meta", default: ())
     #if cells.len() > 0 {
@@ -26,6 +26,9 @@
     }
     #block(inset: 8pt, width: 100%)[
       #set text(size: 8.8pt)
+      #if f.at("title_short", default: "") != f.at("title", default: "") [
+        #text(weight: "semibold")[#f.at("title", default: "")]
+      ]
       #if vec != "" [
         #lbl(lab(d, "vector"))
         #raw(vec)

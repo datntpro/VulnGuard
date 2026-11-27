@@ -124,7 +124,7 @@ Khoá truy cập AWS dạng thật nằm trong file cấu hình production đư�
 V Ị T R Í
 config/application-prod.yml:42
 M Ã N G U Ồ N
-▶42 aws.accessKeyId: AKIA************MNOP (đã che)
+▶42 aws.accessKeyId: AKI…[REDACTED 20 ký tự] (đã che)
 K H ẮC P H Ụ C
 Thu hồi khoá trên AWS IAM, xoay vòng, chuyển sang Secrets Manager; xoá khỏi lịch sử Git.
 CWE-798

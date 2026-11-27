@@ -56,6 +56,25 @@ MAX_TITLE = 300
 MAX_TEXT = 8192
 MAX_CODE_LINES = 200
 _CODE_KEYS = frozenset({"code", "evidence", "snippet", "request", "response"})
+MAX_EXTRA_LINES = 40            # traffic/PoC/extra sections per finding (target-controlled, newline-dense)
+MAX_EXTRA_ITEMS = 8
+MAX_BODY_LINES_TOTAL = int(os.environ.get("VG_PDF_MAX_BODY_LINES", 15000))  # whole-document budget (~200 pages of code)
+TRUNC_MARK = "… [truncated]"
+
+
+def _cap_lines(s: str, max_lines: int, max_chars: int) -> str:
+    lines = s.split("\n")
+    cut = len(lines) > max_lines
+    if cut:
+        lines = lines[:max_lines]
+    out = "\n".join(lines)
+    if len(out) > max_chars:
+        out, cut = out[:max_chars], True
+    return out + ("\n" + TRUNC_MARK if cut else "")
+
+
+def _ell(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: max(0, n - 1)] + "…"
 
 # Dead proxy: Typst's only network feature is package download (probe F4/F5).
 DEAD_PROXY = "http://127.0.0.1:9"
@@ -298,6 +317,15 @@ def apply_caps(doc: Mapping[str, Any]) -> dict[str, Any]:
             out["findings_truncated_from"] = len(fs)
             fs = fs[:MAX_FINDINGS]
         capped = []
+        budget = [MAX_BODY_LINES_TOTAL]
+
+        def body(v: str, max_lines: int, max_chars: int) -> str:
+            if budget[0] <= 0:
+                return TRUNC_MARK
+            v = _cap_lines(v, min(max_lines, budget[0]), max_chars)
+            budget[0] -= v.count("\n") + 1
+            return v
+
         for f in fs:
             if not isinstance(f, Mapping):
                 capped.append(f)
@@ -307,14 +335,23 @@ def apply_caps(doc: Mapping[str, Any]) -> dict[str, Any]:
                 if not isinstance(v, str):
                     continue
                 if k == "title":
-                    g[k] = v[:MAX_TITLE]
+                    g[k] = _ell(v, MAX_TITLE)
                 elif k in _CODE_KEYS:
-                    lines = v.split("\n")
-                    if len(lines) > MAX_CODE_LINES:
-                        lines = lines[:MAX_CODE_LINES] + ["…"]
-                    g[k] = "\n".join(lines)[:MAX_TEXT]
+                    g[k] = body(v, MAX_CODE_LINES, MAX_TEXT)
                 else:
                     g[k] = v[:MAX_TEXT]
+            ex = g.get("extra")
+            if isinstance(ex, list):
+                new_ex = []
+                for x in ex[:MAX_EXTRA_ITEMS]:
+                    if isinstance(x, Mapping):
+                        x = dict(x)
+                        if isinstance(x.get("body"), str):
+                            x["body"] = body(x["body"], MAX_EXTRA_LINES, MAX_TEXT)
+                        if isinstance(x.get("label"), str):
+                            x["label"] = x["label"][:200]
+                    new_ex.append(x)
+                g["extra"] = new_ex
             capped.append(g)
         out["findings"] = capped
     return out

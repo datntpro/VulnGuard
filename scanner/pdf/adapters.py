@@ -20,6 +20,20 @@ STANDARDS = "OWASP Top 10 (2021) · TT 09/2020/TT-NHNN · TCVN 11930:2017 · ISO
 MAX_LOCATIONS = 3
 
 
+def _scrub(s: Any) -> str:
+    """Defence in depth: mask secrets (tokens, keys, auth/cookie headers) in any free text that
+    reaches the PDF, with the same redactor the pentest exports use. Fails closed."""
+    t = _s(s)
+    if not t:
+        return t
+    try:
+        from scanner.pentest.redaction import _redact_secrets
+
+        return _redact_secrets(t)
+    except Exception:  # noqa: BLE001
+        return "[REDACTED]"
+
+
 def _g(o: Any, name: str, default: Any = None) -> Any:
     if isinstance(o, Mapping):
         return o.get(name, default)
@@ -174,6 +188,7 @@ def scan_doc(
         snippet = _s(first.get("code_snippet")).strip("\n")
         if snippet:
             start = first.get("line_start")
+            snippet = _scrub(snippet)
             code = number_code(snippet, int(start), int(start)) if isinstance(start, int) and start > 0 else snippet
         cvss = _s(first.get("cvss_score"))
         cwe = _s(first.get("cwe"))
@@ -236,20 +251,32 @@ def scan_doc(
 
 
 # ───────────────────────── pentest ─────────────────────────
+MAX_TRAFFIC_LINES = 12     # headers per side
+MAX_BODY_LINES = 40
+
+
+def _hdrs(h: Any) -> List[str]:
+    if isinstance(h, Mapping):  # may be the string "[redaction error]" when redaction failed
+        return [f"{k}: {v}" for k, v in list(h.items())[:MAX_TRAFFIC_LINES]]
+    return [_s(h)] if h else []
+
+
+def _cap_body(b: Any) -> str:
+    lines = _s(b).split("\n")
+    out = "\n".join(lines[:MAX_BODY_LINES])[:1500]
+    return out + ("\n… [truncated]" if len(lines) > MAX_BODY_LINES or len(_s(b)) > len(out) else "")
+
+
 def _traffic_text(t: Optional[Mapping[str, Any]]) -> str:
-    if not t:
+    if not isinstance(t, Mapping):
         return ""
-    lines = [f"{_s(t.get('method'))} {_s(t.get('url'))}"]
-    for k, v in (t.get("request_headers") or {}).items():
-        lines.append(f"{k}: {v}")
+    lines = [f"{_s(t.get('method'))} {_s(t.get('url'))}", *_hdrs(t.get("request_headers"))]
     if t.get("request_body"):
-        lines += ["", _s(t["request_body"])]
-    lines += ["", f"→ HTTP {_s(t.get('status_code'))}"]
-    for k, v in (t.get("response_headers") or {}).items():
-        lines.append(f"{k}: {v}")
+        lines += ["", _cap_body(t["request_body"])]
+    lines += ["", f"→ HTTP {_s(t.get('status_code'))}", *_hdrs(t.get("response_headers"))]
     if t.get("response_body"):
-        lines += ["", _s(t["response_body"])]
-    return "\n".join(lines)
+        lines += ["", _cap_body(t["response_body"])]
+    return _scrub("\n".join(lines))
 
 
 def pentest_doc(model: Mapping[str, Any], *, lang: str = "vi", org: str = "VulnGuard") -> Dict[str, Any]:
@@ -272,9 +299,9 @@ def pentest_doc(model: Mapping[str, Any], *, lang: str = "vi", org: str = "VulnG
             extra.append({"label": L["x_traffic"], "body": tr, "mono": True})
         poc = f.get("poc") or {}
         if poc.get("curl"):
-            extra.append({"label": L["x_curl"], "body": _s(poc["curl"]), "mono": True})
+            extra.append({"label": L["x_curl"], "body": _scrub(_cap_body(poc["curl"])), "mono": True})
         if poc.get("steps"):
-            extra.append({"label": L["x_steps"], "body": "\n".join(f"{n}. {s}" for n, s in enumerate(poc["steps"], 1)), "mono": False})
+            extra.append({"label": L["x_steps"], "body": _scrub("\n".join(f"{n}. {s}" for n, s in enumerate(poc["steps"][:20], 1))), "mono": False})
         if f.get("claimed_severity") and f.get("severity_cap"):
             extra.append({"label": L["x_cap"], "body": f"{_s(f['claimed_severity']).upper()} → {_s(f['severity_cap']).upper()}", "mono": False})
         refs = list(f.get("references") or [])
@@ -293,7 +320,7 @@ def pentest_doc(model: Mapping[str, Any], *, lang: str = "vi", org: str = "VulnG
             ],
             "cwe": _s(f.get("cwe")), "description": _s(f.get("description")),
             "location": " ".join(x for x in (_s(f.get("target")), f"({_s(f['param'])})" if f.get("param") else "") if x),
-            "evidence": _s(f.get("evidence")), "extra": extra, "remediation": _s(f.get("remediation")),
+            "evidence": _scrub(f.get("evidence")), "extra": extra, "remediation": _s(f.get("remediation")),
             "refs": refs, "detail": sev in DETAIL_SEVS,
         })
     worst = es.get("overall_risk")
@@ -347,11 +374,8 @@ def webscan_doc(scan: Any, findings_in: Iterable[Mapping[str, Any]], *, lang: st
     for i, f in enumerate(rows, 1):
         sev = _sev(f.get("severity"))
         cvss = _s(f.get("cvss_score"))
-        extra = []
-        if f.get("curl_command"):
-            extra.append({"label": L["x_curl"], "body": _s(f["curl_command"]), "mono": True})
-        if f.get("extracted"):
-            extra.append({"label": L["x_extracted"], "body": "\n".join(_s(x) for x in f["extracted"][:20]), "mono": True})
+        # curl_command / nuclei `extracted` values are deliberately NOT included: they carry the
+        # actual keys/tokens the templates matched, and the webscan HTML report omits them too.
         findings.append({
             "id": f"VG-{i:03d}", "severity": sev, "title": _s(f.get("name")),
             "meta": [
@@ -360,8 +384,8 @@ def webscan_doc(scan: Any, findings_in: Iterable[Mapping[str, Any]], *, lang: st
                 [L["m_template"], _s(f.get("template_id")) or "—"],
                 [L["m_status"], _status(L, f.get("status", "OPEN"))],
             ],
-            "cwe": _s(f.get("cwe")), "description": _s(f.get("description")),
-            "location": _s(f.get("matched_at") or f.get("host")), "extra": extra,
+            "cwe": _s(f.get("cwe")), "description": _scrub(f.get("description")),
+            "location": _s(f.get("matched_at") or f.get("host")),
             "remediation": _s(f.get("remediation")), "refs": [_s(r) for r in (f.get("reference") or [])[:8]],
             "detail": sev in DETAIL_SEVS,
         })
@@ -408,7 +432,7 @@ def docreview_doc(document: Any, version: Any, review_findings: Iterable[Any], s
             "id": f"VG-{i:03d}", "severity": sev, "title": f"{_s(_g(r, 'criteria_id'))} — {_s(_g(r, 'criteria_text'))[:200]}",
             "meta": [[L["m_criteria"], _s(_g(r, "criteria_id"))], [L["m_category"], _s(_g(r, "category"))],
                      [L["m_status"], st_label.get(key, key)]],
-            "description": _s(_g(r, "criteria_text")), "evidence": _s(_g(r, "evidence")),
+            "description": _s(_g(r, "criteria_text")), "evidence": _scrub(_g(r, "evidence")),
             "remediation": _s(_g(r, "recommendation")), "location": _s(_g(r, "category")),
             "detail": sev in DETAIL_SEVS,
         })
