@@ -22,8 +22,11 @@ def test_index_sinks_are_escaped():
 
 
 def test_deletemodel_uses_jsstr():
-    assert "deleteModel('${m.name}')" not in INDEX
-    assert "deleteModel('${jsStr(m.name)}')" in INDEX
+    # Tab Ollama cũ đã bị xoá (PR-5); xoá model nay nằm ở web/ai-settings.js: không inline onclick, tên đi qua data-name + esc()
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parent.parent / "web" / "ai-settings.js").read_text(encoding="utf-8")
+    assert "deleteModel('${" not in INDEX and "deleteModel('${" not in js
+    assert 'data-act="ol-del" data-name="${esc(m.name)}"' in js
 
 
 def test_agent_esc_escapes_quotes():
@@ -98,14 +101,12 @@ def test_browser_poc_sinks_do_not_execute():
                    "query_params": [PAYLOAD_IMG], "body_params": [PAYLOAD_IMG], "status_code": 200}
         _mock(page, "{"
               "'/api/knowledge/status': {__throw:" + repr(PAYLOAD_IMG) + "},"
-              "'/api/ollama/vision-model': {installed:[" + repr(PAYLOAD_IMG) + "], vision_model:" + repr(PAYLOAD_IMG) + "},"
               "'/api/domains/crawls/': [" + __import__("json").dumps(evil_ep) + "],"
               "'/api/domains': [{id:'d1',name:" + repr(PAYLOAD_JS) + ",crawl_count:0}],"
               "'/api/docreview/documents': [{id:'x1',name:" + repr(PAYLOAD_JS) + ",versions:[]}],"
               "'/api/coworker/fs/tree': {entries:[]}"
               "}")
         page.evaluate("loadKnowledge()")
-        page.evaluate("loadVisionModel()")
         page.evaluate("currentCrawlId='c1'; document.getElementById('endpoints-list') && loadEndpoints()")
         page.evaluate("loadDomains()")
         page.evaluate("loadDocReviews()")
