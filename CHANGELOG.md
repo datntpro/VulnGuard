@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed — AI PR-1: LLM resolver seam (không đổi hành vi, Refs #109)
+- Mọi lời gọi LLM (triage, reanalyze, `/api/ai/test`, Pentest, Document Review, Co-work, File Assistant) đi qua `api/services/llm_resolver.py`: `resolve(LLMContext) → Route` (`LocalOllama` | `Cloud(ResolvedCredential)` | `Refuse`). Vẫn chỉ cấu hình org; định tuyến theo `mode` y như trước. Client SDK chỉ dựng ở `open_client()` (`build_client` bị gỡ khỏi `cloud_ai`).
+- `ResolvedCredential` che trong repr, không pickle/copy/JSON được; `cfg` của Pentest chỉ mang route + ctx (không secret). `make_driver(route)`; Ollama là route native cho agent (`{url}/v1`, không cần key).
+- Co-work: `CoworkBackend`/`LocalJsonBackend` (giao thức JSON-in-text giữ nguyên), luôn `LocalOllama`. Hội thoại Co-work có `owner_user_id` và list/get/delete theo chủ sở hữu (hàng cũ chỉ ADMIN thấy).
+- Cột mới: `pentest_runs.started_by_user_id` (migration `m0013`, backfill theo email), `scans.triggered_by_user_id`, `agent_conversations.owner_user_id`.
+
 ### Security — AI PR-0: rò rỉ khoá AI + sửa lỗi Ollama URL (Refs #109)
 - Bedrock API key không còn ghi vào `os.environ`; truyền theo từng client. Tiến trình con của scanner/pentest (`spawn`, `run_command`, katana) loại `AWS_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `KIRO_*`, `AZURE_OPENAI_*`, `GOOGLE_*` (env tường minh của caller vẫn được tôn trọng).
 - Lỗi provider không còn trả nguyên văn: `/api/ai/test` và `run.error_message` dùng mã chuẩn hoá + chi tiết đã che. Thêm mẫu che `ABSK…`, `ksk_…`, `sk-or-v1-…`, Bearer/query token.

@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from api.database import get_db
@@ -49,10 +49,11 @@ def list_ai_models(provider: str, _=Depends(require_admin)):
 @router.post("/api/ai/test")
 async def test_ai():
     from scanner.cloud_ai import CloudAnalyzer, sanitize_error
+    from api.services.llm_resolver import LLMContext, resolve
     cfg = load_config()
     t0 = time.monotonic()
     try:
-        analyzer = CloudAnalyzer(cfg)
+        analyzer = CloudAnalyzer(resolve(LLMContext(feature="test")), cfg)
         await analyzer.ping()
         return {"ok": True, "provider": cfg["provider"], "model": analyzer.model,
                 "latency_ms": int((time.monotonic() - t0) * 1000), "error": None}
@@ -62,7 +63,7 @@ async def test_ai():
 
 
 @router.post("/api/vulns/{vuln_id}/reanalyze")
-async def reanalyze_vuln(vuln_id: str, db: Session = Depends(get_db)):
+async def reanalyze_vuln(vuln_id: str, request: Request, db: Session = Depends(get_db)):
     from scanner.ai_analyzer import AIAnalyzer
 
     v = db.query(Vulnerability).filter(Vulnerability.id == vuln_id).first()
@@ -82,7 +83,8 @@ async def reanalyze_vuln(vuln_id: str, db: Session = Depends(get_db)):
     }
     local = {"false_positive_likelihood": v.ai_false_positive_likelihood,
              "false_positive_reason": v.ai_false_positive_reason}
-    result = await AIAnalyzer().analyze_cloud(data, local_opinion=local)
+    uid = getattr(getattr(request.state, "user", None), "id", None)
+    result = await AIAnalyzer(user_id=uid, job_kind="reanalyze", job_id=vuln_id).analyze_cloud(data, local_opinion=local)
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
 

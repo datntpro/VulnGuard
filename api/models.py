@@ -89,6 +89,7 @@ class Scan(Base):
     error_message = Column(Text, nullable=True)
     summary = Column(JSON, nullable=True)                  # {critical: 2, high: 5, ...}
     scanner_progress = Column(JSON, nullable=True)         # live progress: {tools: {...}, pct: 60}
+    triggered_by_user_id = Column(String(64), nullable=True)   # [AI PR-1] người kích hoạt (None = lịch/hệ thống)
 
     project = relationship("Project", back_populates="scans")
     vulnerabilities = relationship("Vulnerability", back_populates="scan", cascade="all, delete-orphan")

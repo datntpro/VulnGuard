@@ -21,7 +21,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from api.config import settings
-from api.services import runtime_settings
 
 logger = logging.getLogger(__name__)
 
@@ -176,12 +175,13 @@ def _extract_code_block(text: str) -> str:
 
 
 async def _call_ollama(prompt: str) -> str:
-    from api.routes.ollama import get_active_model
-    model = get_active_model()
+    from api.services.llm_resolver import LLMContext, resolve
+    route = resolve(LLMContext(feature="coworker", job_kind="coworker_suggest"))   # [AI PR-1] A1: luôn LocalOllama
+    model = route.model
     timeout = httpx.Timeout(connect=10.0, read=float(settings.ollama_timeout), write=10.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         r = await client.post(
-            f"{runtime_settings.ollama_url()}/api/generate",
+            f"{route.url}/api/generate",
             json={
                 "model": model,
                 "prompt": prompt,

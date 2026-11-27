@@ -40,9 +40,9 @@ def test_bedrock_build_does_not_touch_environ(ai_cfg, monkeypatch):
     cfg = ai_cfg.validate_and_save({"provider": "bedrock", "mode": "cloud_only",
                                     "bedrock": {"auth_mode": "bedrock_api_key", "api_key": BEDROCK_KEY,
                                                 "region": "us-east-1"}})
-    from scanner.cloud_ai import build_client
+    from api.services.llm_resolver import LLMContext, open_client, resolve
     before = dict(os.environ)
-    client, _model, kind = build_client(cfg)
+    client, _model, kind = open_client(resolve(LLMContext(feature="test")))
     assert kind == "bedrock"
     assert dict(os.environ) == before
     assert "AWS_BEARER_TOKEN_BEDROCK" not in os.environ
