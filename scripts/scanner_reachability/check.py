@@ -120,7 +120,9 @@ def main():
         good, p = run_probed(capture_checkov_argv(iac_dir), CHECKOV_WATCH, CHECKOV_FORBIDDEN, "checkov")
         ok &= good
         if "failed_checks" not in p.stdout:
-            print("[checkov] WARNING: no failed_checks in output - probe scan may have been vacuous")
+            print("[checkov] no failed_checks in output - probe scan was vacuous (checkov did not scan the fixture)")
+            print("    stdout tail:", p.stdout[-600:].replace("\n", " | "))
+            print("    stderr tail:", p.stderr[-1200:].replace("\n", " | "))
             ok = False
     finally:
         shutil.rmtree(work, ignore_errors=True)
