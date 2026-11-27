@@ -1,0 +1,103 @@
+/* Settings › AI (trang hợp nhất). Mọi selector nằm dưới #st-ai hoặc tiền tố .aiu-* — KHÔNG đụng style các tab Settings khác.
+   Dùng token của brand.css nên light/dark theo theme của app. */
+#st-ai .aiu-hide { display: none !important; }
+#st-ai .aiu-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+#st-ai .aiu-crumb { color: var(--text2); font-size: 12.5px; }
+#st-ai .aiu-title { font-size: 20px; margin: 2px 0 0; }
+#st-ai .aiu-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg2); }
+#st-ai .aiu-seg button { border: 0; background: transparent; color: var(--text2); padding: 6px 11px; cursor: pointer; font: inherit; font-size: 12.5px; }
+#st-ai .aiu-seg button.on { background: var(--brand-soft); color: var(--text); font-weight: 600; }
+#st-ai .aiu-ro { background: color-mix(in srgb, var(--medium) 9%, transparent); border: 1px solid color-mix(in srgb, var(--medium) 38%, transparent); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
+
+/* status strip */
+#st-ai .aiu-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 16px; }
+#st-ai .aiu-pill { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+#st-ai .aiu-pill b { display: block; font-size: 13px; overflow-wrap: anywhere; }
+#st-ai .aiu-pill span { font-size: 12px; color: var(--text2); overflow-wrap: anywhere; }
+#st-ai .aiu-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--text3); }
+#st-ai .aiu-dot.ok { background: var(--low); } #st-ai .aiu-dot.warn { background: var(--medium); } #st-ai .aiu-dot.err { background: var(--critical); }
+
+#st-ai .aiu-card { position: relative; min-width: 0; }
+#st-ai .aiu-card h3 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; }
+#st-ai .aiu-h4 { font-size: 13.5px; margin: 18px 0 6px; }
+#st-ai .aiu-step { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: var(--brand-soft); color: var(--brand-400); font-size: 12px; font-weight: 700; margin-right: 8px; }
+#st-ai .aiu-sub { color: var(--text2); font-size: 13px; margin: 0 0 14px; }
+#st-ai .aiu-anchor { position: absolute; right: 16px; top: 14px; font-size: 11px; color: var(--text3); font-family: var(--font-mono); }
+#st-ai .aiu-mono { font-family: var(--font-mono); font-size: 13px; }
+
+/* mode cards */
+#st-ai .aiu-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+#st-ai .aiu-mode { border: 1.5px solid var(--border); border-radius: var(--radius); padding: 12px; cursor: pointer; background: var(--bg); text-align: left; color: var(--text); font: inherit; display: block; }
+#st-ai .aiu-mode b { display: block; margin-bottom: 3px; }
+#st-ai .aiu-mode span { display: block; font-size: 12.5px; color: var(--text2); }
+#st-ai .aiu-mode .aiu-flow { display: block; font-style: normal; font-size: 11.5px; font-family: var(--font-mono); color: var(--text2); margin-top: 6px; }
+#st-ai .aiu-mode[aria-checked="true"] { border-color: var(--brand-500); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand-500); }
+#st-ai .aiu-mode:disabled { cursor: not-allowed; opacity: .75; }
+#st-ai .aiu-mode[aria-checked="false"]:disabled { opacity: .5; }
+#st-ai .aiu-note { background: color-mix(in srgb, var(--brand-500) 8%, transparent); border-radius: var(--radius); padding: 10px 12px; font-size: 12.5px; color: var(--text2); margin: 10px 0; }
+#st-ai .aiu-note.warn { background: color-mix(in srgb, var(--medium) 9%, transparent); color: var(--text); }
+
+/* form grid */
+#st-ai .aiu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+#st-ai .aiu-grid > * { min-width: 0; }
+#st-ai .aiu-f label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 5px; }
+#st-ai input:not([type=checkbox]), #st-ai select { width: 100%; }
+#st-ai .aiu-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#st-ai .aiu-row input[type=number] { width: auto; }
+#st-ai .aiu-hint { font-size: 12px; color: var(--text2); margin-top: 4px; }
+#st-ai .aiu-err { font-size: 12.5px; color: var(--critical); margin-top: 4px; min-height: 0; }
+#st-ai .aiu-err:empty { display: none; }
+#st-ai .aiu-missing { margin-top: 6px; border-radius: var(--radius-sm); padding: 7px 10px; font-size: 12.5px; background: color-mix(in srgb, var(--critical) 10%, transparent); color: var(--critical); }
+#st-ai .aiu-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+#st-ai .aiu-check input { width: auto; margin-top: 3px; }
+#st-ai .aiu-res { margin-top: 10px; border-radius: var(--radius-sm); padding: 9px 11px; font-size: 13px; overflow-wrap: anywhere; }
+#st-ai .aiu-res.ok { background: color-mix(in srgb, var(--low) 12%, transparent); color: var(--low); }
+#st-ai .aiu-res.err { background: color-mix(in srgb, var(--critical) 11%, transparent); color: var(--critical); }
+#st-ai .aiu-res.warn { background: color-mix(in srgb, var(--medium) 12%, transparent); color: var(--text); }
+#st-ai .aiu-checks { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 4px; font-size: 13px; }
+#st-ai .aiu-checks li::before { content: "· "; color: var(--text3); font-weight: 700; }
+#st-ai .aiu-checks li.ok::before { content: "✓ "; color: var(--low); }
+#st-ai .aiu-checks li.x::before { content: "✗ "; color: var(--critical); }
+#st-ai .aiu-checks li.q::before { content: "! "; color: var(--medium); }
+#st-ai .aiu-band { position: relative; height: 10px; border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, var(--critical) 25%, transparent), var(--bg3), color-mix(in srgb, var(--low) 25%, transparent)); margin: 10px 0 4px; }
+#st-ai .aiu-band i { position: absolute; top: 0; bottom: 0; border: 2px solid var(--brand-500); border-radius: 6px; background: color-mix(in srgb, var(--brand-500) 20%, transparent); }
+
+/* tables */
+#st-ai .aiu-tablewrap { overflow-x: auto; margin-top: 8px; }
+#st-ai .aiu-tablewrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#st-ai .aiu-tablewrap th, #st-ai .aiu-tablewrap td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; white-space: nowrap; }
+#st-ai .aiu-tablewrap th { font-size: 12px; color: var(--text2); font-weight: 600; }
+#st-ai .aiu-tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg3); color: var(--text2); }
+#st-ai .aiu-tag.ok { background: color-mix(in srgb, var(--low) 14%, transparent); color: var(--low); }
+#st-ai .aiu-tag.warn { background: color-mix(in srgb, var(--medium) 16%, transparent); color: var(--text); }
+#st-ai .aiu-tag.err { background: color-mix(in srgb, var(--critical) 13%, transparent); color: var(--critical); }
+#st-ai .aiu-tag.b { background: var(--brand-soft); color: var(--brand-400); }
+#st-ai .aiu-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+#st-ai .aiu-danger { color: var(--critical); }
+#st-ai .aiu-rot td { background: var(--bg3); }
+
+#st-ai .aiu-details { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; background: var(--bg); }
+#st-ai .aiu-details > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+#st-ai .aiu-add { margin-top: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 12px; }
+
+/* provider tiles */
+#st-ai .aiu-prov { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+#st-ai .aiu-prov button { border: 1.5px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); padding: 9px; text-align: left; cursor: pointer; font: inherit; font-size: 13px; }
+#st-ai .aiu-prov button small { display: block; color: var(--text2); font-size: 11.5px; }
+#st-ai .aiu-prov button[aria-checked="true"] { border-color: var(--brand-500); background: var(--brand-soft); }
+#st-ai .aiu-prov button:disabled { cursor: not-allowed; opacity: .55; }
+
+/* sticky save bar */
+#st-ai .aiu-sticky { position: sticky; bottom: 0; z-index: 5; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; box-shadow: 0 -4px 16px rgba(0,0,0,.12); }
+#st-ai .aiu-unsaved { font-size: 13px; color: var(--text2); }
+
+@media (max-width: 720px) {
+  #st-ai .aiu-grid { grid-template-columns: 1fr; }
+  #st-ai .aiu-anchor { display: none; }
+  #st-ai .aiu-card { padding: 14px; }
+  #st-ai .aiu-sticky { padding: 8px 10px; }
+}
+
+/* 2 tab cũ (Ollama & Model / AI Provider): chỉ hiện khi cờ body.ai-legacy-on bật (backend chưa có /api/ai/settings) */
+#settings-tabs .ai-legacy-tab { display: none; }
+body.ai-legacy-on #settings-tabs .ai-legacy-tab { display: block; }

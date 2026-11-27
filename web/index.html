@@ -6,6 +6,7 @@
 <title>VulnGuard — DevSecOps Scanner</title>
 <link rel="icon" type="image/svg+xml" href="/static/assets/logo.svg">
 <link rel="stylesheet" href="/static/brand.css">
+<link rel="stylesheet" href="/static/ai-settings.css">
 <script>
   // Áp theme sớm để tránh nháy màu (dark / light / system)
   (function () { var t = 'system'; try { t = localStorage.getItem('vg-theme') || 'system'; } catch (e) {} document.documentElement.dataset.theme = t; })();
@@ -944,14 +945,201 @@
   <div class="page" id="page-settings">
     <h1>Settings</h1>
     <div class="tabs" id="settings-tabs">
-      <div class="tab active" id="st-tab-ollama" onclick="switchTab(this,'st-ollama')">🤖 Ollama &amp; Model</div>
+      <div class="tab active" id="st-tab-ai" onclick="switchTab(this,'st-ai');aiSettingsLoad()">AI</div>
       <div class="tab" id="st-tab-scanners" onclick="switchTab(this,'st-scanners')">🛠️ Scanner Tools</div>
-      <div class="tab" id="st-tab-ai" onclick="switchTab(this,'st-ai');loadAIConfig()">☁️ AI Provider</div>
+      <!-- Tab cũ: chỉ hiện khi cờ ai-legacy bật (backend chưa có /api/ai/settings, PR-3 chưa merge) -->
+      <div class="tab ai-legacy-tab" id="st-tab-ollama" onclick="switchTab(this,'st-ollama')">🤖 Ollama &amp; Model (cũ)</div>
+      <div class="tab ai-legacy-tab" id="st-tab-ai-legacy" onclick="switchTab(this,'st-ai-legacy');loadAIConfig()">☁️ AI Provider (cũ)</div>
       <div class="tab" id="st-tab-report" onclick="switchTab(this,'st-report');loadReportBranding()">📄 Báo cáo</div>
       <div class="tab" id="st-tab-knowledge" onclick="switchTab(this,'st-knowledge');loadKnowledge()">📚 Tri thức</div>
       <div class="tab" id="st-tab-users" onclick="switchTab(this,'st-users');loadUsers()" style="display:none;">👥 Người dùng</div>
     </div>
-    <div class="tab-content active" id="st-ollama">
+    <!-- ── AI (hợp nhất: thay 2 tab Ollama & AI Provider) ── css: /static/ai-settings.css · js: /static/ai-settings.js ── -->
+    <div class="tab-content active" id="st-ai" data-aiu-root>
+      <div class="aiu-head">
+        <div>
+          <div class="aiu-crumb" data-i18n="crumb">Settings › AI</div>
+          <h2 class="aiu-title" data-i18n="title">AI</h2>
+        </div>
+        <div class="aiu-seg" id="aiu-lang" role="group" aria-label="Language"><button type="button" data-v="vi">VI</button><button type="button" data-v="en">EN</button></div>
+      </div>
+
+      <div id="aiu-bridge" class="notice warn aiu-hide" data-testid="aiu-bridge"></div>
+      <div id="aiu-ro" class="aiu-ro aiu-hide" role="note" data-testid="aiu-ro"></div>
+      <div id="aiu-loaderr" class="notice warn aiu-hide" role="alert"></div>
+
+      <div class="aiu-status" id="aiu-status" aria-live="polite" data-testid="aiu-status"></div>
+
+      <!-- 1. Nơi xử lý -->
+      <section class="card aiu-card" id="aiu-sec-mode">
+        <span class="aiu-anchor">#mode</span>
+        <h3><span class="aiu-step">1</span><span data-i18n="s1">Nơi xử lý AI</span></h3>
+        <p class="aiu-sub" data-i18n="s1sub"></p>
+        <div class="aiu-modes" role="radiogroup" aria-label="AI mode" id="aiu-modes">
+          <button type="button" class="aiu-mode aiu-admin" data-mode="local_only" role="radio" aria-checked="false"><b data-i18n="mLocal"></b><span data-i18n="mLocalD"></span><em class="aiu-flow">finding → Ollama</em></button>
+          <button type="button" class="aiu-mode aiu-admin" data-mode="hybrid" role="radio" aria-checked="false"><b data-i18n="mHybrid"></b><span data-i18n="mHybridD"></span><em class="aiu-flow">finding → Ollama → (rule) → cloud</em></button>
+          <button type="button" class="aiu-mode aiu-admin" data-mode="cloud_only" role="radio" aria-checked="false"><b data-i18n="mCloud"></b><span data-i18n="mCloudD"></span><em class="aiu-flow">finding → cloud</em></button>
+        </div>
+        <div class="aiu-note" data-i18n="featNote"></div>
+      </section>
+
+      <!-- 2. Ollama -->
+      <section class="card aiu-card" id="aiu-sec-ollama">
+        <span class="aiu-anchor">#ollama</span>
+        <h3><span class="aiu-step">2</span><span data-i18n="s2">Ollama (local)</span></h3>
+        <p class="aiu-sub" data-i18n="s2sub"></p>
+        <div class="aiu-grid">
+          <div class="aiu-f">
+            <label for="aiu-ol-url" data-i18n="olUrl"></label>
+            <div class="aiu-row"><input id="aiu-ol-url" class="aiu-admin aiu-mono" inputmode="url" autocomplete="off" spellcheck="false" style="flex:1;min-width:0"><button type="button" class="btn btn-ghost btn-sm aiu-admin" id="aiu-ol-test" data-i18n="test"></button></div>
+            <div class="aiu-hint" id="aiu-ol-url-hint"></div>
+            <div class="aiu-err" id="aiu-ol-url-err" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label for="aiu-ol-model" data-i18n="olModel"></label>
+            <select id="aiu-ol-model" class="aiu-admin"></select>
+            <div class="aiu-hint" data-i18n="olModelHint"></div>
+            <div class="aiu-missing aiu-hide" id="aiu-ol-model-missing" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label for="aiu-ol-vision" data-i18n="olVision"></label>
+            <select id="aiu-ol-vision" class="aiu-admin"></select>
+            <div class="aiu-missing aiu-hide" id="aiu-ol-vision-missing" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label data-i18n="olCheck"></label>
+            <ul class="aiu-checks" id="aiu-ol-checks" aria-live="polite" data-testid="aiu-ol-checks"></ul>
+          </div>
+        </div>
+        <details class="aiu-details" id="aiu-ol-manage">
+          <summary data-i18n="olManage"></summary>
+          <div class="aiu-row" style="margin-top:10px"><input id="aiu-pull-name" class="aiu-admin aiu-mono" placeholder="qwen2.5-coder:7b" autocomplete="off" style="flex:1;min-width:0"><button type="button" class="btn btn-ghost aiu-admin" id="aiu-pull-btn" data-i18n="pull"></button></div>
+          <div class="aiu-hint" data-i18n="pullHint"></div>
+          <div id="aiu-pull-prog" class="aiu-hide" style="margin-top:10px"><div class="aiu-hint" id="aiu-pull-text"></div><div class="progress-bar"><div class="progress-fill" id="aiu-pull-fill" style="width:0%"></div></div></div>
+          <div class="aiu-tablewrap"><table id="aiu-ol-table"></table></div>
+        </details>
+      </section>
+
+      <!-- 2b. Hybrid -->
+      <section class="card aiu-card" id="aiu-sec-hybrid">
+        <span class="aiu-anchor">#hybrid</span>
+        <h3><span class="aiu-step">2b</span><span data-i18n="s2b"></span></h3>
+        <p class="aiu-sub" data-i18n="s2bsub"></p>
+        <div class="aiu-grid">
+          <div class="aiu-f">
+            <label for="aiu-h-sev" data-i18n="hSev"></label>
+            <select id="aiu-h-sev" class="aiu-admin">
+              <option value="CRITICAL">CRITICAL</option>
+              <option value="HIGH" data-i18n="hHigh"></option>
+              <option value="MEDIUM" data-i18n="hMed"></option>
+              <option value="LOW" data-i18n="hLow"></option>
+            </select>
+            <div class="aiu-hint" data-i18n="hSevHint"></div>
+          </div>
+          <div class="aiu-f">
+            <label for="aiu-h-lo" data-i18n="hBand"></label>
+            <div class="aiu-row"><input id="aiu-h-lo" type="number" min="0" max="100" class="aiu-admin" style="width:84px"><span data-i18n="to"></span><input id="aiu-h-hi" type="number" min="0" max="100" class="aiu-admin" style="width:84px" aria-label="max"><span>%</span></div>
+            <div class="aiu-band" aria-hidden="true"><i id="aiu-h-band"></i></div>
+            <div class="aiu-hint" data-i18n="hBandHint"></div>
+            <div class="aiu-err" id="aiu-h-err" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label data-i18n="hTasks"></label>
+            <div class="aiu-tablewrap"><table>
+              <tr><td data-i18n="t1"></td><td><span class="aiu-tag b" data-i18n="rule"></span></td></tr>
+              <tr><td data-i18n="t2"></td><td><span class="aiu-tag" data-i18n="cloudIfNoTools"></span></td></tr>
+              <tr><td data-i18n="t3"></td><td><span class="aiu-tag ok" data-i18n="localAlways"></span></td></tr>
+            </table></div>
+          </div>
+          <div class="aiu-f">
+            <label data-i18n="hPreview">Preview</label>
+            <div class="aiu-res warn" id="aiu-h-preview" data-testid="aiu-h-preview"></div>
+            <div class="aiu-hint" data-i18n="hPreviewHint"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Cloud của tổ chức -->
+      <section class="card aiu-card" id="aiu-sec-cloud">
+        <span class="aiu-anchor">#cloud</span>
+        <h3><span class="aiu-step">3</span><span data-i18n="s3"></span></h3>
+        <p class="aiu-sub" data-i18n="s3sub"></p>
+        <div class="aiu-prov" id="aiu-prov" role="radiogroup" aria-label="Provider"></div>
+        <div id="aiu-prov-blocks"></div>
+        <div class="aiu-f" style="margin-top:12px">
+          <label data-i18n="testL"></label>
+          <div class="aiu-row"><button type="button" class="btn btn-ghost aiu-admin" id="aiu-cloud-test" data-i18n="testConn"></button></div>
+          <div class="aiu-res aiu-hide" id="aiu-cloud-res" role="status" aria-live="polite" data-testid="aiu-cloud-res"></div>
+        </div>
+        <details class="aiu-details">
+          <summary data-i18n="privacy"></summary>
+          <div class="aiu-grid" style="margin-top:10px">
+            <label class="aiu-check"><input type="checkbox" id="aiu-pv-send" class="aiu-admin"><span data-i18n="pv1"></span></label>
+            <div class="aiu-f"><label for="aiu-pv-lines" data-i18n="pvLines"></label><input id="aiu-pv-lines" type="number" min="0" max="200" class="aiu-admin" style="width:100px"></div>
+            <label class="aiu-check"><input type="checkbox" id="aiu-pv-redact" checked disabled><span data-i18n="pv2"></span></label>
+          </div>
+          <div class="aiu-note aiu-hide" id="aiu-pv-warn" data-i18n="pvWarn"></div>
+        </details>
+        <details class="aiu-details" id="aiu-adv">
+          <summary data-i18n="advanced"></summary>
+          <div class="aiu-grid" style="margin-top:10px">
+            <div class="aiu-f"><label for="aiu-pt-planner">Planner</label><input id="aiu-pt-planner" class="aiu-admin aiu-mono aiu-contract" placeholder="claude-opus-5-5" autocomplete="off"></div>
+            <div class="aiu-f"><label for="aiu-pt-executor">Executor</label><input id="aiu-pt-executor" class="aiu-admin aiu-mono aiu-contract" placeholder="claude-sonnet-5-5" autocomplete="off"></div>
+            <div class="aiu-f"><label for="aiu-pt-summarizer">Summarizer</label><input id="aiu-pt-summarizer" class="aiu-admin aiu-mono aiu-contract" placeholder="claude-haiku-5-5" autocomplete="off"></div>
+          </div>
+          <div class="aiu-hint" data-i18n="advHint"></div>
+        </details>
+      </section>
+
+      <!-- 4. Khoá AI của tôi -->
+      <section class="card aiu-card" id="aiu-sec-mine">
+        <span class="aiu-anchor">#my-keys</span>
+        <h3><span class="aiu-step">4</span><span data-i18n="s4"></span></h3>
+        <p class="aiu-sub" data-i18n="s4sub"></p>
+        <div class="aiu-note" id="aiu-policy-note" data-testid="aiu-policy-note"></div>
+        <div class="aiu-note warn aiu-hide" id="aiu-mine-unavail" data-i18n="mineUnavail"></div>
+        <div class="aiu-tablewrap"><table id="aiu-mine-table" data-testid="aiu-mine-table"></table></div>
+        <div class="aiu-row" style="margin-top:12px"><button type="button" class="btn btn-primary" id="aiu-add-btn" data-i18n="addKey"></button><span class="aiu-hint" id="aiu-mine-msg" role="status" aria-live="polite"></span></div>
+        <form id="aiu-add" class="aiu-add aiu-hide" autocomplete="off" onsubmit="return false">
+          <div class="aiu-grid">
+            <div class="aiu-f"><label for="aiu-add-prov" data-i18n="thProv"></label><select id="aiu-add-prov"></select></div>
+            <div class="aiu-f"><label for="aiu-add-model" data-i18n="model"></label><input id="aiu-add-model" class="aiu-mono" list="aiu-add-models" autocomplete="off"><datalist id="aiu-add-models"></datalist></div>
+            <div class="aiu-f"><label for="aiu-add-key" data-i18n="key"></label><input id="aiu-add-key" class="aiu-mono aiu-secret" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-testid="aiu-add-key"><div class="aiu-hint" data-i18n="saveHint"></div></div>
+            <div class="aiu-f" id="aiu-add-region-wrap"><label for="aiu-add-region" data-i18n="region"></label><input id="aiu-add-region" class="aiu-mono" value="us-east-1" autocomplete="off"></div>
+            <div class="aiu-f"><label for="aiu-add-label" data-i18n="label"></label><input id="aiu-add-label" maxlength="80" autocomplete="off"></div>
+          </div>
+          <div class="aiu-err" id="aiu-add-err" role="alert"></div>
+          <div class="aiu-row" style="margin-top:10px"><button type="button" class="btn btn-primary" id="aiu-add-go" data-i18n="testSave"></button><button type="button" class="btn btn-ghost" id="aiu-add-cancel" data-i18n="cancel"></button></div>
+        </form>
+        <details class="aiu-details"><summary data-i18n="kiroQ"></summary><p class="aiu-sub" style="margin-top:8px" data-i18n="kiroA"></p></details>
+      </section>
+
+      <!-- 5. Chính sách (ADMIN) -->
+      <section class="card aiu-card aiu-hide" id="aiu-sec-policy">
+        <span class="aiu-anchor">#policy</span>
+        <h3><span class="aiu-step">5</span><span data-i18n="s5"></span></h3>
+        <div class="aiu-note warn aiu-hide" id="aiu-policy-unavail" data-i18n="policyUnavail"></div>
+        <div class="aiu-grid">
+          <div class="aiu-f"><label for="aiu-p-byok" data-i18n="p1"></label><select id="aiu-p-byok" class="aiu-admin aiu-contract"><option value="allowed" data-i18n="p1a"></option><option value="required" data-i18n="p1b"></option><option value="off" data-i18n="p1c"></option></select></div>
+          <div class="aiu-f"><label for="aiu-p-fallback" data-i18n="p2"></label><select id="aiu-p-fallback" class="aiu-admin aiu-contract"><option value="1" data-i18n="p2a"></option><option value="0" data-i18n="p2b"></option></select></div>
+          <div class="aiu-f"><label for="aiu-p-allowed" data-i18n="p3"></label><input id="aiu-p-allowed" class="aiu-admin aiu-contract aiu-mono" autocomplete="off" placeholder="anthropic:*, bedrock:*claude*"></div>
+          <div class="aiu-f"><label for="aiu-p-usd" data-i18n="p4"></label><div class="aiu-row"><input id="aiu-p-usd" type="number" min="0" step="1" class="aiu-admin aiu-contract" style="width:96px"><span>USD</span><input id="aiu-p-rpm" type="number" min="1" step="1" class="aiu-admin aiu-contract" style="width:96px" aria-label="rpm"><span data-i18n="rpm"></span></div></div>
+          <div class="aiu-f"><label for="aiu-p-sched" data-i18n="p5"></label><select id="aiu-p-sched" class="aiu-admin aiu-contract"><option value="org" data-i18n="p5a"></option><option value="owner" data-i18n="p5b"></option><option value="local_only" data-i18n="p5c"></option></select></div>
+          <div class="aiu-f"><label for="aiu-p-baseurl" data-i18n="p6"></label><select id="aiu-p-baseurl" class="aiu-admin aiu-contract"><option value="admin_only" data-i18n="p6a"></option><option value="off" data-i18n="p6b"></option></select></div>
+        </div>
+        <h4 class="aiu-h4" data-i18n="ukeys"></h4>
+        <div class="aiu-tablewrap"><table id="aiu-ukeys" data-testid="aiu-ukeys"></table></div>
+        <h4 class="aiu-h4" data-i18n="usage"></h4>
+        <div class="aiu-tablewrap"><table id="aiu-usage" data-testid="aiu-usage"></table></div>
+      </section>
+
+      <div class="aiu-sticky aiu-hide" id="aiu-savebar" data-testid="aiu-savebar">
+        <span class="aiu-unsaved" id="aiu-unsaved" role="status" aria-live="polite"></span>
+        <div class="aiu-row"><button type="button" class="btn btn-ghost" id="aiu-discard" data-i18n="discard"></button><button type="button" class="btn btn-primary" id="aiu-save" data-i18n="save"></button></div>
+      </div>
+    </div><!-- /st-ai -->
+
+    <div class="tab-content" id="st-ollama">
 
     <!-- Ollama Status -->
     <div class="card">
@@ -1121,7 +1309,7 @@
     </div><!-- /st-scanners -->
 
     <!-- ── AI PROVIDER ─────────────────────────────────────── -->
-    <div class="tab-content" id="st-ai">
+    <div class="tab-content" id="st-ai-legacy">
       <div id="ai-config-readonly" class="notice warn" style="display:none;">🔒 Chỉ ADMIN mới được thay đổi cấu hình AI Provider. Bạn đang xem ở chế độ chỉ đọc.</div>
 
       <div class="card">
@@ -1332,7 +1520,7 @@
         <span class="text-sm">Lưu trước khi kiểm tra nếu vừa thay đổi.</span>
       </div>
       <div id="ai-test-result" class="test-result"></div>
-    </div><!-- /st-ai -->
+    </div><!-- /st-ai-legacy -->
 
     <!-- ── BÁO CÁO (branding PDF) ──────────────────────────── -->
     <div class="tab-content" id="st-report">
@@ -3976,6 +4164,7 @@ function renderCompareSection(title, vulns, cls) {
 let pullAbortController = null;
 
 async function loadSettings() {
+  if (typeof aiSettingsLoad === 'function') aiSettingsLoad();   // trang AI hợp nhất (web/ai-settings.js)
   await Promise.all([loadOllamaStatus(), loadOllamaEndpoint(), loadInstalledModels(), loadScannerHealth(), loadSonarConfig()]);
   document.getElementById('threshold-info').textContent =
     '🔒 Severity threshold: HIGH — Vuln CRITICAL hoặc HIGH còn OPEN sẽ block approve. Chỉnh BLOCK_SEVERITY_THRESHOLD trong .env để thay đổi.';
@@ -5170,6 +5359,7 @@ function renderUserChip() {
   roleEl.textContent = ROLE_LABEL[currentUser.role] || currentUser.role || '—';
   roleEl.className = 'role-badge ' + (currentUser.role || '');
   usersTab.style.display = currentUser.role === 'ADMIN' ? '' : 'none';
+  if (typeof aiSettingsRoleChanged === 'function') aiSettingsRoleChanged();   // trang AI hợp nhất đổi theo role
 }
 async function logout() {
   try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
@@ -5345,7 +5535,7 @@ function fillAIForm(c) {
   document.getElementById('ai-priv-redact').checked = !!c.privacy.redact_secrets;
 
   const editable = canAdmin();
-  document.querySelectorAll('#st-ai input, #st-ai select').forEach(i => { i.disabled = !editable; });
+  document.querySelectorAll('#st-ai-legacy input, #st-ai-legacy select').forEach(i => { i.disabled = !editable; });
   document.getElementById('ai-save-btn').style.display = editable ? '' : 'none';
   document.getElementById('ai-config-readonly').style.display = editable ? 'none' : 'block';
   onAIModeChange(); onAIAuthModeChange(); onBedrockAuthModeChange(); renderFpBand();
@@ -7590,5 +7780,6 @@ applyFeatureFlags();
 document.getElementById('page-dashboard').classList.add('vg-enter');
 loadDashboard();
 </script>
+<script src="/static/ai-settings.js"></script>
 </body>
 </html>
