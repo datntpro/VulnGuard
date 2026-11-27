@@ -91,5 +91,6 @@ jobs:
         # (#120 đã merge: gitleaks/trivy-iac phải đạt, không còn xfail.)
         run: |
           docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /home/appuser:uid=10001,gid=10001,mode=0700 \
+            -e SEMGREP_ENABLE_VERSION_CHECK=0 -e SEMGREP_SEND_METRICS=off \
             -v "$PWD/tests/fixtures:/fx:ro" --entrypoint python \
             vulnguard-api:pdfcheck -m scanner.scanners.selftest /fx
