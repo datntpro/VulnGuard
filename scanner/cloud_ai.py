@@ -88,6 +88,10 @@ _SECRET_PATTERNS = [
     re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}"),
     re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_.~\-]{3}8Q~[A-Za-z0-9_.~\-]{30,40}"),
     re.compile(r"(?<![A-Za-z0-9/])1//[A-Za-z0-9_\-]{40,}"),
+    # [AI PR-6 S1] Azure OpenAI/AI Services key định dạng mới: 84 ký tự base62, đoạn giữa luôn là "JQQJ99" (52 + 6 + 26).
+    # Cả hai pattern đều tuyến tính (độ dài cố định/chặn) — dùng chung cho redact prompt, log filter, pentest, Co-work.
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9]{52}JQQJ99[A-Za-z0-9]{26}(?![A-Za-z0-9])"),
+    re.compile(r"(?i)(?<![A-Za-z0-9])api[-_]?key[\"':= ]{1,4}[A-Za-z0-9]{80,90}(?![A-Za-z0-9])"),
 ]
 _ASSIGN_PATTERN = re.compile(
     r"""(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)"""

@@ -69,7 +69,7 @@ def record(*, user_id: Optional[str], credential_id: Optional[str], scope: Optio
         if own:
             from api.database import SessionLocal
             db = SessionLocal()
-        cost = est_cost_usd(model or "", tokens_in, tokens_out, cache_read, cache_write) if outcome == "ok" else 0.0
+        cost = est_cost_usd(model or "", tokens_in, tokens_out, cache_read, cache_write, provider=provider) if outcome == "ok" else 0.0
         db.add(AiUsageEvent(user_id=user_id, credential_id=credential_id, credential_scope=scope, provider=provider,
                             model=(model or "")[:120], feature=feature, job_kind=job_kind,
                             job_id=(str(job_id)[:64] if job_id else None), tokens_in=int(tokens_in or 0),
@@ -168,7 +168,7 @@ def settle(token: str, *, outcome: str, error_code: Optional[str] = None, tokens
         row.error_code = error_code
         row.tokens_in, row.tokens_out = int(tokens_in or 0), int(tokens_out or 0)
         row.tokens_cache_read, row.tokens_cache_write = int(cache_read or 0), int(cache_write or 0)
-        row.est_cost_usd = est_cost_usd(m, tokens_in, tokens_out, cache_read, cache_write) if outcome == "ok" else 0.0
+        row.est_cost_usd = est_cost_usd(m, tokens_in, tokens_out, cache_read, cache_write, provider=row.provider) if outcome == "ok" else 0.0
         row.latency_ms = latency_ms
         db.commit()
     except Exception:
@@ -189,6 +189,13 @@ class Meter:
         self.scope = getattr(cred, "scope", None)
         self.provider = getattr(route, "provider", None)
         self.model = (model or "").strip() or getattr(route, "model", None)
+        if self.provider == "azure_openai" and cred is not None:
+            # [PR-6 S2] tên deployment do người dùng đặt → policy + giá + usage theo model THẬT (ánh xạ của ADMIN) / unmapped
+            from api.services import ai_policy
+            try:
+                self.model = ai_policy.policy_model(ai_policy.get_policy(), self.provider, cred.public_params(), self.model or "")
+            except Exception:
+                self.model = f"unmapped/{self.model}"
 
     @property
     def _uid(self) -> Optional[str]:
@@ -198,9 +205,20 @@ class Meter:
             uid = getattr(self.ctx, "sched_owner_id", None)
         return uid
 
+    def _eff_model(self, raw: Any = None) -> Optional[str]:
+        """[PR-6 S2] Azure trả `model` = model nền thật của deployment. Giá lấy mức ĐẮT hơn giữa model đã cấu hình/ánh xạ và
+        model Azure báo về (deployment đặt tên rẻ nhưng thực chất là model đắt không rẻ hơn được)."""
+        real = getattr(raw, "model", None)
+        if self.provider != "azure_openai" or not isinstance(real, str) or not real.strip():
+            return self.model
+        from api.services.ai_prices import _lookup
+        cur = _lookup(self.model or "", self.provider)
+        return real if _lookup(real, self.provider)[1] > cur[1] else self.model
+
     def _event(self, outcome: str, code: Optional[str] = None, **kw) -> None:
         c = self.ctx
-        record(user_id=self._uid, credential_id=self.cid, scope=self.scope, provider=self.provider, model=self.model,
+        model = kw.pop("model", None) or self.model
+        record(user_id=self._uid, credential_id=self.cid, scope=self.scope, provider=self.provider, model=model,
                feature=getattr(c, "feature", None), job_kind=getattr(c, "job_kind", None),
                job_id=getattr(c, "job_id", None), outcome=outcome, error_code=code, **kw)
 
@@ -242,7 +260,7 @@ class Meter:
             if not usd and not rpm:
                 return None
             c = self.ctx
-            est = est_cost_usd(self.model or "", 4000, 2000)      # ước lượng một lượt; chốt theo usage thật ở settle()
+            est = est_cost_usd(self.model or "", 4000, 2000, provider=self.provider)      # ước lượng một lượt; chốt theo usage thật ở settle()
             token = reserve(db, user_id=uid, scope=self.scope or "org", credential_id=self.cid, provider=self.provider,
                             model=self.model, feature=getattr(c, "feature", None), job_kind=getattr(c, "job_kind", None),
                             job_id=getattr(c, "job_id", None), est_usd=est, usd_limit=usd, rpm_limit=rpm)
@@ -261,7 +279,7 @@ class Meter:
             if error_code:
                 settle(token, outcome="error", error_code=error_code, latency_ms=lat)
             else:
-                settle(token, outcome="ok", latency_ms=lat, model=self.model, **{
+                settle(token, outcome="ok", latency_ms=lat, model=self._eff_model(raw), **{
                     k: v for k, v in _extract_usage(raw).items() if k in ("tokens_in", "tokens_out", "cache_read", "cache_write")})
                 if self.cid:
                     self._touch()
@@ -269,7 +287,7 @@ class Meter:
         if error_code:
             self._event("error", error_code, latency_ms=lat)
             return
-        self._event("ok", None, latency_ms=lat, **_extract_usage(raw))
+        self._event("ok", None, latency_ms=lat, model=self._eff_model(raw), **_extract_usage(raw))
         if self.cid:
             self._touch()
 

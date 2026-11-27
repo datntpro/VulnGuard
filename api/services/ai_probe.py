@@ -55,6 +55,7 @@ class ProbeResult:
     model: Optional[str] = None
     latency_ms: int = 0
     tools: Optional[bool] = None      # model nhận được `tools` trong request
+    real_model: Optional[str] = None  # [PR-6 S2] model nền do provider báo về (Azure: không tin tên deployment)
     json: Optional[bool] = None       # cloud: không probe (None); Ollama: xem ollama_check
 
     def to_dict(self) -> Dict[str, Any]:
@@ -151,8 +152,8 @@ async def probe_cloud(route, *, timeout: float = PROBE_TIMEOUT) -> ProbeResult:
     from api.services.llm_resolver import Cloud, RouteRefused, open_client
     t0 = time.monotonic()
 
-    def done(ok, code, model=None, tools=None):
-        return ProbeResult(ok, code, model, int((time.monotonic() - t0) * 1000), tools, None)
+    def done(ok, code, model=None, tools=None, real=None):
+        return ProbeResult(ok, code, model, int((time.monotonic() - t0) * 1000), tools, real, None)
 
     if not isinstance(route, Cloud):
         return done(False, NO_CREDENTIAL)
@@ -162,10 +163,18 @@ async def probe_cloud(route, *, timeout: float = PROBE_TIMEOUT) -> ProbeResult:
     try:
         client, model, family = open_client(route, probe=True)
         mark = lambda: stage.__setitem__("v", "call")   # noqa: E731
-        coro = (_openai_calls_staged(client, model, mark, route.provider) if family == "openai"
+        info: Dict[str, Any] = {}
+        coro = (_openai_calls_staged(client, model, mark, route.provider, info) if family == "openai"
                 else _anthropic_calls_staged(client, model, family, mark))
         tools = await asyncio.wait_for(coro, timeout=timeout)
-        return done(True, VALID, model, tools)
+        real = info.get("model")
+        if route.provider == "azure_openai" and isinstance(real, str) and real:
+            # allowlist theo model THẬT: deployment đặt tên rẻ/được phép nhưng thực chất là model khác → từ chối
+            from api.services import ai_policy
+            pol = ai_policy.get_policy()
+            if not ai_policy.is_allowed(pol, "azure_openai", real):
+                return done(False, NO_MODEL_ACCESS, model, tools, real)
+        return done(True, VALID, model, tools, real)
     except RouteRefused:
         return done(False, NO_CREDENTIAL, model)
     except Exception as e:     # noqa: BLE001 — mọi lỗi → mã chuẩn hoá
@@ -185,7 +194,7 @@ async def probe_cloud(route, *, timeout: float = PROBE_TIMEOUT) -> ProbeResult:
 _NO_LIST = frozenset({"azure_openai", "vertex"})
 
 
-async def _openai_calls_staged(client, model, mark, provider: str = "openai"):
+async def _openai_calls_staged(client, model, mark, provider: str = "openai", info: Optional[Dict[str, Any]] = None):
     if provider not in _NO_LIST:
         try:
             await client.models.list()
@@ -193,16 +202,19 @@ async def _openai_calls_staged(client, model, mark, provider: str = "openai"):
             if provider != "openai_compatible" or getattr(e, "status_code", None) not in (404, 405):
                 raise
     mark()
-    return await _openai_chat(client, model)
+    return await _openai_chat(client, model, info)
 
 
-async def _openai_chat(client, model) -> bool:
+async def _openai_chat(client, model, info: Optional[Dict[str, Any]] = None) -> bool:
     msgs = [{"role": "user", "content": "hi"}]
 
     async def chat(**kw):
         for tok_arg in ("max_completion_tokens", "max_tokens"):
             try:
-                return await client.chat.completions.create(model=model, messages=msgs, **{tok_arg: 1}, **kw)
+                r = await client.chat.completions.create(model=model, messages=msgs, **{tok_arg: 1}, **kw)
+                if info is not None and isinstance(getattr(r, "model", None), str):
+                    info["model"] = r.model[:120]
+                return r
             except Exception as e:
                 if getattr(e, "status_code", None) not in (400, 422) or tok_arg == "max_tokens":
                     raise

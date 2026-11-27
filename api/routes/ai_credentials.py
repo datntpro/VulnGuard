@@ -78,7 +78,7 @@ async def _probe(route) -> Dict[str, Any]:
     """Probe nhỏ nhất (PR-4). Chỉ trả các trường đã chuẩn hoá — không văn bản provider."""
     from api.services.ai_probe import probe_cloud
     d = (await probe_cloud(route)).to_dict()
-    return {k: d.get(k) for k in ("ok", "code", "model", "latency_ms", "tools", "json")}
+    return {k: d.get(k) for k in ("ok", "code", "model", "latency_ms", "tools", "json", "real_model")}
 
 
 # ── schemas ──────────────────────────────────────────────
@@ -165,11 +165,12 @@ def _clean_params(provider: str, model: Optional[str], region: Optional[str], *,
     return params
 
 
-def _check_policy(provider: str, model: str) -> None:
+def _check_policy(provider: str, model: str, params: Optional[Dict[str, Any]] = None) -> None:
     pol = ai_policy.get_policy()
     if pol["byok"] == "off":
         raise _err(403, "AI_BYOK_OFF")
-    if not ai_policy.is_allowed(pol, provider, model):
+    # [PR-6 S2] Azure: allowlist theo model THẬT của deployment (ánh xạ ADMIN), không theo tên do user đặt
+    if not ai_policy.is_allowed(pol, provider, ai_policy.policy_model(pol, provider, params, model)):
         raise _err(422, "AI_NOT_ALLOWED")
 
 
@@ -231,7 +232,7 @@ async def create_mine(body: CredCreate, user: User = Depends(byok_user), db: Ses
     from api.services.llm_resolver import ephemeral_route
     params = _clean_params(body.provider, body.model, body.region, resource=body.resource,
                            deployment=body.deployment, api_version=body.api_version)
-    _check_policy(body.provider, params["model"])
+    _check_policy(body.provider, params["model"], params)
     secret = _clean_secret(body.provider, body.secret)
     if creds.count_active(db, user.id) >= MAX_PER_USER:
         raise _err(409, "AI_CRED_LIMIT")
@@ -268,7 +269,7 @@ async def test_unsaved(body: CredTest, user: User = Depends(byok_user), db: Sess
     from api.services.llm_resolver import ephemeral_route
     params = _clean_params(body.provider, body.model, body.region, resource=body.resource,
                            deployment=body.deployment, api_version=body.api_version)
-    _check_policy(body.provider, params["model"])
+    _check_policy(body.provider, params["model"], params)
     secret = _clean_secret(body.provider, body.secret)
     _throttle(user.id)
     route = ephemeral_route(body.provider, _AUTH_MODE[body.provider], params, secret, user.id)
@@ -293,7 +294,7 @@ def patch_mine(cred_id: str, body: CredPatch, user: User = Depends(byok_user), d
         np = _clean_params(row.provider, body.model if body.model is not None else params.get("model"),
                            body.region if body.region is not None else params.get("region"),
                            deployment=body.deployment, api_version=body.api_version, existing=params)
-        _check_policy(row.provider, np["model"])
+        _check_policy(row.provider, np["model"], {**params, **np})
         creds.update_params(db, row.id, {**params, **np}, actor=user.id)   # re-seal envelope với params mới
         row.status = "unknown"        # model/region mới chưa được kiểm tra
     if body.is_default is not None:

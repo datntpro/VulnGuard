@@ -642,16 +642,37 @@ def test_pricing_for_new_models_and_conservative_default():
     from api.services.ai_prices import DEFAULT, _lookup, est_cost_usd
     assert _lookup("gemini-2.5-pro") == (2.50, 15.00, 0.625)
     assert _lookup("google/gemini-2.5-flash") == (0.30, 2.50, 0.075)
-    assert _lookup("google/gemini-2.5-flash-lite") == (0.10, 0.40, 0.025)         # tên dài khớp trước
+    assert _lookup("google/gemini-2.5-flash-lite") == (0.10, 0.40, 0.025)
     assert _lookup("gpt-4o-mini") == (0.15, 0.60, 0.075) and _lookup("openai/gpt-4o") == (2.50, 10.00, 1.25)
+    assert _lookup("gpt-4o-2024-08-06") == (2.50, 10.00, 1.25)                      # hậu tố ngày được chuẩn hoá
     assert _lookup("gpt-4.1-mini") == (0.40, 1.60, 0.10) and _lookup("gpt-4.1") == (2.00, 8.00, 0.50)
     assert _lookup("o4-mini") == (1.10, 4.40, 0.275) and _lookup("openai/o3") == (2.00, 8.00, 0.50)
     assert _lookup("anthropic/claude-opus-5-5") == (4.00, 20.00, 0.20)               # OpenRouter prefix
-    for unknown in ("prod-chat", "my-model", "foo/bar-o3x", "gpt-o3000", "radio3", ""):
+    assert _lookup("us.anthropic.claude-opus-5-5-v1:0") == (4.00, 20.00, 0.20)       # Bedrock profile + version
+    for unknown in ("prod-chat", "my-model", "foo/bar-o3x", "gpt-o3000", "radio3", "gpt-4o-prod", "gpt-5", "o1", ""):
         assert _lookup(unknown) == DEFAULT, unknown                                  # model lạ KHÔNG miễn phí
     assert est_cost_usd("gemini-2.5-pro", 1_000_000, 1_000_000) == pytest.approx(17.5)
     assert est_cost_usd("prod-chat", 1_000_000, 0) == pytest.approx(DEFAULT[0])
-    assert est_cost_usd("gpt-4o-prod", 1_000_000, 0) == pytest.approx(2.5)           # deployment đặt tên theo model → giá đúng
+
+
+def test_s2_exact_match_o3_pro_and_deep_research_not_priced_as_o3():
+    from api.services.ai_prices import _lookup, est_cost_usd
+    assert _lookup("o3") == (2.00, 8.00, 0.50)
+    assert _lookup("o3-pro") == (20.00, 80.00, 20.00) and _lookup("openai/o3-pro-2025-06-10") == (20.00, 80.00, 20.00)
+    assert _lookup("o3-deep-research") == (10.00, 40.00, 2.50)
+    assert est_cost_usd("o3-pro", 1_000_000, 1_000_000) == pytest.approx(100.0)       # trước: 10.0 (đếm thiếu 10×)
+    for variant in ("o3-pro-x", "o3-mini-high", "o3-preview", "o3.5", "gpt-4o-mini-audio", "gemini-2.5-pro-exp", "claude-opus-5-5-fast"):
+        assert _lookup(variant) not in ((2.00, 8.00, 0.50), (2.50, 10.00, 1.25), (0.15, 0.60, 0.075), (2.50, 15.00, 0.625),
+                                        (4.00, 20.00, 0.20)), variant                 # không khớp tiền tố/chuỗi con
+
+
+def test_s2_unknown_model_uses_most_expensive_tier_of_its_provider():
+    from api.services.ai_prices import _lookup, default_for, est_cost_usd
+    assert _lookup("claude-future-9", "anthropic") == (5.00, 25.00, 5.00) == _lookup("x", "bedrock")
+    assert _lookup("gpt-9", "openai") == (20.00, 80.00, 20.00) == _lookup("x", "azure_openai") == _lookup("x", "openrouter")
+    assert _lookup("gemini-9", "gemini") == (5.00, 30.00, 1.25) == _lookup("x", "vertex")
+    assert default_for(None) == (20.00, 80.00, 20.00)                                  # không rõ provider: đắt nhất toàn bảng
+    assert est_cost_usd("gpt-9", 1_000_000, 0, provider="openai") == pytest.approx(20.0)
 
 
 def test_meter_prices_by_effective_model_for_new_providers():
@@ -659,8 +680,84 @@ def test_meter_prices_by_effective_model_for_new_providers():
     for prov, key, sec in PROVIDER_CASES[:4]:
         route = _route(prov, key, **sec)
         m = ai_usage.Meter(route)
-        assert m.provider == prov and m.model == route.model
-        assert ai_usage.Meter(route, "gemini-2.5-pro").model == "gemini-2.5-pro"        # model hiệu lực (planner/executor)
+        assert m.provider == prov
+        assert m.model == (f"unmapped/{route.model}" if prov == "azure_openai" else route.model)    # Azure: chưa ánh xạ
+        assert ai_usage.Meter(route, "gemini-2.5-pro").model == (f"unmapped/{route.model}" if prov == "azure_openai" else "gemini-2.5-pro")
+
+
+# ── S2: Azure deployment name không đáng tin → model thật (ánh xạ ADMIN) cho allowlist + giá ──
+def _az_policy(**kw):
+    from api.services import ai_policy
+    return ai_policy.normalize(kw)
+
+
+def test_s2_azure_real_model_mapping_and_unmapped_fallback():
+    from api.services import ai_policy
+    pol = _az_policy(azure_deployment_models={"MyRes/Prod-Chat": "o3-pro"})
+    assert ai_policy.azure_real_model(pol, "https://myres.openai.azure.com", "prod-chat") == "o3-pro"
+    assert ai_policy.azure_real_model(pol, "https://myres.openai.azure.com", "gpt-4o-mini") == "unmapped/gpt-4o-mini"
+    assert ai_policy.azure_real_model(pol, "https://other.openai.azure.com", "prod-chat") == "unmapped/prod-chat"   # khoá theo resource
+    assert ai_policy.policy_model(pol, "gemini", None, "gemini-2.5-pro") == "gemini-2.5-pro"
+    for bad in ({"noslash": "gpt-4o"}, {"a/b": ""}, {"a/b": "x y"}, {"a/../b": "gpt-4o"}, {"a/b": 3}, ["x"]):
+        with pytest.raises(ValueError):
+            ai_policy.normalize({"azure_deployment_models": bad})
+
+
+def test_s2_rename_to_bypass_allowlist_is_refused(db):
+    """User đặt tên deployment `gpt-4o-mini` (được allowlist) cho một deployment o3-pro → vẫn bị chặn."""
+    from api.services import ai_credentials as svc
+    from api.services import ai_policy
+    from api.services.llm_resolver import LLMContext, Refuse, _user_cloud
+    allow = {"allowed": ["azure_openai:gpt-4o-mini"]}
+    params = {**AZ, "deployment": "gpt-4o-mini", "model": "gpt-4o-mini"}
+    m = svc.create(db, scope="user", owner_user_id="u1", provider="azure_openai", label="x", secret="k" * 20, params=params, created_by="u1")
+    from api.ai_cred_models import AiCredential
+    row = db.get(AiCredential, m["id"])
+    ctx = LLMContext(feature="pentest", user_id="u1")
+    # (1) chưa ánh xạ: allowlist cụ thể không khớp "unmapped/…" ⇒ từ chối (fail closed)
+    r = _user_cloud(db, row, ctx, ai_policy.normalize(allow))
+    assert isinstance(r, Refuse) and r.code == "AI_NOT_ALLOWED"
+    # (2) ADMIN ánh xạ tên đó → o3-pro thật: vẫn không khớp `gpt-4o-mini`
+    pol = ai_policy.normalize({**allow, "azure_deployment_models": {"myres/gpt-4o-mini": "o3-pro"}})
+    r = _user_cloud(db, row, ctx, pol)
+    assert isinstance(r, Refuse) and r.code == "AI_NOT_ALLOWED"
+    # (3) ánh xạ đúng sang model được phép → qua check allowlist (chỉ có thể dừng ở bước chủ user vì test DB không có User)
+    pol = ai_policy.normalize({**allow, "azure_deployment_models": {"myres/gpt-4o-mini": "gpt-4o-mini"}})
+    assert ai_policy.is_allowed(pol, "azure_openai", ai_policy.policy_model(pol, "azure_openai", params, "gpt-4o-mini"))
+    # wildcard của admin vẫn cho phép mọi deployment Azure
+    assert ai_policy.is_allowed(ai_policy.normalize({"allowed": ["azure_openai:*"]}), "azure_openai",
+                                ai_policy.policy_model(ai_policy.normalize({}), "azure_openai", params, "gpt-4o-mini"))
+
+
+def test_s2_meter_policy_and_price_use_real_model_for_azure(monkeypatch, tmp_path):
+    from api.services import ai_config, ai_policy, ai_usage
+    monkeypatch.setenv("AI_CONFIG_FILE", str(tmp_path / "ai.json"))
+    importlib.reload(ai_config)
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"myres/gpt-4o-mini": "o3-pro"}}})
+    route = _route("azure_openai", KEY_AZ, **{**AZ, "deployment": "gpt-4o-mini"})
+    m = ai_usage.Meter(route)
+    assert m.model == "o3-pro"                                            # tên cho đẹp không đổi giá/allowlist
+    assert ai_usage.Meter(_route("azure_openai", KEY_AZ, **AZ)).model == "unmapped/gpt-4o-prod"
+    # Azure báo model nền đắt hơn mức đã cấu hình → tính theo model đắt hơn
+    ai_config.validate_and_save({"policy": {"azure_deployment_models": {"myres/gpt-4o-mini": "gpt-4o-mini"}}})
+    m2 = ai_usage.Meter(route)
+    assert m2.model == "gpt-4o-mini"
+    raw = type("R", (), {"model": "o3-pro-2025-06-10"})()
+    assert m2._eff_model(raw) == "o3-pro-2025-06-10"
+    assert m2._eff_model(type("R", (), {"model": "gpt-4o-mini-2024-07-18"})()) == "gpt-4o-mini"
+    assert m2._eff_model(type("R", (), {})()) == "gpt-4o-mini"
+
+
+def test_s2_probe_refuses_when_real_model_not_allowed_by_policy(stub, monkeypatch, tmp_path):
+    from api.services import ai_config
+    monkeypatch.setenv("AI_CONFIG_FILE", str(tmp_path / "ai.json"))
+    importlib.reload(ai_config)
+    ai_config.validate_and_save({"policy": {"allowed": ["azure_openai:gpt-4o-mini"]}})
+    r = _probe(_route("azure_openai", KEY_AZ, **AZ))         # stub trả model="m" ≠ gpt-4o-mini
+    assert (r.ok, r.code, r.real_model) == (False, "NO_MODEL_ACCESS", "m"), r
+    ai_config.validate_and_save({"policy": {"allowed": ["azure_openai:m"]}})
+    r = _probe(_route("azure_openai", KEY_AZ, **AZ))
+    assert (r.ok, r.code, r.real_model) == (True, "VALID", "m")
 
 
 # ─────────────────────────────────────────────
@@ -854,3 +951,63 @@ def test_provider_params_unit_edges():
     with pytest.raises(UrlRejected):
         pp.check_guid("not-a-guid", "tenant_id")
     assert pp.check_guid(TENANT.upper(), "tenant_id") == TENANT
+
+
+# ─────────────────────────────────────────────
+# S1: khoá Azure định dạng mới (84 ký tự base62, "JQQJ99" ở giữa) bị che ở MỌI đường
+# ─────────────────────────────────────────────
+KEY_AZ84 = "Ab3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dE3fG5hI7jK9lM1nO3pQ5r" + "JQQJ99" + "BDACYeBjFXJ3w3AAABACOGAbCd"
+assert len(KEY_AZ84) == 84
+
+
+@pytest.mark.parametrize("fmt", ["{k}", "api-key: {k}", "api-key:{k}", "AZURE_OPENAI_API_KEY={k}", "AZURE_OPENAI_API_KEY=\"{k}\"",
+                                 '{{"api_key": "{k}"}}', "'api-key': '{k}'", "x {k}.", "(key={k})", "export OPENAI_API_KEY={k}"])
+def test_s1_azure84_key_masked_by_shared_engine_everywhere(fmt, caplog):
+    from api import log_redaction
+    from scanner.cloud_ai import build_user_prompt, redact, redact_text_basic, sanitize_error
+    from scanner.pentest import redaction as pr
+    text = "cfg: " + fmt.format(k=KEY_AZ84) + " end"
+    core = KEY_AZ84[10:70]
+    # prompt (triage / pentest / Co-work egress dùng cloud_ai.redact + build_user_prompt)
+    assert core not in redact(text) and core not in redact_text_basic(text)
+    p = build_user_prompt({"title": text, "description": text, "code_snippet": text}, text, None, do_redact=True)
+    assert core not in p
+    # log
+    assert core not in log_redaction.mask(text)
+    # lỗi
+    class E(RuntimeError):
+        pass
+    assert core not in sanitize_error(E(text))
+    # transcript / pentest egress (engine redaction riêng của Pentest, dùng chung _SECRET_PATTERNS)
+    assert core not in pr.redact_for_llm(text, [])
+    from scanner.pentest.compaction import render_transcript
+    msgs = [{"role": "user", "content": text},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": text, "is_error": False}]}]
+    tr = render_transcript(msgs, lambda t: pr.redact_for_llm(t, []))
+    assert core not in tr and "REDACTED" in tr
+
+
+def test_s1_log_filter_masks_record_message_args_and_traceback(caplog):
+    from api import log_redaction
+    log_redaction.install()
+    lg = logging.getLogger("vg.s1")
+    caplog.set_level(logging.DEBUG)
+    try:
+        raise RuntimeError(f"boom {KEY_AZ84}")
+    except RuntimeError:
+        lg.exception("call failed with key=%s", KEY_AZ84)
+    lg.info("transcript: %s", {"headers": {"api-key": KEY_AZ84}})
+    out = "\n".join(r.getMessage() + (r.exc_text or "") for r in caplog.records if r.name == "vg.s1")
+    assert KEY_AZ84[10:70] not in out
+
+
+def test_s1_azure84_patterns_are_linear_and_no_false_positive_on_plain_text():
+    import time
+    from scanner.cloud_ai import redact_text_basic
+    hostile = ("A" * 60 + "JQQJ9") * 4000 + "x" * 200_000 + "api-key=" + "a" * 100_000
+    t = time.monotonic()
+    redact_text_basic(hostile)
+    assert time.monotonic() - t < 2.0
+    benign = "The quick brown fox " + "a" * 30 + " jumps; file sha=" + "0" * 64 + " version 1.2.3 JQQJ99 alone"
+    assert redact_text_basic(benign) == benign
+    assert redact_text_basic("api-key: short") == "api-key: short"
