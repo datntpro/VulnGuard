@@ -67,7 +67,7 @@ Không đặt nhiều instance sau load balancer.
 - Engagement pentest **không** yêu cầu xác minh quyền sở hữu domain (khác web scan). README ghi ngược lại, code không làm vậy.
 - Replay traffic chỉ kiểm host nằm trong scope của **bất kỳ** engagement nào, kể cả chưa uỷ quyền hoặc đã hết hạn.
 - Kiểm tra DNS trước khi chạy tool nằm trong khối `try/except: pass`: nếu bước kiểm tra ném exception (khác với kết quả "ngoài scope"), tool vẫn chạy.
-- Pentest Agent cần Anthropic (API/WIF) hoặc Bedrock kể cả khi AI mode (Settings → AI Provider) là `local_only`; dữ liệu target đi ra nhà cung cấp AI. `docs/DATA_FLOW.md` nói có thể dùng Ollama là không đúng với code.
+- Pentest Agent cần Anthropic (API/WIF) hoặc Bedrock kể cả khi AI mode (Settings › AI) là `local_only`; dữ liệu target đi ra nhà cung cấp AI. `docs/DATA_FLOW.md` nói có thể dùng Ollama là không đúng với code.
 - Proxy MITM không hỗ trợ HTTP/2, WebSocket.
 
 ## Lưu trữ và repo

@@ -77,7 +77,7 @@ The Pentest Agent additionally uses **katana** (crawl), **nmap**, **ffuf**, **sq
 
 ## Highlighted features
 
-- **Cloud AI to reduce false positives** — structured output + real code context around each finding; secrets redacted before leaving the machine; API keys encrypted (Fernet). "Re-analyze with Claude" per finding. Configure in *Settings → AI Provider* (ADMIN only).
+- **Cloud AI to reduce false positives** — structured output + real code context around each finding; secrets redacted before leaving the machine; API keys encrypted (Fernet). "Re-analyze with Claude" per finding. Configure in *Settings › AI* (ADMIN edits the org setup; every ANALYST/ADMIN can add their **own** key — see [`docs/wiki/AI-Per-User-Keys.md`](docs/wiki/AI-Per-User-Keys.md); Kiro shops: [`Bedrock via IAM Identity Center`](docs/wiki/AI-Kiro-Bedrock-IAM-Identity-Center.md); rotation: [`runbook`](docs/wiki/AI-Key-Rotation-Runbook.md)).
 - **Pentest Agent (controlled automation)** — **scope gate** (blocks out-of-scope & loopback), **risk gate** (recon/safe scans auto-run; intrusive/destructive need approval), authorization + expiry, step/token budgets, **kill switch**, audit trail. Durable attack chains (todolist), **parallel** tool execution. Evidence binding + recording **MITM proxy** (generated CA) + in-scope replay. → `docs/PENTEST_AGENT.md`
 - **Report exports** — after a scan: **PDF** (Vietnamese, server-side), **Markdown** & **AI-JSON** (for LLMs/agents to read), plus JSON/CSV and the AI HTML report.
 - **Context-aware risk** — the same CVE can score 100 on a critical/internet asset and ~6 on an isolated one. EPSS (FIRST) + CISA KEV feeds, cached offline. → `docs/CONNECTORS_MCP.md`
@@ -155,7 +155,7 @@ Pentest Agent dùng thêm **katana** (crawl), **nmap**, **ffuf**, **sqlmap**.
 
 ## Tính năng nổi bật
 
-- **Cloud AI giảm false positive** — structured output + gửi ngữ cảnh code thật quanh dòng lỗi; **redact secret** trước khi gửi; API key **mã hoá Fernet**. Nút "Phân tích lại bằng Claude" cho từng vuln. Cấu hình ở *Settings → AI Provider* (chỉ ADMIN).
+- **Cloud AI giảm false positive** — structured output + gửi ngữ cảnh code thật quanh dòng lỗi; **redact secret** trước khi gửi; API key **mã hoá Fernet**. Nút "Phân tích lại bằng Claude" cho từng vuln. Cấu hình ở *Settings › AI* (ADMIN sửa cấu hình tổ chức; ANALYST/ADMIN thêm **khoá riêng** của mình — xem [`docs/wiki/AI-Per-User-Keys.md`](docs/wiki/AI-Per-User-Keys.md); công ty dùng Kiro: [`Bedrock qua IAM Identity Center`](docs/wiki/AI-Kiro-Bedrock-IAM-Identity-Center.md); xoay khoá: [`runbook`](docs/wiki/AI-Key-Rotation-Runbook.md)).
 - **Pentest Agent (tự động có kiểm soát)** — **scope gate** (chặn ngoài phạm vi & loopback), **risk gate** (recon/quét an toàn tự chạy; xâm lấn/phá huỷ cần duyệt), uỷ quyền + hạn, budget bước/token, **kill switch**, audit trail. Chuỗi tấn công bền (todolist), chạy tool **song song**. Gắn bằng chứng + recording **MITM proxy** (CA tự sinh) + replay trong scope. → `docs/PENTEST_AGENT.md`
 - **Xuất báo cáo** — sau khi scan: **PDF** (tiếng Việt, server-side), **Markdown** & **AI-JSON** (cho AI/agent đọc), kèm JSON/CSV và báo cáo HTML (AI).
 - **Risk theo ngữ cảnh** — cùng 1 CVE: máy critical/internet có thể 100đ, máy isolated chỉ ~6đ. Feed EPSS (FIRST) + CISA KEV, cache offline. → `docs/CONNECTORS_MCP.md`
@@ -198,7 +198,7 @@ ALLOWED_HOSTS=               # vd 192.168.1.63,vulnguard.lan
 PENTEST_PROXY_BIND=127.0.0.1 # Docker: bind riêng của proxy MITM
 ```
 
-> **Cloud AI** (Claude API key / WIF / Bedrock) cấu hình trong **Settings → AI Provider** (mã hoá at-rest), không qua `.env`.
+> **Cloud AI** (Claude API key / WIF / Bedrock) cấu hình trong **Settings › AI** (mã hoá at-rest), không qua `.env`.
 
 ## Cấu trúc Project
 

@@ -134,8 +134,22 @@ Chi tiết: [[Assets and Connectors|Assets-and-Connectors]].
 
 | Method | Path | Quyền |
 |---|---|---|
-| GET / PUT | `/api/ai/config` | PUT: ADMIN |
-| POST | `/api/ai/test` | |
+| GET / PUT | `/api/ai/settings` | PUT: ADMIN. Trang Settings › AI hợp nhất (thay `/api/ai/config` + `/api/ollama/endpoint`) |
+| GET / PUT | `/api/ai/config` | **Deprecated** (gỡ sớm nhất 2027-03-31) → `/api/ai/settings`. PUT: ADMIN |
+| POST | `/api/ai/test` | ADMIN |
+| POST | `/api/ai/ollama/check` | ADMIN (probe tool-calling / JSON) |
+| GET | `/api/ai/models` | ADMIN (khoá tổ chức) hoặc chủ khoá (`credential_id`) |
+| GET / POST | `/api/me/ai-credentials` | ANALYST, ADMIN (khoá của chính mình; VIEWER bị 403) |
+| POST | `/api/me/ai-credentials/test`, `/api/me/ai-credentials/{id}/test` | chủ khoá |
+| PATCH / DELETE | `/api/me/ai-credentials/{id}` | chủ khoá |
+| PUT | `/api/me/ai-credentials/{id}/secret` | chủ khoá (xoay khoá) |
+| GET | `/api/ai/credentials` | ADMIN (metadata mọi khoá) |
+| POST | `/api/ai/credentials/{id}/revoke` | ADMIN |
+| GET | `/api/ai/usage?scope=me\|all&days=30` | `me`: không phải VIEWER; `all`: ADMIN |
+| POST | `/api/vulns/{id}/reanalyze` | ANALYST, ADMIN |
+
+Chi tiết và mã lỗi: [[Per-user AI keys|AI-Per-User-Keys]]. Endpoint deprecated trả header `Deprecation: true`, `Sunset`, `Link: …; rel="successor-version"`.
+
 | GET / PUT | `/api/settings/scanners` | PUT: ADMIN |
 | GET | `/api/settings/scanner-config` | |
 | GET / PUT | `/api/settings/report-branding` | PUT: ADMIN |
@@ -145,12 +159,13 @@ Chi tiết: [[Assets and Connectors|Assets-and-Connectors]].
 | POST | `/api/settings/sonarqube/test` | (không giới hạn ADMIN) |
 | GET / PUT | `/api/settings/smtp` | PUT: ADMIN |
 | POST | `/api/settings/smtp/test` | (không giới hạn ADMIN) |
-| GET / PUT | `/api/ollama/endpoint` | PUT: ADMIN |
-| GET | `/api/ollama/health`, `/api/ollama/models` | |
-| POST | `/api/ollama/pull` | ADMIN |
-| DELETE | `/api/ollama/models/{model_name}` | ADMIN |
-| PUT | `/api/ollama/active-model` | ADMIN |
-| GET / PUT | `/api/ollama/vision-model` | PUT: ADMIN |
+| GET / PUT | `/api/ollama/endpoint` | **Deprecated** → `/api/ai/settings`. PUT: ADMIN |
+| GET | `/api/ollama/health` | **Deprecated** → `POST /api/ai/ollama/check` |
+| GET | `/api/ollama/models` | (chưa deprecated; Settings › AI còn dùng) |
+| POST | `/api/ollama/pull` | ADMIN (chưa deprecated) |
+| DELETE | `/api/ollama/models/{model_name}` | ADMIN (chưa deprecated) |
+| PUT | `/api/ollama/active-model` | **Deprecated** → `/api/ai/settings`. ADMIN |
+| GET / PUT | `/api/ollama/vision-model` | **Deprecated** → `/api/ai/settings`. PUT: ADMIN |
 
 ## Module tuỳ chọn
 

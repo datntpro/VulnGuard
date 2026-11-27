@@ -235,6 +235,9 @@ async def _security_headers(request, call_next):
     return resp
 
 
+from api.deprecation import deprecation_middleware  # noqa: E402  [AI PR-7]
+app.middleware("http")(deprecation_middleware)   # chỉ thêm header Deprecation/Sunset/Link — không đổi hành vi
+
 # Đăng ký SAU auth_middleware → ngoài cùng, bọc cả response 401/403/421 của auth
 app.middleware("http")(_security_headers)
 
