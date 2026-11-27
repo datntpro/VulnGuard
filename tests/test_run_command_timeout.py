@@ -103,7 +103,7 @@ def test_registry_pass_skipped_when_glob_risky(tmp_path, monkeypatch):
                         lambda rs, timeout=20.0: "rules:\n- id: b\n  paths:\n    exclude: ['*a*a*a*a*b']\n")
     sc = sast.SemgrepScanner(str(tmp_path))
     asyncio.run(sc.scan())
-    assert len(calls) == 1 and not any("p/" in " ".join(c) for c in calls)  # bundled only
+    assert len(calls) == 1 and not any("--config p/" in " ".join(c) for c in calls)  # bundled only
 
 
 def test_registry_pass_runs_when_globs_ok_or_fetch_fails(tmp_path, monkeypatch):
