@@ -3148,7 +3148,7 @@ function renderScanCard(sc, projectId) {
         <div class="flex" style="margin-top:12px;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="openVulns('${sc.id}')">Xem ${s.total||0} Vulnerabilities →</button>
           <button class="btn btn-sm btn-ai" onclick="openAIReport('${sc.id}')" title="Xem báo cáo trong tab mới">📊 Xem Báo Cáo</button>
-          <button class="btn btn-ghost btn-sm" onclick="downloadReportPdf('${sc.id}', this)" title="Tải báo cáo PDF (bản đẹp, render server-side)">⬇ PDF</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadReportPdf('${sc.id}', this)" title="Tải báo cáo PDF (tạm tắt để vá bảo mật)">⬇ PDF</button>
           <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${sc.id}')" title="Tải xuống báo cáo dạng file .html">⬇ .html</button>
           <button class="btn btn-ghost btn-sm" onclick="checkApprove('${projectId}','${sc.id}')">✅ Approve Check</button>
         </div>
@@ -3204,7 +3204,7 @@ function renderVulnTable() {
         </select>
         <label class="text-sm" title="Chỉ gồm lỗ hổng còn mở (loại Không khai thác được / Đã sửa)"><input type="checkbox" id="export-scope" style="width:auto;"> chỉ còn mở</label>
         <button class="btn btn-sm btn-ai" onclick="openAIReport('${currentScanId}')" title="Xem báo cáo trong tab mới">📊 Xem Báo Cáo</button>
-        <button class="btn btn-ghost btn-sm" onclick="downloadReportPdf('${currentScanId}', this)" title="Tải báo cáo PDF bản đẹp (render server-side)">⬇ PDF (đẹp)</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadReportPdf('${currentScanId}', this)" title="Tải báo cáo PDF bản đẹp (tạm tắt để vá bảo mật)">⬇ PDF (đẹp)</button>
         <button class="btn btn-ghost btn-sm" onclick="downloadAIReport('${currentScanId}')" title="Tải xuống báo cáo dạng file .html">⬇ .html</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','pdf')" title="PDF rút gọn (fpdf2, không cần trình duyệt)">⬇ PDF nhanh</button>
         <button class="btn btn-ghost btn-sm" onclick="exportScan('${currentScanId}','json')" title="Export toàn bộ kết quả scan ra JSON">⬇ JSON</button>
@@ -3274,19 +3274,22 @@ function downloadAIReport(scanId) {
   a.click();
 }
 
-// Tải PDF báo cáo đẹp (render server-side bằng Chromium). Nếu máy chủ không có
-// trình duyệt (501) → mở báo cáo HTML để người dùng tự "Lưu PDF / In".
+// Tải PDF báo cáo đẹp. Hiện máy chủ trả 503 (tạm tắt); hiển thị thông báo, không mở bản in.
 async function downloadReportPdf(scanId, btn) {
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang tạo PDF...'; }
   try {
     const r = await fetch(`${API}/api/scans/${scanId}/report?format=pdf`);
-    if (r.status === 501) {
-      toast('Máy chủ chưa có Chromium — mở báo cáo để lưu PDF từ trình duyệt', 'warn');
-      window.open(`${API}/api/scans/${scanId}/report`, '_blank');
+    if (!r.ok) {
+      let msg = 'Xuất PDF không khả dụng (HTTP ' + r.status + ')';
+      try {
+        const j = await r.json();
+        const d = j && j.detail;
+        msg = (d && d.message) || (typeof d === 'string' ? d : '') || j.message || msg;
+      } catch (_) {}
+      toast(msg, 'error');
       return;
     }
-    if (!r.ok) throw new Error(await r.text());
     const blob = await r.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);

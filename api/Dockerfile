@@ -24,7 +24,7 @@ WORKDIR /app
 # KHÔNG BAO GIỜ cài binary chưa xác minh.
 #
 # Tool LÕI (trivy, gitleaks, grype, hadolint): lỗi → build FAIL (không có "|| echo").
-# Tool TUỲ CHỌN (katana, nuclei, ffuf, sonar-scanner, SecLists, chromium): lỗi → cảnh báo và bỏ qua.
+# Tool TUỲ CHỌN (katana, nuclei, ffuf, sonar-scanner, SecLists): lỗi → cảnh báo và bỏ qua.
 
 # 1. Trivy — release tarball + sha256 (thay cho apt repo không pin được phiên bản)
 ARG TRIVY_VERSION=0.76.2
@@ -128,14 +128,10 @@ ARG SECLISTS_TAG=2026.2
 RUN git clone --depth 1 --branch "${SECLISTS_TAG}" https://github.com/danielmiessler/SecLists.git /usr/share/seclists 2>/dev/null \
     || echo "⚠ SecLists clone failed — content_discovery cần chỉ định wordlist thủ công"
 
-# 9. Chromium headless + fonts — render báo cáo PDF đẹp server-side (/report?format=pdf).
-#    Font Liberation/DejaVu phủ tiếng Việt; Noto Color Emoji cho badge 🔥/💀 trong report.
-#    Nếu cài lỗi, ảnh vẫn build được và PDF đẹp tự fallback sang in từ trình duyệt.
-RUN (apt-get update && apt-get install -y --no-install-recommends \
-        chromium fonts-liberation fonts-dejavu fonts-noto-color-emoji \
+# 9. Fonts (DejaVu phủ tiếng Việt cho fpdf2). KHÔNG cài Chromium trong ảnh API (PR-0: gỡ renderer PDF SSRF/LFI).
+RUN (apt-get update && apt-get install -y --no-install-recommends fonts-dejavu \
      && rm -rf /var/lib/apt/lists/*) \
-    || echo "⚠ Chromium install failed — PDF server-side sẽ fallback sang in trình duyệt"
-ENV CHROMIUM_PATH=/usr/bin/chromium
+    || echo "⚠ fonts-dejavu install failed"
 
 # ─────────────────────────────────────────────
 # Python dependencies
