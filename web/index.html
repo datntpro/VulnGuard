@@ -6998,6 +6998,7 @@ initAuth();
 applyFeatureFlags();
 document.getElementById('page-dashboard').classList.add('vg-enter');
 loadDashboard();
+if (location.hash === '#settings-ai') window.addEventListener('load', () => navigate('settings'));   // liên kết từ dòng trạng thái Co-work (agent.html)
 </script>
 <script src="/static/ai-settings.js"></script>
 </body>

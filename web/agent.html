@@ -88,6 +88,19 @@
   .conv .del:hover { color: var(--red); }
   .conv.active { background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand-500) 35%, transparent); }
   @media (max-width: 700px) { #sidebar { display: none; } header { gap: 8px; } }
+  #routeLine { flex-basis: 100%; order: 10; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; margin: 0; }
+  /* Chữ cảnh báo phải đạt WCAG AA (>=4.5:1) ở cả light và dark: dark dùng token gốc, light pha đen cho tối hơn */
+  #routeLine { --route-warn: var(--yellow); --route-bad: var(--red); }
+  :root[data-theme="light"] #routeLine { --route-warn: color-mix(in srgb, var(--yellow) 40%, #000); --route-bad: color-mix(in srgb, var(--critical) 70%, #000); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) #routeLine { --route-warn: color-mix(in srgb, var(--yellow) 40%, #000); --route-bad: color-mix(in srgb, var(--critical) 70%, #000); }
+  }
+  #routeLine[data-tone="cloud"] #routeText { color: var(--route-warn); }
+  #routeLine[data-tone="refused"] #routeText { color: var(--route-bad); }
+  .confirm.risky { border-color: var(--red); }
+  .confirm.risky h3 { color: var(--red); }
+  .confirm .risk { font-size: 13px; margin: 0 0 8px; }
+  .confirm .risk label { display: block; margin-top: 8px; }
   .sidebar-title { padding: 10px 12px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 </style>
 </head>
@@ -103,6 +116,7 @@
   </label>
   <span id="status" class="pill">…</span>
   <a href="/" class="pill">← Web UI</a>
+  <div id="routeLine" class="pill" role="status" aria-live="polite" data-tone="unknown"><span id="routeText"></span><a id="routeLink" href="/#settings-ai"></a></div>
 </header>
 
 <div id="main">
@@ -133,6 +147,7 @@
   </div>
 </div>
 
+<script src="/static/agent-route.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const logEl = $("#log"), inputEl = $("#input"), sendBtn = $("#send"),
@@ -140,7 +155,8 @@ const logEl = $("#log"), inputEl = $("#input"), sendBtn = $("#send"),
       skillSel = $("#skillSel"), skillBanner = $("#skillBanner"),
       convListEl = $("#convList"), newChatBtn = $("#newChat");
 
-let messages = [];       // LLM context (user/assistant/observation) — server tự thêm system
+let messages = [];       // CHỈ để hiển thị — transcript thật do server giữ (POST /conversations/{id}/step)
+let legacyReadOnly = false; // hội thoại cũ chưa có transcript phía server: chỉ xem, gửi tin sẽ mở hội thoại mới
 let busy = false;
 let routedSkillId = null;   // skill được auto-route cho hội thoại hiện tại
 let skillCatalog = [];      // [{id,name,description}]
@@ -154,7 +170,12 @@ async function api(path, opts = {}) {
   });
   if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent("/static/agent.html"); throw new Error("Phiên đăng nhập đã hết hạn"); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || res.statusText);
+  if (!res.ok) {
+    const d = data.detail;
+    const err = new Error(typeof d === "string" ? d : (d && d.code) || res.statusText);
+    err.code = (d && d.code) || data.code || null;
+    throw err;
+  }
   return data;
 }
 
@@ -211,6 +232,7 @@ async function loadConversation(id) {
     const c = await api("/api/coworker/agent/conversations/" + id);
     messages = c.messages || [];
     currentConvId = c.id;
+    legacyReadOnly = !c.route_kind && messages.length > 0;
     routedSkillId = c.skill_id || null;
     if (c.skill_id) skillSel.value = "auto";      // hiển thị skill đã dùng qua banner
     if (c.folder_id) {
@@ -219,6 +241,7 @@ async function loadConversation(id) {
     }
     updateSkillBanner();
     renderTranscript();
+    refreshRoute();
     loadConversations();   // cập nhật highlight
   } catch (e) { alert("Không mở được hội thoại: " + e.message); }
 }
@@ -237,24 +260,42 @@ function newChat() {
   messages = [];
   currentConvId = null;
   routedSkillId = null;
+  legacyReadOnly = false;
+  refreshRoute();
   logEl.innerHTML = '<div class="hint">Chat mới. Nhắn yêu cầu để bắt đầu.</div>';
   updateSkillBanner();
   loadConversations();
 }
 
-// Lưu hội thoại sau mỗi lượt (upsert vào DB)
-async function autoSave() {
-  if (!messages.length) return;
+// Tạo hội thoại rỗng phía server (chủ sở hữu = người dùng hiện tại) trước bước đầu tiên
+async function ensureConversation() {
+  if (currentConvId) return;
+  const r = await api("/api/coworker/agent/conversations", {
+    method: "POST",
+    body: { id: null, folder_id: folderSel.value || null, skill_id: currentSkillId(), messages: [] },
+  });
+  currentConvId = r.id;
+  loadConversations();
+}
+
+// Nạp lại transcript (dạng xem đã che) từ server — client không bao giờ gửi lịch sử
+async function refreshMessages() {
+  if (!currentConvId) return;
+  const c = await api("/api/coworker/agent/conversations/" + currentConvId);
+  messages = c.messages || [];
+}
+
+// ── Dòng trạng thái route (chỉ đọc) ──────────────────────
+let routeSeq = 0;
+async function refreshRoute() {
+  const seq = ++routeSeq;
+  let info = null;
   try {
-    const r = await api("/api/coworker/agent/conversations", {
-      method: "POST",
-      body: { id: currentConvId, folder_id: folderSel.value || null,
-              skill_id: currentSkillId(), messages },
-    });
-    const isNew = !currentConvId;
-    currentConvId = r.id;
-    if (isNew) loadConversations();
-  } catch (_) { /* không chặn UX nếu lưu lỗi */ }
+    info = await api(currentConvId ? "/api/coworker/agent/conversations/" + currentConvId + "/route"
+                                   : "/api/coworker/agent/route-preview");
+  } catch (_) { info = null; }
+  if (seq !== routeSeq) return;     // có yêu cầu mới hơn
+  window.VGRoute.mount($("#routeText"), $("#routeLink"), info);
 }
 
 // ── Skills ───────────────────────────────────────────────
@@ -356,7 +397,9 @@ function renderTranscript() {
 
 function renderConfirm(pending) {
   const p = pending.preview || {};
-  const card = el("confirm");
+  const risky = !!pending.requires_explicit;
+  const T = window.VGRoute.t;
+  const card = el("confirm" + (risky ? " risky" : ""));
   if (p.kind === "write_file") {
     card.innerHTML = `<h3>✍️ Đề xuất ghi file ${p.is_new ? "(tạo mới)" : ""}</h3>
       <div class="meta">${esc(p.path)}</div>
@@ -364,14 +407,29 @@ function renderConfirm(pending) {
   } else if (p.kind === "exec") {
     card.innerHTML = `<h3>▶️ Đề xuất chạy lệnh</h3>
       <div class="meta">$ ${esc(p.command)}${p.cwd ? "   (cwd: " + esc(p.cwd) + ")" : ""}</div>`;
+  } else if (p.kind === "sensitive_read") {
+    card.innerHTML = `<h3>🔐 ${esc(T("riskSensitive"))}</h3><div class="meta">${esc(p.path)}</div>`;
   } else {
     card.innerHTML = `<h3>Xác nhận hành động</h3><div class="meta">${esc(JSON.stringify(pending.args))}</div>`;
   }
   const actions = el("actions");
-  const ok = document.createElement("button"); ok.className = "primary"; ok.textContent = "✓ Duyệt & chạy";
-  const no = document.createElement("button"); no.className = "danger"; no.textContent = "✕ Từ chối";
+  const ok = document.createElement("button"); ok.className = "primary"; ok.id = "approveBtn"; ok.textContent = "✓ Duyệt & chạy";
+  const no = document.createElement("button"); no.className = "danger"; no.id = "rejectBtn"; no.textContent = "✕ Từ chối";
+  const aa = document.getElementById("autoApprove");
+  if (risky) {
+    aa.disabled = true; aa.title = T("autoOff");          // ẩn/tắt tự duyệt khi có hành động rủi ro đang chờ
+    // Hành động rủi ro (file nhạy cảm / sau nội dung đáng ngờ): KHÔNG tự duyệt được, cần người dùng xác nhận rõ.
+    const w = pending.warning || {};
+    const hosts = (w.hosts || []).length ? `<div class="meta">${esc(T("riskHosts"))} ${esc((w.hosts || []).join(", "))}</div>` : "";
+    const sus = w.suspicious ? `<div>${esc(T("riskSuspicious"))}</div>` : "";
+    const box = el("risk", `<strong>⚠ ${esc(T("riskTitle"))}</strong>${sus}${hosts}
+      <label><input type="checkbox" id="riskAck"> ${esc(T("riskConfirm"))}</label>`);
+    card.appendChild(box);
+    ok.disabled = true;
+    box.querySelector("#riskAck").onchange = (e) => { ok.disabled = !e.target.checked; };
+  }
   ok.onclick = () => { card.remove(); approve(pending); };
-  no.onclick = () => { card.remove(); reject(); };
+  no.onclick = () => { card.remove(); reject(pending); };
   actions.appendChild(ok); actions.appendChild(no);
   card.appendChild(actions);
   logEl.appendChild(card);
@@ -384,6 +442,7 @@ let stepCount = 0;
 
 function setBusy(b) {
   busy = b; sendBtn.disabled = b; inputEl.disabled = b;
+  if (b) { const aa = document.getElementById("autoApprove"); aa.disabled = false; aa.removeAttribute("title"); }
   sendBtn.innerHTML = b ? '<span class="spin"></span>' : "Gửi";
 }
 
@@ -405,53 +464,59 @@ async function drive(extra = {}) {
   if (!folderId) { alert("Hãy chọn folder trước."); setBusy(false); return; }
   showThinking(true);
   try {
-    const data = await api("/api/coworker/agent/step", {
+    await ensureConversation();
+    // Chỉ gửi {message} | {approve, ack, explicit, auto} | {reject} | {} — server giữ transcript và pending
+    const data = await api("/api/coworker/agent/conversations/" + currentConvId + "/step", {
       method: "POST",
-      body: { folder_id: folderId, messages, skill_id: currentSkillId(), ...extra },
+      body: { folder_id: folderId, skill_id: currentSkillId(), ...extra },
     });
-    messages = data.messages || messages;
+    await refreshMessages();
     showThinking(false);
     renderTranscript();
     scrollDown();
+    refreshRoute();
 
     if (data.status === "step") {
       if (++stepCount < MAX_TURN_STEPS) return drive();      // còn việc → chạy tiếp
       logEl.appendChild(el("step", '<span class="head">⚠ Đạt giới hạn số bước cho lượt này.</span>'));
     } else if (data.status === "awaiting_confirmation") {
-      if (autoApprove()) {                                    // ⚡ tự duyệt
-        return drive({ approved: { pending_id: data.pending.id } });
+      const p = data.pending;
+      if (autoApprove() && !p.requires_explicit) {            // ⚡ tự duyệt — không bao giờ với hành động rủi ro
+        return drive({ approve: p.id, ack: p.confirm_token, auto: true });
       }
-      renderConfirm(data.pending);                            // hỏi tay → dừng lặp
+      renderConfirm(p);                                       // hỏi tay → dừng lặp
     }
     // status "done" → dừng
   } catch (e) {
     showThinking(false);
     logEl.appendChild(el("step", `<span class="head" style="color:var(--red)">⚠ ${esc(e.message)}</span>`));
     scrollDown();
+    refreshRoute();
   }
-  await autoSave();   // lưu hội thoại vào DB sau mỗi lượt
   setBusy(false);
+  loadConversations();
 }
 
 async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text || busy) return;
+  if (legacyReadOnly) {                 // hội thoại cũ không có transcript phía server → mở hội thoại mới
+    messages = []; currentConvId = null; routedSkillId = null; legacyReadOnly = false;
+  }
   messages.push({ role: "user", content: text });
   inputEl.value = "";
   renderTranscript();
   setBusy(true);
   await maybeRoute();          // tự chọn skill theo ngữ cảnh (chỉ lần đầu, chế độ auto)
-  startTurn();
+  startTurn({ message: text });
 }
 
 function approve(pending) {
-  startTurn({ approved: { pending_id: pending.id } });
+  startTurn({ approve: pending.id, ack: pending.confirm_token, explicit: !!pending.requires_explicit });
 }
 
-function reject() {
-  messages.push({ role: "user", content: "[Người dùng từ chối hành động vừa rồi] Hãy thử cách khác hoặc giải thích thay vì thực hiện." });
-  renderTranscript();
-  startTurn();
+function reject(pending) {
+  startTurn({ reject: pending.id });
 }
 
 // ── Events ───────────────────────────────────────────────
@@ -464,6 +529,7 @@ newChatBtn.onclick = newChat;
 loadFolders();
 loadSkills().then(updateSkillBanner);
 loadConversations();
+refreshRoute();
 </script>
 </body>
 </html>
