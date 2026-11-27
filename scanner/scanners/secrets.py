@@ -4,11 +4,15 @@ Secret Detection Scanners:
 - DetectSecretsScanner: dùng Python API trực tiếp (bypass CLI filter bug)
 """
 import json
+import logging
 import os
 import re
 from typing import List, Dict, Any
 
-from scanner.scanners.base import BaseScanner, run_command, make_fingerprint
+from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, make_fingerprint,
+                                   classify_failed_run)
+
+logger = logging.getLogger(__name__)
 
 # 1.3: giảm false positive cho secret
 _TEST_PATH_RE = re.compile(
@@ -63,22 +67,35 @@ class GitleaksScanner(BaseScanner):
             "--no-git",
             "--exit-code=0",   # Không fail khi tìm thấy secret (Gitleaks v8)
             "--redact",        # Che giá trị secret trong output
-            "--quiet",
+            "--log-level", "error",   # gitleaks 8.18.4 (pinned) rejects --quiet (exit 126)
         ]
 
         try:
             rc, stdout, stderr = await run_command(cmd, timeout=120)
 
-            # Đọc report file
-            try:
-                if os.path.exists(report_path):
-                    with open(report_path, "r") as f:
-                        content = f.read().strip()
-                    results = json.loads(content) if content and content != "null" else []
-                else:
-                    results = []
-            except Exception:
-                results = []
+            kind = classify_failed_run(rc, stderr)
+            if kind == "missing":
+                logger.info("gitleaks chưa cài — bỏ qua")
+                return []
+            if kind == "timeout":
+                raise ScannerRunError(f"gitleaks timeout: {stderr[-300:]}")
+            # --exit-code=0: rc != 0 nghĩa là gitleaks hỏng (không phải "có secret").
+            if rc != 0:
+                raise ScannerRunError(f"gitleaks thất bại (exit {rc}): {stderr[-500:]}")
+
+            # Report file: không tồn tại hoặc rỗng khi rc=0 = không có finding;
+            # có nội dung mà không parse được = hỏng.
+            if os.path.exists(report_path):
+                with open(report_path, "r") as f:
+                    content = f.read().strip()
+                if content and content != "null":
+                    try:
+                        results = json.loads(content)
+                    except json.JSONDecodeError:
+                        raise ScannerRunError(
+                            f"gitleaks report không phải JSON: {stderr[-300:]}") from None
+                    if not isinstance(results, list):
+                        raise ScannerRunError("gitleaks report không phải list JSON")
         finally:
             try:
                 os.unlink(report_path)
@@ -182,6 +199,7 @@ class DetectSecretsScanner(BaseScanner):
             from detect_secrets import SecretsCollection
             from detect_secrets.settings import transient_settings
         except ImportError:
+            logger.info("detect-secrets chưa cài — bỏ qua")
             return []
 
         findings = []
@@ -197,7 +215,8 @@ class DetectSecretsScanner(BaseScanner):
                 for file_path in files_to_scan:
                     try:
                         secrets_collection.scan_file(file_path)
-                    except Exception:
+                    except Exception as e:  # 1 file hỏng (binary/permission) không làm hỏng cả scan
+                        logger.debug("detect-secrets bỏ qua %s: %s", file_path, e)
                         continue
 
             for filename, secret_set in secrets_collection.data.items():
@@ -229,8 +248,8 @@ class DetectSecretsScanner(BaseScanner):
                         },
                     })
 
-        except Exception:
-            return []
+        except Exception as e:
+            raise ScannerRunError(f"detect-secrets thất bại: {e}") from e
 
         return _reduce_secret_fp(findings)
 

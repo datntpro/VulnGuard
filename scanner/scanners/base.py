@@ -103,6 +103,9 @@ class BaseScanner(ABC):
 
     def __init__(self, scan_path: str):
         self.scan_path = scan_path
+        # Partial failures (some inputs failed, findings from the rest kept). The
+        # orchestrator turns a non-empty list into status "partial".
+        self.warnings: List[str] = []
 
     @abstractmethod
     async def scan(self) -> List[Dict[str, Any]]:
@@ -124,3 +127,12 @@ class BaseScanner(ABC):
 
 class ScannerRunError(RuntimeError):
     """Tool đã chạy nhưng thất bại: KHÔNG được báo cáo như "0 findings"."""
+
+
+def classify_failed_run(rc: int, stderr: str) -> str:
+    """"missing" = tool absent (not applicable → caller returns []); "timeout"; else ""."""
+    if rc == -1 and (stderr or "").startswith("Tool not found"):
+        return "missing"
+    if rc == -1 and "timeout" in (stderr or ""):
+        return "timeout"
+    return ""

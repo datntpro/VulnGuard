@@ -3098,10 +3098,11 @@ function renderScanCard(sc, projectId) {
   let scannerLogsHtml = '';
   if (sc.status === 'COMPLETED' && Object.keys(scannerLogs).length > 0) {
     const logRows = Object.entries(scannerLogs).map(([tool, log]) => {
-      const icon = log.status === 'ok' ? '✅' : (log.status === 'skipped' ? '⊘' : '❌');
+      const icon = log.status === 'ok' ? '✅' : (log.status === 'skipped' ? '⊘' : (log.status === 'partial' ? '◐' : '❌'));
       const countColor = log.count > 0 ? 'color:var(--medium)' : 'color:var(--text3)';
       const note = log.status === 'skipped' ? '<span style="color:var(--critical);font-weight:600;">BỎ QUA (chưa cài)</span>'
         : log.status === 'error' ? '<span style="color:var(--critical);font-weight:600;">LỖI</span>'
+        : log.status === 'partial' ? `<span style="color:var(--medium);font-weight:600;" title="${escHtml(log.error||'')}">MỘT PHẦN — ${log.count||0} findings</span>`
         : `<span style="${countColor};font-weight:600;">${log.count||0} findings</span>`;
       return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);">
         <span>${icon} ${escHtml(log.label||tool)}</span>${note}

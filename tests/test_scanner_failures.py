@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scanner.scanners import sast, container
+from scanner.scanners import sast, container, iac, sca, secrets
 from scanner.scanners.base import ScannerRunError
 
 
@@ -183,3 +183,250 @@ def test_dockerfile_precache_is_valid_and_loud():
     # semgrep nay nằm trong venv riêng cài từ lockfile (PR-H) — từ bước đó trở đi không nuốt lỗi
     assert "/tmp/scanners/$t.txt" in text
     assert "|| echo" not in text.split("/tmp/scanners/$t.txt")[1]
+
+
+# ── PR-7a: IaC / SCA / secrets ─────────────────────────────────────────────
+MISSING = (-1, "", "Tool not found: x")
+TIMEOUT = (-1, "", "Command timeout after 300s: x")
+GARBAGE = (0, "not json", "")
+
+_CHECKOV_OK = json.dumps({"results": {"failed_checks": [{
+    "check_id": "CKV_X_1", "check_type": "terraform", "file_path": "/a/main.tf",
+    "file_line_range": [1, 2], "resource": "r"}]}})
+_TRIVY_IAC_OK = json.dumps({"Results": [{"Target": "t", "Type": "dockerfile", "Misconfigurations": [
+    {"ID": "DS001", "Title": "t", "Severity": "HIGH"}]}]})
+_TRIVY_SCA_OK = json.dumps({"Results": [{"Target": "t", "Vulnerabilities": [
+    {"VulnerabilityID": "CVE-1", "PkgName": "p", "InstalledVersion": "1", "Severity": "HIGH"}]}]})
+_PIPAUDIT_OK = json.dumps({"dependencies": [{"name": "p", "version": "1", "vulns": [
+    {"id": "PYSEC-1", "description": "d", "fix_versions": ["2"], "aliases": []}]}]})
+
+
+@pytest.mark.parametrize("res", [TIMEOUT, (2, "", "boom"), (1, "", ""), (1, "Traceback", "x"), GARBAGE],
+                         ids=["timeout", "bad-exit", "rc1-empty", "rc1-garbage", "garbage-rc0"])
+def test_checkov_failure_modes_raise(monkeypatch, tmp_path, res):
+    _patch(monkeypatch, iac, res)
+    with pytest.raises(ScannerRunError):
+        _run(iac.CheckovScanner(str(tmp_path)).scan())
+
+
+def test_checkov_missing_and_clean_ok(monkeypatch, tmp_path):
+    _patch(monkeypatch, iac, MISSING)
+    assert _run(iac.CheckovScanner(str(tmp_path)).scan()) == []
+    _patch(monkeypatch, iac, (0, "", ""))
+    assert _run(iac.CheckovScanner(str(tmp_path)).scan()) == []
+    _patch(monkeypatch, iac, (1, _CHECKOV_OK, ""))
+    assert len(_run(iac.CheckovScanner(str(tmp_path)).scan())) == 1
+
+
+@pytest.mark.parametrize("res", [TIMEOUT, (1, "", "FATAL"), GARBAGE, (0, "[]", "")],
+                         ids=["timeout", "bad-exit", "garbage", "non-object"])
+def test_trivy_iac_failure_modes_raise(monkeypatch, tmp_path, res):
+    _patch(monkeypatch, iac, res)
+    with pytest.raises(ScannerRunError):
+        _run(iac.TrivyIaCScanner(str(tmp_path)).scan())
+
+
+def test_trivy_iac_missing_and_ok(monkeypatch, tmp_path):
+    _patch(monkeypatch, iac, MISSING)
+    assert _run(iac.TrivyIaCScanner(str(tmp_path)).scan()) == []
+    _patch(monkeypatch, iac, (0, _TRIVY_IAC_OK, ""))
+    assert len(_run(iac.TrivyIaCScanner(str(tmp_path)).scan())) == 1
+
+
+def _dockerfiles(tmp_path, n=1):
+    for i in range(n):
+        (tmp_path / f"Dockerfile{i}").write_text("FROM x\n")
+
+
+@pytest.mark.parametrize("res", [TIMEOUT, (2, "", "boom"), (1, "", ""), GARBAGE[:0] + (0, "{}", "")],
+                         ids=["timeout", "bad-exit", "rc1-empty", "non-list"])
+def test_hadolint_all_fail_raises(monkeypatch, tmp_path, res):
+    _dockerfiles(tmp_path)
+    _patch(monkeypatch, iac, res)
+    with pytest.raises(ScannerRunError):
+        _run(iac.HadolintScanner(str(tmp_path)).scan())
+
+
+def test_hadolint_missing_clean_partial(monkeypatch, tmp_path):
+    _dockerfiles(tmp_path, 2)
+    _patch(monkeypatch, iac, MISSING)
+    assert _run(iac.HadolintScanner(str(tmp_path)).scan()) == []
+    _patch(monkeypatch, iac, (0, "[]", ""))
+    assert _run(iac.HadolintScanner(str(tmp_path)).scan()) == []
+    issue = json.dumps([{"code": "DL3006", "level": "warning", "line": 1, "message": "m"}])
+    _patch(monkeypatch, iac, lambda cmd: (1, issue, "") if cmd[-1].endswith("Dockerfile0") else (2, "", "x"))
+    assert len(_run(iac.HadolintScanner(str(tmp_path)).scan())) == 1
+
+
+@pytest.mark.parametrize("res", [TIMEOUT, (1, "", "FATAL db update failed"), GARBAGE, (0, "[]", "")],
+                         ids=["timeout", "bad-exit", "garbage", "non-object"])
+def test_trivy_sca_failure_modes_raise(monkeypatch, tmp_path, res):
+    _patch(monkeypatch, sca, res)
+    with pytest.raises(ScannerRunError):
+        _run(sca.TrivySCAScanner(str(tmp_path)).scan())
+
+
+def test_trivy_sca_missing_and_ok(monkeypatch, tmp_path):
+    _patch(monkeypatch, sca, MISSING)
+    assert _run(sca.TrivySCAScanner(str(tmp_path)).scan()) == []
+    _patch(monkeypatch, sca, (0, _TRIVY_SCA_OK, ""))
+    assert len(_run(sca.TrivySCAScanner(str(tmp_path)).scan())) == 1
+
+
+@pytest.mark.parametrize("res", [TIMEOUT, (2, "", "boom"), (1, "", "network error"), GARBAGE],
+                         ids=["timeout", "bad-exit", "rc1-nojson", "garbage"])
+def test_pip_audit_all_fail_raises(monkeypatch, tmp_path, res):
+    (tmp_path / "requirements.txt").write_text("p==1\n")
+    _patch(monkeypatch, sca, res)
+    with pytest.raises(ScannerRunError):
+        _run(sca.PipAuditScanner(str(tmp_path)).scan())
+
+
+def test_pip_audit_missing_ok_and_partial(monkeypatch, tmp_path):
+    (tmp_path / "requirements.txt").write_text("p==1\n")
+    (tmp_path / "requirements-dev.txt").write_text("p==1\n")
+    _patch(monkeypatch, sca, MISSING)
+    assert _run(sca.PipAuditScanner(str(tmp_path)).scan()) == []
+    _patch(monkeypatch, sca, lambda cmd: (1, _PIPAUDIT_OK, "") if cmd[2].endswith("requirements.txt") else (2, "", "x"))
+    assert len(_run(sca.PipAuditScanner(str(tmp_path)).scan())) == 1
+
+
+def _gitleaks(rc=0, report=None, stderr=""):
+    async def fake(cmd, *a, **k):
+        if report is not None:
+            with open(cmd[cmd.index("--report-path") + 1], "w") as f:
+                f.write(report)
+        return rc, "", stderr
+    return fake
+
+
+@pytest.mark.parametrize("kw", [dict(rc=-1, stderr="Command timeout after 120s: gitleaks"),
+                                dict(rc=2, stderr="boom"),
+                                dict(rc=0, report="not json"),
+                                dict(rc=0, report="{}")],
+                         ids=["timeout", "bad-exit", "garbage-report", "non-list"])
+def test_gitleaks_failure_modes_raise(monkeypatch, tmp_path, kw):
+    monkeypatch.setattr(secrets, "run_command", _gitleaks(**kw))
+    with pytest.raises(ScannerRunError):
+        _run(secrets.GitleaksScanner(str(tmp_path)).scan())
+
+
+def test_gitleaks_missing_clean_and_findings(monkeypatch, tmp_path):
+    monkeypatch.setattr(secrets, "run_command", _gitleaks(rc=-1, stderr="Tool not found: gitleaks"))
+    assert _run(secrets.GitleaksScanner(str(tmp_path)).scan()) == []
+    monkeypatch.setattr(secrets, "run_command", _gitleaks(rc=0, report="null"))
+    assert _run(secrets.GitleaksScanner(str(tmp_path)).scan()) == []
+    monkeypatch.setattr(secrets, "run_command", _gitleaks(rc=0, report=json.dumps(
+        [{"RuleID": "r", "File": "a.py", "StartLine": 1, "Match": "m"}])))
+    assert len(_run(secrets.GitleaksScanner(str(tmp_path)).scan())) == 1
+
+
+def test_detect_secrets_internal_error_raises(monkeypatch, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    pytest.importorskip("detect_secrets")
+    import detect_secrets.settings as ds
+    def boom(*a, **k):
+        raise RuntimeError("plugin crash")
+    monkeypatch.setattr(ds, "transient_settings", boom)
+    with pytest.raises(ScannerRunError):
+        _run(secrets.DetectSecretsScanner(str(tmp_path)).scan())
+
+
+def test_iac_failure_surfaces_in_orchestrator(monkeypatch, tmp_path):
+    from scanner.orchestrator import Orchestrator
+    _patch(monkeypatch, iac, (2, "", "boom"))
+    monkeypatch.setattr(iac.CheckovScanner, "is_available", lambda self: True)
+    _, logs = _run(Orchestrator(str(tmp_path), scan_types=["IAC"]).run())
+    assert logs["checkov"]["status"] == "error"
+
+
+# ── PR-7a review fixes ─────────────────────────────────────────────────────
+# Flags accepted by the PINNED gitleaks (install/install.sh: v8.18.4) for `detect`.
+# 8.18.4 rejects --quiet (exit 126), which made gitleaks silently find nothing.
+_GITLEAKS_8_18_4_DETECT_FLAGS = {
+    "--source", "--report-format", "--report-path", "--no-git", "--exit-code", "--redact",
+    "--log-level", "--verbose", "--config", "--baseline-path", "--max-target-megabytes",
+}
+
+
+def test_gitleaks_argv_contract_matches_pinned_version(monkeypatch, tmp_path):
+    seen = {}
+
+    async def fake(cmd, *a, **k):
+        seen["cmd"] = cmd
+        return 0, "", ""
+    monkeypatch.setattr(secrets, "run_command", fake)
+    _run(secrets.GitleaksScanner(str(tmp_path)).scan())
+    cmd = seen["cmd"]
+    assert cmd[:2] == ["gitleaks", "detect"]
+    flags = {a.split("=")[0] for a in cmd if a.startswith("--")}
+    assert flags <= _GITLEAKS_8_18_4_DETECT_FLAGS, flags - _GITLEAKS_8_18_4_DETECT_FLAGS
+    assert "--quiet" not in cmd
+    import re
+    assert "GITLEAKS_VERSION=8.18.4" in open("api/Dockerfile").read(), "update the flag list when bumping"
+    pin = re.search(r"gitleaks/releases/download/v([\d.]+)/", open("install/install.sh").read())
+    assert pin and pin.group(1) == "8.18.4", "update _GITLEAKS_8_18_4_DETECT_FLAGS when bumping gitleaks"
+
+
+def test_gitleaks_real_binary_finds_known_secret(tmp_path):
+    import shutil
+    import subprocess
+    exe = shutil.which("gitleaks")
+    if not exe:
+        pytest.skip("gitleaks not installed")
+    # Fixture secret split so this test file itself isn't a secret hit.
+    (tmp_path / "creds.py").write_text('T = "ghp_' + "x7K9mQ2wLp4RtZ8vB3nYc6HdJ1sFa5GuE0oW" + '"\n')
+    # argv shape comes from the scanner itself, so a flag the binary rejects fails here.
+    captured = {}
+
+    async def spy(cmd, *a, **k):
+        captured["cmd"] = cmd
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        return p.returncode, p.stdout, p.stderr
+    import scanner.scanners.secrets as sm
+    orig = sm.run_command
+    sm.run_command = spy
+    try:
+        out = _run(sm.GitleaksScanner(str(tmp_path)).scan())
+    finally:
+        sm.run_command = orig
+    assert out, "gitleaks must find the planted secret"
+
+
+def test_trivy_iac_available_when_trivy_present(monkeypatch, tmp_path):
+    monkeypatch.setattr(iac.shutil, "which", lambda n: "/x/trivy" if n == "trivy" else None)
+    assert iac.TrivyIaCScanner(str(tmp_path)).is_available() is True
+    monkeypatch.setattr(iac.shutil, "which", lambda n: None)
+    assert iac.TrivyIaCScanner(str(tmp_path)).is_available() is False
+
+
+def test_trivy_iac_runs_in_orchestrator(monkeypatch, tmp_path):
+    from scanner.orchestrator import Orchestrator
+    monkeypatch.setattr(iac.shutil, "which", lambda n: "/x/trivy" if n == "trivy" else None)
+    for cls in (iac.CheckovScanner, iac.HadolintScanner):
+        monkeypatch.setattr(cls, "is_available", lambda self: False)
+    _patch(monkeypatch, iac, (0, _TRIVY_IAC_OK, ""))
+    _, logs = _run(Orchestrator(str(tmp_path), scan_types=["IAC"]).run())
+    assert logs["trivy-iac"]["status"] == "ok" and logs["trivy-iac"]["count"] == 1
+
+
+def test_partial_failure_marks_scan_partial(monkeypatch, tmp_path):
+    from scanner.orchestrator import Orchestrator
+    (tmp_path / "requirements.txt").write_text("p==1\n")
+    (tmp_path / "requirements-dev.txt").write_text("p==1\n")
+    _patch(monkeypatch, sca, lambda cmd: (1, _PIPAUDIT_OK, "") if cmd[2].endswith("requirements.txt") else (2, "", "x"))
+    monkeypatch.setattr(sca.PipAuditScanner, "is_available", lambda self: True)
+    monkeypatch.setattr(sca.TrivySCAScanner, "is_available", lambda self: False)
+    _, logs = _run(Orchestrator(str(tmp_path), scan_types=["SCA"]).run())
+    assert logs["pip-audit"]["status"] == "partial"
+    assert logs["pip-audit"]["count"] == 1
+    assert "requirements-dev.txt" in logs["pip-audit"]["error"]
+
+
+def test_hadolint_partial_sets_warning(monkeypatch, tmp_path):
+    _dockerfiles(tmp_path, 2)
+    issue = json.dumps([{"code": "DL3006", "level": "warning", "line": 1, "message": "m"}])
+    _patch(monkeypatch, iac, lambda cmd: (1, issue, "") if cmd[-1].endswith("Dockerfile0") else (2, "", "x"))
+    sc = iac.HadolintScanner(str(tmp_path))
+    assert len(_run(sc.scan())) == 1
+    assert sc.warnings
