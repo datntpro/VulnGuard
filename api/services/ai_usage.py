@@ -226,7 +226,7 @@ class Meter:
                             or (uid is not None and row.owner_user_id != uid))
                     if not dead:
                         owner = db.get(User, row.owner_user_id)
-                        dead = owner is not None and (not owner.is_active or owner.role.value == "VIEWER")
+                        dead = owner is None or not owner.is_active or owner.role.value == "VIEWER"   # fail closed
                 if dead:
                     self._event("refused", AI_CRED_REVOKED)
                     raise RouteRefused(AI_CRED_REVOKED, "ai.error.cred_revoked")

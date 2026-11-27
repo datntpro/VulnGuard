@@ -261,7 +261,7 @@ def _user_cloud(db, row, ctx: LLMContext, policy: Dict[str, Any], *, act_as: Opt
         return Refuse(deny_code, "ai.error.cred_revoked" if deny_code == AI_CRED_REVOKED else "ai.error.not_allowed")
     from api.auth_models import User
     owner = db.get(User, row.owner_user_id)
-    if owner is not None and (not owner.is_active or owner.role.value == "VIEWER"):   # chủ bị vô hiệu hoá/hạ VIEWER
+    if owner is None or not owner.is_active or owner.role.value == "VIEWER":   # chủ không tồn tại / bị vô hiệu hoá / hạ VIEWER → fail closed
         return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
     cctx = replace(ctx, user_id=act_as) if act_as else ctx
     try:
@@ -505,11 +505,15 @@ def pin_for_user(user_id: Optional[str], *, include_org: bool = False) -> Option
         db.close()
 
 
-def schedule_pin(created_by_user_id: Optional[str], schedule_policy: Optional[str]) -> Tuple[str, Optional[str], Optional[str]]:
-    """Cho scan do lịch/hệ thống: (policy hiệu lực, chủ lịch nếu 'owner', credential ghim nếu 'owner')."""
+def schedule_pin(created_by_user_id: Optional[str], schedule_policy: Optional[str],
+                 owner_consent: Optional[bool] = True) -> Tuple[str, Optional[str], Optional[str]]:
+    """Cho scan do lịch/hệ thống: (policy hiệu lực, chủ lịch nếu 'owner', credential ghim nếu 'owner').
+    Lịch mà lần sửa cuối KHÔNG phải của chủ (owner_consent=False) không bao giờ chạy bằng key cá nhân của chủ → local_only."""
     from api.services import ai_policy
     pol = ai_policy.get_policy()
     eff = schedule_policy if schedule_policy in ai_policy.SCHED_CREDENTIALS else pol["scheduled_jobs_credential"]
+    if eff == "owner" and owner_consent is False:
+        return "local_only", None, None
     if eff == "owner" and created_by_user_id:
         return eff, created_by_user_id, pin_for_user(created_by_user_id)
     return eff, None, None

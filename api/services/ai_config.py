@@ -153,6 +153,7 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
     """Merge update vào config hiện tại, validate, mã hoá api_key mới (nếu có), ghi file."""
     with _lock:
         cfg = load_config()
+        old_base_url = str((cfg.get("openai") or {}).get("base_url") or "").strip()
         update = copy.deepcopy(update or {})
         for k in ("migrations", "org_credential_id", "probe"):   # [AI PR-3] nội bộ — không nhận từ client
             update.pop(k, None)
@@ -189,7 +190,8 @@ def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
         from api.services import ai_policy   # [AI PR-3]
         cfg["policy"] = ai_policy.normalize(cfg.get("policy"))
         oa_url = ((update.get("openai") or {}).get("base_url") if isinstance(update.get("openai"), dict) else None)
-        if cfg["policy"]["custom_base_url"] == "off" and isinstance(oa_url, str) and oa_url.strip():
+        if cfg["policy"]["custom_base_url"] == "off" and isinstance(oa_url, str) and oa_url.strip() \
+                and oa_url.strip() != old_base_url:       # lưu lại đúng URL cũ không đổi thì được
             raise ValueError("BAD_BASE_URL: custom base_url bị policy tắt")   # áp cho MỌI đường lưu (cả PUT /api/ai/config cũ)
         cfg["privacy"]["context_lines"] = max(0, min(int(cfg["privacy"]["context_lines"]), 80))
         for k in ("send_code_context", "redact_secrets"):

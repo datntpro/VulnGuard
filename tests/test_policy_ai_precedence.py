@@ -47,7 +47,15 @@ def _policy(**kw):
     return _cfg(policy=kw)
 
 
+def _ensure_user(db, uid):
+    from api.auth_models import User, UserRole
+    if db.get(User, uid) is None:
+        db.add(User(id=uid, email=f"{uid}-{datetime.utcnow().timestamp()}@t.local", name=uid, password_hash="x", role=UserRole.ANALYST))
+        db.commit()
+
+
 def _mk(db, uid, key=A_KEY, label="k", default=True, provider="anthropic", model="claude-opus-5-5", status="valid"):
+    _ensure_user(db, uid)
     m = creds.create(db, scope="user", owner_user_id=uid, provider=provider, label=label, secret=key,
                      params={"model": model}, created_by=uid, status=status)
     if default:
@@ -642,3 +650,26 @@ def test_routes_repr_and_ctx_never_contain_keys(env):
     for fn in (pickle.dumps, copy.deepcopy, json.dumps):
         with pytest.raises(Exception):
             fn(r.credential)
+
+
+def test_missing_owner_row_fails_closed(env):
+    from api.auth_models import User
+    cid = _mk(env, "ghost")
+    m, r = _meter("ghost")
+    assert r.credential.scope == "user"
+    env.delete(env.get(User, "ghost"))                     # user bị xoá cứng ngoài API
+    env.commit()
+    assert resolve(_ctx("ghost")).code == AI_CRED_REVOKED    # fail closed (không lặng lẽ chuyển sang org)
+    assert resolve(_ctx("ghost", pinned_credential_id=cid)).code == AI_CRED_REVOKED
+    with pytest.raises(RouteRefused):
+        m.pre()
+
+
+def test_schedule_pin_without_owner_consent_runs_local(env):
+    from api.services.llm_resolver import schedule_pin
+    d = _mk(env, "u1")
+    assert schedule_pin("u1", "owner", True) == ("owner", "u1", d)
+    assert schedule_pin("u1", "owner", False) == ("local_only", None, None)
+    _policy(scheduled_jobs_credential="owner")
+    assert schedule_pin("u1", "inherit", False)[0] == "local_only"
+    assert schedule_pin("u1", "inherit", None)[0] == "owner"        # lịch cũ (cờ null) coi như chưa bị người khác sửa

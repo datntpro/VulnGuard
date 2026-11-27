@@ -654,3 +654,76 @@ def test_s4_custom_base_url_off_enforced_on_legacy_put(probe):
         r = ad.put(path, json={"openai": {"base_url": "https://llm.example.com/v1"}}, headers=had)
         assert r.status_code == 422 and "BAD_BASE_URL" in r.text, path
     assert ad.put("/api/ai/config", json={"openai": {"model": "gpt-4o"}}, headers=had).status_code == 200
+
+
+# ── re-verify: policy MỚI sau resolve 'inherit', consent lúc chạy, xoá lịch, base_url ─────────────
+def test_reverify_poc_inherit_flip_under_global_owner_policy(probe):
+    from api.scm_models import ScanSchedule
+    from api.services import ai_config
+    from api.services.llm_resolver import schedule_pin
+    cb, hb, ub, _ = who()
+    add(cb, hb, key=KEY_B)
+    repo = _repo(db())
+    sid = cb.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60, "ai_credential_policy": "org"}, headers=hb).json()["id"]
+    ai_config.validate_and_save({"policy": {"scheduled_jobs_credential": "owner"}})
+    ca, ha, *_ = who()
+    ad, had, *_ = who(UserRole.ADMIN)
+    for c, h in ((ca, ha), (ad, had)):
+        for pol in ("inherit", "owner"):
+            r = c.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 5, "ai_credential_policy": pol}, headers=h)
+            assert r.status_code == 403, (pol, r.text)
+    s = db().get(ScanSchedule, sid)
+    assert s.ai_credential_policy == "org" and s.interval_minutes == 60
+    assert schedule_pin(s.created_by_user_id, s.ai_credential_policy, s.ai_owner_consent)[0] == "org"
+    # sang local_only/org vẫn được; chủ vẫn đặt inherit được
+    assert ca.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 5, "ai_credential_policy": "local_only"}, headers=ha).status_code == 200
+    assert cb.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 60, "ai_credential_policy": "inherit"}, headers=hb).status_code == 200
+    assert db().get(ScanSchedule, sid).ai_owner_consent is True
+
+
+def test_reverify_runtime_consent_revoked_when_non_creator_edits_then_org_policy_flips(probe):
+    """A (không phải chủ) sửa lịch của B khi policy toàn cục còn là org; sau đó admin đổi sang 'owner' → lịch KHÔNG chạy key của B."""
+    from api.scm_models import ScanSchedule
+    from api.services import ai_config
+    from api.services.llm_resolver import LLMContext, resolve, schedule_pin
+    cb, hb, ub, _ = who()
+    add(cb, hb, key=KEY_B)
+    repo = _repo(db())
+    sid = cb.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60}, headers=hb).json()["id"]
+    ca, ha, *_ = who()
+    assert ca.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 5}, headers=ha).status_code == 200
+    s = db().get(ScanSchedule, sid)
+    assert s.ai_owner_consent is False
+    ai_config.validate_and_save({"policy": {"scheduled_jobs_credential": "owner"}})
+    pol, owner, pin = schedule_pin(s.created_by_user_id, s.ai_credential_policy, s.ai_owner_consent)
+    assert (pol, owner, pin) == ("local_only", None, None)
+    r = resolve(LLMContext(feature="triage", user_id=None, job_kind="schedule", sched_policy=pol, sched_owner_id=owner,
+                           pinned_credential_id=pin))
+    assert r.code == "AI_NO_CREDENTIAL"                     # chạy local, không phải key của B
+    # chủ lưu lại → đồng ý → dùng key của chủ
+    assert cb.put(f"/api/scm/schedules/{sid}", json={"repo_id": repo, "interval_minutes": 60}, headers=hb).status_code == 200
+    s = db().get(ScanSchedule, sid)
+    assert schedule_pin(s.created_by_user_id, s.ai_credential_policy, s.ai_owner_consent)[0] == "owner"
+
+
+def test_reverify_schedule_delete_creator_or_admin_only(probe):
+    cb, hb, *_ = who()
+    repo = _repo(db())
+    sid = cb.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60}, headers=hb).json()["id"]
+    ca, ha, *_ = who()
+    assert ca.delete(f"/api/scm/schedules/{sid}", headers=ha).status_code == 403
+    ad, had, *_ = who(UserRole.ADMIN)
+    assert ad.delete(f"/api/scm/schedules/{sid}", headers=had).status_code == 204
+    sid2 = cb.post("/api/scm/schedules", json={"repo_id": repo, "interval_minutes": 60}, headers=hb).json()["id"]
+    assert cb.delete(f"/api/scm/schedules/{sid2}", headers=hb).status_code == 204
+
+
+def test_reverify_base_url_off_allows_resave_of_unchanged_url_only(probe):
+    from api.services import ai_config
+    ad, had, *_ = who(UserRole.ADMIN)
+    ai_config.validate_and_save({"openai": {"base_url": "https://llm.example.com/v1"}})
+    ai_config.validate_and_save({"policy": {"custom_base_url": "off"}})
+    ai_config.validate_and_save({"openai": {"base_url": "https://llm.example.com/v1", "model": "gpt-4o"}})   # không đổi → được
+    with pytest.raises(ValueError):
+        ai_config.validate_and_save({"openai": {"base_url": "https://other.example.com/v1"}})
+    assert ad.put("/api/ai/config", json={"openai": {"base_url": "https://other.example.com/v1"}}, headers=had).status_code == 422

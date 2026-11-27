@@ -108,7 +108,8 @@ async def run_repo_scan(repo_id: str, email_report: bool = False,
             pin = pin_for_user(user_id)
         else:
             sch = db.query(_Sch).filter(_Sch.id == schedule_id).first() if schedule_id else None
-            sp, so, pin = schedule_pin(getattr(sch, "created_by_user_id", None), getattr(sch, "ai_credential_policy", None))
+            sp, so, pin = schedule_pin(getattr(sch, "created_by_user_id", None), getattr(sch, "ai_credential_policy", None),
+                                     getattr(sch, "ai_owner_consent", True))
         scan = Scan(project_id=project.id, scan_number=next_number, scan_path=clone_dest,
                     scan_types=scan_types, status=ScanStatus.PENDING, triggered_by_user_id=user_id,
                     ai_credential_id=pin, ai_sched_policy=sp, ai_sched_owner_id=so)

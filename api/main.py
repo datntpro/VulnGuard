@@ -79,6 +79,7 @@ def _run_migrations():
             "ALTER TABLE pentest_runs ADD COLUMN ai_credential_id VARCHAR(36)",
             "ALTER TABLE scan_schedules ADD COLUMN created_by_user_id VARCHAR(64)",
             "ALTER TABLE scan_schedules ADD COLUMN ai_credential_policy VARCHAR(16)",
+            "ALTER TABLE scan_schedules ADD COLUMN ai_owner_consent BOOLEAN",
         ):
             try:
                 conn.execute(text(ddl))

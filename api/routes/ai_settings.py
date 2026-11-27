@@ -26,7 +26,8 @@ def _guard_urls(payload: Dict[str, Any]) -> None:
         if isinstance(payload.get("policy"), dict) else ai_policy.get_policy()
     oa = payload.get("openai")
     if isinstance(oa, dict) and (oa.get("base_url") or "").strip():
-        if pol["custom_base_url"] == "off":
+        if pol["custom_base_url"] == "off" and (oa["base_url"] or "").strip() != str(
+                (load_config().get("openai") or {}).get("base_url") or "").strip():
             raise HTTPException(status_code=422, detail="BAD_BASE_URL: custom base_url bị policy tắt")
         try:
             oa["base_url"] = url_guard.check_url(oa["base_url"], "cloud")

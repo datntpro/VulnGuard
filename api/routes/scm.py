@@ -184,17 +184,21 @@ def create_schedule(body: ScheduleUpsert, request: Request, db: Session = Depend
     s = ScanSchedule(repo_id=body.repo_id, interval_minutes=body.interval_minutes,
                      email_report=body.email_report, enabled=body.enabled,
                      created_by_user_id=getattr(getattr(request.state, "user", None), "id", None),
-                     ai_credential_policy=body.ai_credential_policy)
+                     ai_credential_policy=body.ai_credential_policy, ai_owner_consent=True)
     s.next_run_at = s.compute_next()
     db.add(s); db.commit(); db.refresh(s)
     return _sch_public(s)
 
 
-def _effective_owner_policy(s: ScanSchedule) -> bool:
-    """Lịch này sẽ chạy bằng key CÁ NHÂN của chủ lịch? (policy 'owner' riêng, hoặc 'inherit' + policy toàn cục 'owner')."""
+def _is_owner_key_policy(policy: Optional[str]) -> bool:
+    """Policy này (đã resolve 'inherit' theo policy toàn cục) sẽ chạy bằng key CÁ NHÂN của chủ lịch?"""
     from api.services import ai_policy
-    p = s.ai_credential_policy or "inherit"
+    p = policy or "inherit"
     return p == "owner" or (p == "inherit" and ai_policy.get_policy()["scheduled_jobs_credential"] == "owner")
+
+
+def _effective_owner_policy(s: ScanSchedule) -> bool:
+    return _is_owner_key_policy(s.ai_credential_policy)
 
 
 @router.put("/schedules/{sch_id}")
@@ -210,6 +214,9 @@ def update_schedule(sch_id: str, body: ScheduleUpsert, request: Request, db: Ses
     # [AI PR-3 / verify B1] chỉ CHỦ lịch được đặt/giữ policy 'owner' (key cá nhân của họ) — kể cả ADMIN không thể đặt cho người khác
     if body.ai_credential_policy == "owner" and not is_creator:
         raise HTTPException(403, "Chỉ người tạo lịch mới được dùng khoá AI cá nhân cho lịch này")
+    # [re-verify] kiểm policy MỚI sau resolve 'inherit': org/local_only → inherit khi policy toàn cục là 'owner' cũng là key cá nhân
+    if _is_owner_key_policy(body.ai_credential_policy) and not is_creator:
+        raise HTTPException(403, "Policy này sẽ chạy bằng khoá AI cá nhân của chủ lịch — chỉ chủ lịch được đặt")
     if _effective_owner_policy(s) and not is_creator:
         # lịch đang chạy bằng key cá nhân của người khác: chỉ được TẮT, hoặc chuyển sang org/local_only — không đổi tần suất/bật lại
         switching_away = body.ai_credential_policy in ("org", "local_only")
@@ -217,6 +224,8 @@ def update_schedule(sch_id: str, body: ScheduleUpsert, request: Request, db: Ses
         if not (switching_away or only_disable):
             raise HTTPException(403, "Lịch này chạy bằng khoá AI cá nhân của người khác — chỉ chủ lịch được sửa")
     s.ai_credential_policy = body.ai_credential_policy
+    # đồng ý dùng key cá nhân: chỉ chủ lịch lưu mới "đồng ý"; người khác sửa → thu hồi (chạy lúc run-time sẽ không dùng key chủ)
+    s.ai_owner_consent = bool(is_creator)
     s.interval_minutes = body.interval_minutes
     s.email_report = body.email_report
     s.enabled = body.enabled
@@ -226,8 +235,13 @@ def update_schedule(sch_id: str, body: ScheduleUpsert, request: Request, db: Ses
 
 
 @router.delete("/schedules/{sch_id}", status_code=204)
-def delete_schedule(sch_id: str, db: Session = Depends(get_db)):
+def delete_schedule(sch_id: str, request: Request, db: Session = Depends(get_db)):
+    from api.auth_models import UserRole
     s = db.query(ScanSchedule).filter(ScanSchedule.id == sch_id).first()
     if not s:
         raise HTTPException(404, "Lịch không tồn tại")
+    u = getattr(request.state, "user", None)
+    # Lịch là hạ tầng của tổ chức: chủ lịch hoặc ADMIN được xoá (lịch cũ không có chủ: như trước)
+    if s.created_by_user_id and getattr(u, "id", None) != s.created_by_user_id and getattr(u, "role", None) != UserRole.ADMIN:
+        raise HTTPException(403, "Chỉ chủ lịch hoặc ADMIN được xoá lịch")
     db.delete(s); db.commit()
