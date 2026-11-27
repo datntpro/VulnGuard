@@ -71,7 +71,7 @@ _SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{10,}"),
-    re.compile(r"\bsk-[A-Za-z0-9]{20,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"),   # gồm sk-proj-… / sk-svcacct-…
     re.compile(r"\bsk-or-v1-[A-Za-z0-9_\-]{20,}"),
     re.compile(r"\bABSK[A-Za-z0-9+/=_\-]{20,}"),         # Bedrock API key
     re.compile(r"\bksk_[A-Za-z0-9_\-]{16,}"),             # Kiro API key

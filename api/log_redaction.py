@@ -12,6 +12,12 @@ import traceback
 _installed = False
 _BEARER = re.compile(r"(?i)\b(bearer|x-api-key:?|api-key:?|authorization:?)\s+[A-Za-z0-9._~+/=\-]{8,}")
 _QS = re.compile(r"(?i)([?&](?:key|api[_-]?key|token|access_token|sig|signature)=)[^&\s'\"]+")
+# tên "giống khoá" + dấu : / = (cho phép dict-repr: 'x-api-key': 'abc') → che GIÁ TRỊ
+_KEYISH = re.compile(
+    r"""(?i)(\b(?:x-api-key|api[_-]?key|authorization|access[_-]?key|secret[_-]?key|client[_-]?secret|secret|token|password|passwd)"""
+    r"""['"]?\s*[:=]\s*['"]?)([^'"\s,}&)]{6,})""")
+# token entropy cao (chữ thường + HOA + số, ≥40 ký tự) đứng riêng — bắt khoá lạ; hash hex thường không dính
+_HIGH_ENTROPY = re.compile(r"\b(?=[A-Za-z0-9_\-]{40,}\b)(?=[A-Za-z0-9_\-]*\d)(?=[A-Za-z0-9_\-]*[a-z])(?=[A-Za-z0-9_\-]*[A-Z])[A-Za-z0-9_\-]{40,}")
 _NO_DEBUG_ENV = ("ANTHROPIC_LOG", "OPENAI_LOG")
 
 
@@ -23,6 +29,8 @@ def mask(text: str) -> str:
     for pat in cloud_ai._SECRET_PATTERNS:
         text = pat.sub("[REDACTED-KEY]", text)
     text = _BEARER.sub(lambda m: m.group(1) + " [REDACTED]", text)
+    text = _KEYISH.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = _HIGH_ENTROPY.sub("[REDACTED-KEY]", text)
     return _QS.sub(lambda m: m.group(1) + "[REDACTED]", text)
 
 

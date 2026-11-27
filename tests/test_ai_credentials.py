@@ -16,9 +16,12 @@ KEY = "sk-ant-api03-SECRETSECRETSECRET-9fA1"
 def db():
     from api.database import Base
     from api import ai_cred_models  # noqa: F401
-    eng = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    from sqlalchemy.pool import StaticPool
+    eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(eng, tables=[ai_cred_models.AiCredential.__table__, ai_cred_models.AiUsageEvent.__table__])
-    s = sessionmaker(bind=eng)()
+    sm = sessionmaker(bind=eng)
+    s = sm()
+    s._factory = sm
     yield s
     s.close()
 
@@ -338,3 +341,125 @@ def test_prompt_redaction_covers_new_patterns():
 def test_startup_does_not_raise_on_migration_error(svc, monkeypatch):
     monkeypatch.setattr(svc, "migrate_org_config", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     svc.startup()
+
+
+# ── verify round (PR114): B1 scope flip, B2 log patterns, S1 params, S2 replay, S3 sync ──────────────
+def _sql(db, q, **kw):
+    db.execute(text(q), kw)
+    db.commit()
+
+
+def test_b1_scope_flip_user_to_org_refused(svc, db):
+    from api.services.llm_resolver import RouteRefused
+    cid = _mk(svc, db, uid="u1")
+    _sql(db, "update ai_credentials set scope='org' where id=:i", i=cid)      # owner_user_id vẫn u1
+    for who in ("u1", "attacker", None):
+        with pytest.raises((svc.CredentialError, RouteRefused)):
+            svc.open_for_call(db, cid, _ctx(who))
+    _sql(db, "update ai_credentials set owner_user_id=NULL where id=:i", i=cid)  # lật cả owner
+    with pytest.raises(svc.CredentialError) as e:
+        svc.open_for_call(db, cid, _ctx("attacker"))
+    assert e.value.code == "AI_CRED_ENVELOPE_MISMATCH"
+
+
+def test_b1_org_row_cannot_be_created_from_user_path(svc, db):
+    with pytest.raises(svc.CredentialError) as e:
+        svc.create(db, scope="org", provider="anthropic", label="x", secret=KEY)
+    assert e.value.code == "AI_CRED_FORBIDDEN"
+    svc.create(db, scope="org", provider="anthropic", label="x", secret=KEY, admin_path=True)
+
+
+def test_b1_org_row_flipped_to_user_refused(svc, db):
+    m = svc.create(db, scope="org", provider="anthropic", label="o", secret=KEY, admin_path=True)
+    db.commit()
+    _sql(db, "update ai_credentials set scope='user', owner_user_id='u9' where id=:i", i=m["id"])
+    with pytest.raises(svc.CredentialError):
+        svc.open_for_call(db, m["id"], _ctx("u9"))
+
+
+def test_s1_base_url_edit_refused_and_update_params_reseals(svc, db):
+    cid = _mk(svc, db, provider="openai", params={"base_url": "https://gw.example/v1", "model": "gpt-4o"})
+    _sql(db, "update ai_credentials set params=:p where id=:i",
+         p=json.dumps({"base_url": "https://evil.example/v1", "model": "gpt-4o"}), i=cid)
+    with pytest.raises(svc.CredentialError) as e:
+        svc.open_for_call(db, cid, _ctx())
+    assert e.value.code == "AI_CRED_ENVELOPE_MISMATCH"
+    # đường hợp lệ: update_params (chủ đã mở được) re-seal → dùng được, và đổi model (không bị ràng buộc) không cần seal
+    cid2 = _mk(svc, db, provider="openai", label="b", params={"base_url": "https://gw.example/v1"})
+    svc.update_params(db, cid2, {"base_url": "https://gw2.example/v1"})
+    db.commit()
+    svc.open_for_call(db, cid2, _ctx())
+
+
+def test_s2_old_ciphertext_replay_after_rotate_refused(svc, db):
+    cid = _mk(svc, db)
+    old = db.execute(text("select secret_enc from ai_credentials where id=:i"), {"i": cid}).scalar()
+    svc.rotate(db, cid, "sk-ant-api03-NEWNEWNEWNEWNEW-abcd")
+    db.commit()
+    _sql(db, "update ai_credentials set secret_enc=:e where id=:i", e=old, i=cid)
+    with pytest.raises(svc.CredentialError) as e:
+        svc.open_for_call(db, cid, _ctx())
+    assert e.value.code == "AI_CRED_ENVELOPE_MISMATCH"
+
+
+def test_s2_revoked_row_cannot_be_resurrected(svc, db):
+    cid = _mk(svc, db)
+    old = db.execute(text("select secret_enc from ai_credentials where id=:i"), {"i": cid}).scalar()
+    svc.delete(db, cid)
+    db.commit()
+    _sql(db, "update ai_credentials set secret_enc=:e, status='valid' where id=:i", e=old, i=cid)
+    with pytest.raises(svc.CredentialError):
+        svc.open_for_call(db, cid, _ctx())
+
+
+def test_s3_legacy_save_syncs_org_row(svc, db, ai, monkeypatch):
+    from api.services.ai_config import get_api_key
+    monkeypatch.setattr("api.database.SessionLocal", db._factory)
+    _org_cfg(ai)
+    svc.migrate_org_config(db)
+    new = "sk-ant-api03-ROTATEDVIALEGACY-wxyz"
+    ai.validate_and_save({"anthropic": {"api_key": new, "model": "claude-x"}})
+    row = [r for r in svc.list_meta(db, scope="org") if r["provider"] == "anthropic"][0]
+    assert row["key_hint"] == "…wxyz" and row["params"]["model"] == "claude-x"
+    cred = svc.open_for_call(db, row["id"], _ctx("anyone"))
+    assert get_api_key("anthropic", cred._cfg()) == new
+    ai.validate_and_save({"anthropic": {"clear_api_key": True}})
+    row = [r for r in svc.list_meta(db, scope="org") if r["provider"] == "anthropic"][0]
+    assert row["has_secret"] is False
+
+
+def test_s3_skipped_provider_leaves_flag_unset(svc, db, ai, monkeypatch):
+    _org_cfg(ai)
+    import api.security as sec
+    real = sec.decrypt_secret
+    monkeypatch.setattr(sec, "decrypt_secret", lambda t: None if t else real(t))
+    svc.migrate_org_config(db)
+    assert not (ai.load_config().get("migrations") or {}).get("creds_v1")
+
+
+POCS = [
+    "openai sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+    "svc sk-svcacct-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+    "cfg api_key='Zk39fJQpw0aLmNcVb'",
+    "cfg api_key=\"plainSecretValue99\"",
+    "headers {'x-api-key': 'abc123DEF456ghi'}",
+    "headers {'Authorization': 'Bearer abcdefgh12345678'}",
+    "kwargs {'api_key': 'sk-proj-ZZZZZZZZZZZZZZZZZZZZZZZZ'}",
+    "blob aB3dE5gH7jK9mN1pQ3sT5vX7zA9cD1fG3hJ5kL7mN",   # token entropy cao, không có tên gợi ý
+]
+
+
+@pytest.mark.parametrize("line", POCS)
+def test_b2_log_pocs_masked(masked_log, caplog, line):
+    caplog.set_level(logging.DEBUG)
+    masked_log.info(line)
+    out = caplog.text
+    for leak in ("AbCdEfGhIjKl", "Zk39fJQpw0aLmNcVb", "plainSecretValue99", "abc123DEF456ghi",
+                 "abcdefgh12345678", "ZZZZZZZZZZZZ", "aB3dE5gH7jK9"):
+        assert leak not in out
+
+
+def test_b2_no_false_positive_on_hashes_and_plain_text(masked_log, caplog):
+    caplog.set_level(logging.DEBUG)
+    masked_log.info("sha %s scan done in 12s user=alice", "a" * 40)
+    assert "a" * 40 in caplog.text and "scan done" in caplog.text

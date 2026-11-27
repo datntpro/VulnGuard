@@ -37,6 +37,7 @@ class AiCredential(Base):
     provider = Column(String(30), nullable=False)
     label = Column(String(80), nullable=False)
     auth_mode = Column(String(30), nullable=False, default="api_key")
+    secret_gen = Column(Integer, nullable=False, default=1)         # thế hệ secret; nằm trong envelope → chống replay ciphertext cũ
     secret_enc = Column(Text, nullable=True)                       # null: keyless / tombstone
     key_hint = Column(String(8), nullable=False, default="")       # "…9fA1" (4 ký tự cuối)
     params = Column(JSON, nullable=False, default=dict)            # KHÔNG secret: model, region, base_url…

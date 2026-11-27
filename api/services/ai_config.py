@@ -126,6 +126,16 @@ _SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
 
 
 def validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = _validate_and_save(update)
+    try:   # [AI PR-2] đồng bộ một chiều sang ai_credentials (sau khi nhả lock)
+        from api.services import ai_credentials
+        ai_credentials.sync_after_save(cfg)
+    except Exception:
+        pass
+    return cfg
+
+
+def _validate_and_save(update: Dict[str, Any]) -> Dict[str, Any]:
     """Merge update vào config hiện tại, validate, mã hoá api_key mới (nếu có), ghi file."""
     with _lock:
         cfg = load_config()

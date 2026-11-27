@@ -59,24 +59,44 @@ def _owner_tag(owner_user_id: Optional[str]) -> str:
     return owner_user_id or ORG_OWNER
 
 
-def _seal(cid: str, owner_user_id: Optional[str], provider: str, secret: str) -> str:
-    env = {"v": ENVELOPE_VERSION, "cid": cid, "owner": _owner_tag(owner_user_id), "p": provider, "s": secret}
+# Tham số ảnh hưởng NƠI key được gửi tới → ràng buộc toàn vẹn vào envelope (sửa DB không đổi được host)
+_BOUND_PARAMS = ("base_url", "region", "deployment", "project", "location", "api_version", "endpoint", "aws_profile")
+
+
+def params_digest(params: Optional[Dict[str, Any]]) -> str:
+    sub = {k: (params or {}).get(k) for k in _BOUND_PARAMS if (params or {}).get(k) not in (None, "")}
+    return hashlib.sha256(json.dumps(sub, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _seal(row_id: str, scope: str, owner_user_id: Optional[str], provider: str, gen: int,
+          params: Optional[Dict[str, Any]], secret: str) -> str:
+    env = {"v": ENVELOPE_VERSION, "cid": row_id, "sc": scope, "owner": _owner_tag(owner_user_id), "p": provider,
+           "gen": gen, "pd": params_digest(params), "s": secret}
     return _box().encrypt(json.dumps(env).encode()).decode()
 
 
+def _check_shape(row) -> None:
+    """scope ⇔ owner: org không có chủ, user bắt buộc có chủ (chặn lật scope ngay cả khi envelope khớp)."""
+    if row.scope not in ("user", "org") or (row.scope == "org") != (row.owner_user_id is None):
+        logger.error("[ai-cred] hàng %s có scope/owner không hợp lệ — từ chối", row.id)
+        raise CredentialError("AI_CRED_ENVELOPE_MISMATCH")
+
+
 def _open_envelope(row) -> str:
-    """Giải mã + ASSERT envelope khớp hàng. Fail-closed: mọi lỗi → CredentialError (không lộ chi tiết)."""
+    """Giải mã + ASSERT envelope khớp hàng (cid, scope, owner, provider, generation, params). Fail-closed."""
     if not row.secret_enc:
         raise CredentialError("AI_CRED_NO_SECRET")
+    _check_shape(row)
     try:
         env = json.loads(_box().decrypt(row.secret_enc.encode()).decode())
     except (InvalidToken, ValueError, UnicodeError):
         logger.error("[ai-cred] không giải mã được credential %s (secret key đã đổi?)", row.id)
         raise CredentialError("AI_CRED_DECRYPT_FAILED") from None
     if (not isinstance(env, dict) or env.get("v") != ENVELOPE_VERSION or env.get("cid") != row.id
-            or env.get("owner") != _owner_tag(row.owner_user_id) or env.get("p") != row.provider
-            or not isinstance(env.get("s"), str)):
-        logger.error("[ai-cred] envelope không khớp hàng %s — từ chối (ciphertext bị hoán đổi?)", row.id)
+            or env.get("sc") != row.scope or env.get("owner") != _owner_tag(row.owner_user_id)
+            or env.get("p") != row.provider or env.get("gen") != row.secret_gen
+            or env.get("pd") != params_digest(row.params) or not isinstance(env.get("s"), str)):
+        logger.error("[ai-cred] envelope không khớp hàng %s — từ chối (hoán đổi/replay/sửa params?)", row.id)
         raise CredentialError("AI_CRED_ENVELOPE_MISMATCH")
     return env["s"]
 
@@ -127,18 +147,23 @@ def _audit(action: str, actor: Optional[str], row, outcome: str = "ok") -> None:
 def create(db, *, scope: str, provider: str, label: str, auth_mode: str = "api_key",
            secret: Optional[str] = None, owner_user_id: Optional[str] = None,
            params: Optional[Dict[str, Any]] = None, is_default: bool = False,
-           created_by: Optional[str] = None, status: str = "unknown") -> Dict[str, Any]:
+           created_by: Optional[str] = None, status: str = "unknown",
+           admin_path: bool = False) -> Dict[str, Any]:
+    """`admin_path=True` chỉ dành cho migration / đường ADMIN (PR-3): hàng scope='org' không tạo được từ đường user."""
     from api.ai_cred_models import AiCredential, PROVIDERS, SCOPES
     if scope not in SCOPES or provider not in PROVIDERS:
         raise CredentialError("AI_CRED_BAD_ARGUMENT")
     if (scope == "org") != (owner_user_id is None):
         raise CredentialError("AI_CRED_BAD_ARGUMENT")      # org ⇒ không chủ; user ⇒ bắt buộc có chủ
+    if scope == "org" and not admin_path:
+        raise CredentialError("AI_CRED_FORBIDDEN")
     cid = str(uuid.uuid4())
+    params = dict(params or {})
     row = AiCredential(
         id=cid, scope=scope, owner_user_id=owner_user_id, provider=provider, label=label[:80],
-        auth_mode=auth_mode, params=dict(params or {}), is_default=bool(is_default and owner_user_id),
-        status=status, created_by=created_by,
-        secret_enc=_seal(cid, owner_user_id, provider, secret) if secret else None,
+        auth_mode=auth_mode, params=params, is_default=bool(is_default and owner_user_id),
+        status=status, created_by=created_by, secret_gen=1,
+        secret_enc=_seal(cid, scope, owner_user_id, provider, 1, params, secret) if secret else None,
         key_hint=_hint(secret))
     db.add(row)
     db.flush()
@@ -153,7 +178,9 @@ def rotate(db, cred_id: str, new_secret: str, actor: Optional[str] = None) -> Di
     row = _get(db, cred_id)
     if row.status in ("revoked", "disabled"):
         raise CredentialError("AI_CRED_REVOKED")
-    row.secret_enc = _seal(row.id, row.owner_user_id, row.provider, new_secret)
+    _check_shape(row)
+    row.secret_gen = (row.secret_gen or 1) + 1          # ciphertext cũ (gen cũ) không còn mở được
+    row.secret_enc = _seal(row.id, row.scope, row.owner_user_id, row.provider, row.secret_gen, row.params, new_secret)
     row.key_hint = _hint(new_secret)
     row.rotated_at = datetime.utcnow()
     row.status, row.last_error_code = "unknown", None
@@ -165,6 +192,7 @@ def rotate(db, cred_id: str, new_secret: str, actor: Optional[str] = None) -> Di
 def _tombstone(db, cred_id: str, status: str, action: str, actor: Optional[str]) -> Dict[str, Any]:
     row = _get(db, cred_id)
     row.secret_enc = None            # xoá secret NGAY; hàng còn lại để audit/usage resolve id
+    row.secret_gen = (row.secret_gen or 1) + 1   # đặt lại status + dán ciphertext cũ cũng không sống lại được
     row.status, row.is_default = status, False
     row.status_changed_at = datetime.utcnow()
     db.flush()
@@ -204,6 +232,22 @@ def purge_expired(db, now: Optional[datetime] = None) -> int:
     return n
 
 
+def update_params(db, cred_id: str, params: Dict[str, Any], actor: Optional[str] = None) -> Dict[str, Any]:
+    """Đổi params (vd base_url): mở envelope rồi RE-SEAL với digest mới. Không có secret → chỉ lưu params."""
+    row = _get(db, cred_id)
+    if row.status in ("revoked", "disabled"):
+        raise CredentialError("AI_CRED_REVOKED")
+    _check_shape(row)
+    secret = _open_envelope(row) if row.secret_enc else None
+    row.params = dict(params or {})
+    if secret is not None:
+        row.secret_gen = (row.secret_gen or 1) + 1
+        row.secret_enc = _seal(row.id, row.scope, row.owner_user_id, row.provider, row.secret_gen, row.params, secret)
+    db.flush()
+    _audit("update_params", actor, row)
+    return _meta(row)
+
+
 def list_meta(db, *, owner_user_id: Optional[str] = None, scope: Optional[str] = None) -> List[Dict[str, Any]]:
     from api.ai_cred_models import AiCredential
     q = db.query(AiCredential)
@@ -221,6 +265,7 @@ def open_for_call(db, cred_id: str, ctx):
     row = _get(db, cred_id)
     if row.status in ("revoked", "disabled"):
         raise RouteRefused(AI_CRED_REVOKED, "ai.error.cred_revoked")
+    _check_shape(row)
     if row.scope == "user" and (ctx is None or getattr(ctx, "user_id", None) != row.owner_user_id):
         raise RouteRefused(AI_CRED_FORBIDDEN, "ai.error.cred_forbidden")
     secret = _open_envelope(row) if row.secret_enc else None
@@ -243,46 +288,85 @@ def _org_params(provider: str, sec: Dict[str, Any]) -> Dict[str, Any]:
     return {k: sec[k] for k in keys if k in sec and sec[k] not in (None, "")}
 
 
-def migrate_org_config(db=None, cfg: Optional[Dict[str, Any]] = None) -> int:
-    """Chuyển section provider của ai_config.json → ai_credentials(scope='org'). Idempotent: chạy lại khi cờ
-    `migrations.creds_v1` đã bật là no-op. Lỗi giữa chừng → rollback, cờ KHÔNG bật, api_key_enc cũ nguyên vẹn.
-    Trả số hàng đã tạo."""
-    from api.services import ai_config
+def _upsert_org(db, provider: str, sec: Dict[str, Any], selected: Optional[str]) -> Optional[str]:
+    """Đồng bộ MỘT section provider của ai_config → hàng org. Trả id hàng, hoặc None nếu không có gì để lưu /
+    không giải mã được key cũ (khi đó trả "SKIP" qua ngoại lệ không dùng — xem migrate: skipped đếm riêng)."""
+    from api.ai_cred_models import AiCredential
     from api.security import decrypt_secret
+    enc = sec.get("api_key_enc")
+    auth_mode = sec.get("auth_mode") or "api_key"
+    keyless = (provider == selected and
+               ((provider == "anthropic" and auth_mode in _KEYLESS_ANTHROPIC) or
+                (provider == "bedrock" and auth_mode in _KEYLESS_BEDROCK)))
+    row = db.query(AiCredential).filter(AiCredential.scope == "org", AiCredential.provider == provider).first()
+    if not enc and not keyless and row is None:
+        return None
+    plain = decrypt_secret(enc) if enc else None
+    if enc and not plain:
+        raise _Skip(provider)
+    params = _org_params(provider, sec)
+    if row is None:
+        return create(db, scope="org", provider=provider, label=f"Org – {provider}", auth_mode=auth_mode,
+                      secret=plain, params=params, created_by=None, admin_path=True)["id"]
+    if row.status in ("revoked", "disabled"):
+        return row.id                                   # admin đã thu hồi — không tự sống lại
+    # một chiều legacy → hàng: cập nhật khi key / auth_mode / params đổi, hoặc key bị xoá
+    cur = _open_envelope(row) if row.secret_enc else None
+    if cur != plain or (row.params or {}) != params or row.auth_mode != auth_mode:
+        row.auth_mode = auth_mode
+        row.params = params
+        row.secret_gen = (row.secret_gen or 1) + 1
+        row.secret_enc = _seal(row.id, row.scope, None, provider, row.secret_gen, params, plain) if plain else None
+        row.key_hint = _hint(plain)
+        row.rotated_at = datetime.utcnow() if cur != plain else row.rotated_at
+        db.flush()
+        _audit("sync_from_config", None, row)
+    return row.id
+
+
+class _Skip(Exception):
+    pass
+
+
+def _sync(db, cfg: Dict[str, Any]) -> Dict[str, str]:
+    from api.services import ai_config
+    selected = cfg.get("provider")
+    ids: Dict[str, str] = {}
+    skipped = []
+    for provider in ai_config.PROVIDERS:
+        sec = cfg.get(provider)
+        if not isinstance(sec, dict):
+            continue
+        try:
+            rid = _upsert_org(db, provider, sec, selected)
+        except _Skip:
+            logger.error("[ai-cred] bỏ qua migrate %s: không giải mã được api_key_enc cũ", provider)
+            skipped.append(provider)
+            continue
+        if rid:
+            ids[provider] = rid
+    ids["_skipped"] = ",".join(skipped)
+    return ids
+
+
+def _open_session(db):
+    if db is not None:
+        return db, False
+    from api.database import SessionLocal
+    return SessionLocal(), True
+
+
+def migrate_org_config(db=None, cfg: Optional[Dict[str, Any]] = None) -> int:
+    """Chuyển section provider của ai_config.json → ai_credentials(scope='org'). Idempotent: cờ
+    `migrations.creds_v1` đã bật ⇒ no-op. Lỗi giữa chừng → rollback, cờ KHÔNG bật, api_key_enc cũ nguyên vẹn.
+    Provider bị bỏ qua (không giải mã được key cũ) ⇒ cờ KHÔNG bật để lần boot sau thử lại. Trả số hàng tạo/đồng bộ."""
+    from api.services import ai_config
     cfg = cfg if cfg is not None else ai_config.load_config()
     if (cfg.get("migrations") or {}).get("creds_v1"):
         return 0
-    own = db is None
-    if own:
-        from api.database import SessionLocal
-        db = SessionLocal()
+    db, own = _open_session(db)
     try:
-        from api.ai_cred_models import AiCredential
-        selected = cfg.get("provider")
-        created: Dict[str, str] = {}
-        for provider in ai_config.PROVIDERS:
-            sec = cfg.get(provider)
-            if not isinstance(sec, dict):
-                continue
-            enc = sec.get("api_key_enc")
-            auth_mode = sec.get("auth_mode") or "api_key"
-            keyless = (provider == selected and
-                       ((provider == "anthropic" and auth_mode in _KEYLESS_ANTHROPIC) or
-                        (provider == "bedrock" and auth_mode in _KEYLESS_BEDROCK)))
-            if not enc and not keyless:
-                continue
-            existing = db.query(AiCredential).filter(AiCredential.scope == "org",
-                                                     AiCredential.provider == provider).first()
-            if existing:                       # đã có (chạy dở lần trước mà chưa kịp bật cờ) → dùng lại
-                created[provider] = existing.id
-                continue
-            plain = decrypt_secret(enc) if enc else None
-            if enc and not plain:
-                logger.error("[ai-cred] bỏ qua migrate %s: không giải mã được api_key_enc cũ", provider)
-                continue
-            meta = create(db, scope="org", provider=provider, label=f"Org – {provider}", auth_mode=auth_mode,
-                          secret=plain, params=_org_params(provider, sec), created_by=None)
-            created[provider] = meta["id"]
+        ids = _sync(db, cfg)
         db.commit()
     except Exception:
         db.rollback()
@@ -291,13 +375,40 @@ def migrate_org_config(db=None, cfg: Optional[Dict[str, Any]] = None) -> int:
     finally:
         if own:
             db.close()
+    skipped = ids.pop("_skipped", "")
 
     def _flag(c):
-        c.setdefault("migrations", {})["creds_v1"] = True
-        if selected in created:
-            c["org_credential_id"] = created[selected]
+        if not skipped:
+            c.setdefault("migrations", {})["creds_v1"] = True
+        sel = cfg.get("provider")
+        if sel in ids:
+            c["org_credential_id"] = ids[sel]
     ai_config.update_raw(_flag)
-    return len(created)
+    return len(ids)
+
+
+def sync_after_save(cfg: Dict[str, Any]) -> None:
+    """Gọi sau `ai_config.validate_and_save` (khi đã migrate): hàng org luôn theo config cũ — MỘT chiều, tránh
+    key lệch khi PR-3 chuyển resolver sang hàng. Lỗi sync không làm hỏng việc lưu config."""
+    if not (cfg.get("migrations") or {}).get("creds_v1"):
+        return
+    db = None
+    try:
+        db, _ = _open_session(None)
+        ids = _sync(db, cfg)
+        db.commit()
+        ids.pop("_skipped", None)
+        sel = cfg.get("provider")
+        if sel in ids and cfg.get("org_credential_id") != ids[sel]:
+            from api.services import ai_config
+            ai_config.update_raw(lambda c: c.__setitem__("org_credential_id", ids[sel]))
+    except Exception:
+        if db is not None:
+            db.rollback()
+        logger.exception("[ai-cred] sync org credential sau khi lưu config thất bại")
+    finally:
+        if db is not None:
+            db.close()
 
 
 def startup() -> None:
