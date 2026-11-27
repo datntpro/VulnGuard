@@ -7,7 +7,7 @@
  *                  giá trị chưa lưu, tool-calling check… hiển thị "chưa khả dụng" (KHÔNG giả thành công) và 2 tab
  *                  cũ vẫn truy cập được (cờ body.ai-legacy-on). Khi PR-3 land, trang tự chuyển sang "contract".
  * Bí mật: ô key là type=password, đọc vào body request tại thời điểm gửi, xoá ô ngay sau khi gửi; không giữ trong
- * biến/State, không localStorage, không in ra toast/lỗi (lỗi đi qua maskSecrets + mã chuẩn hoá).
+ * biến/State, không localStorage, không in ra toast/lỗi (lỗi chỉ hiển thị mã chuẩn hoá đã map sang chuỗi i18n, không bao giờ render text của server/provider).
  */
 (function () {
   'use strict';
@@ -86,7 +86,7 @@
   }
   async function setLang(l) {
     S.lang = l; try { localStorage.setItem('vg-ai-lang', l); } catch (e) { /* ignore */ }
-    await loadDict(l); applyLang();
+    await loadDict(l); applyLang(); $('aiu-cloud-res').classList.add('aiu-hide');   // kết quả test cũ đã render bằng ngôn ngữ trước
     if (S.data) { fillOllamaSelects(val('aiu-ol-model'), val('aiu-ol-vision')); renderAll(); updateDirty(); }
   }
 
@@ -94,8 +94,6 @@
   const role = () => (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || 'ADMIN';   // auth tắt → như canAdmin()
   const isAdmin = () => role() === 'ADMIN';
   const isViewer = () => role() === 'VIEWER';
-  const SECRET_RE = /(sk-[A-Za-z0-9_-]{6,}|ABSK[A-Za-z0-9+/=_-]{6,}|ksk_[\w-]{6,}|AIza[\w-]{10,}|gh[pous]_\w{10,}|github_pat_\w+|Bearer\s+\S+|api[-_ ]?key[=: ]+\S+)/gi;
-  const maskSecrets = (s) => String(s == null ? '' : s).replace(SECRET_RE, '••••').slice(0, 240);
 
   async function aiApi(path, opts) {
     opts = opts || {};
@@ -107,14 +105,22 @@
     try { data = r.status === 204 ? null : await r.json(); } catch (e) { data = null; }
     return { ok: r.ok, status: r.status, data };
   }
+  // CHỈ hiển thị mã lỗi đã map sang chuỗi i18n của UI; không bao giờ render text do server/provider trả về.
+  const KNOWN_CODE = /^[A-Z][A-Z0-9_]{1,40}$/;
+  function codeOf(r) {
+    const d = r && r.data; if (!d || typeof d !== 'object') return null;
+    let c = d.code || (d.detail && typeof d.detail === 'object' && d.detail.code) || null;
+    if (!c && typeof d.error === 'string') { const m = /^\[([A-Za-z_]+)\]/.exec(d.error); if (m) c = m[1]; }   // tiền tố "[auth_failed] …" của PR-0: chỉ lấy mã
+    c = typeof c === 'string' ? c.toUpperCase() : null;
+    return c && KNOWN_CODE.test(c) ? c : null;
+  }
   function errText(r) {
     if (!r) return t('err.generic');
-    const code = r.data && (r.data.code || (r.data.detail && r.data.detail.code));
+    const code = codeOf(r);
     if (code && S.dict.vi['code.' + code] !== undefined) return t('code.' + code);
     if (r.status === 403) return t('err.forbidden');
     if (r.status === 404 || r.status === 405 || r.status === 501) return t('err.unavailable');
     if (r.status === 429) return t('err.throttled');
-    if (r.status === 422 && r.data && typeof r.data.detail === 'string') return maskSecrets(r.data.detail);
     return t('err.generic');
   }
   function rel(iso) {
@@ -372,7 +378,7 @@
       return;
     }
     const li = [];
-    if (c.ok === false && c.code) li.push(checkItem('x', t('ckConn') + ': ' + errText({ data: { code: c.code } })));
+    if (c.ok === false) li.push(checkItem('x', t('ckConn') + ': ' + errText({ data: c })));
     else li.push(checkItem('ok', t('ck1', { ms: c.latency_ms == null ? '—' : c.latency_ms, v: c.version || '—' })));
     if (c.model_loaded === true) li.push(checkItem('ok', t('ck2')));
     else if (c.model_loaded === false) li.push(checkItem('x', t('ck2no')));
@@ -636,7 +642,7 @@
         const bits = [(PROV_NAME[d.provider] || d.provider || ''), d.model, d.latency_ms != null ? d.latency_ms + ' ms' : null, d.json === true ? 'JSON ✓' : d.json === false ? 'JSON ✗' : null, d.tools === true ? 'tools ✓' : d.tools === false ? 'tools ✗' : null].filter(Boolean);
         showRes(el, d.tools === false ? 'warn' : 'ok', '✓ ' + bits.join(' · '));
       } else if (r.ok && d.ok === false) {
-        showRes(el, 'err', '✗ ' + (d.code ? errText({ data: { code: d.code } }) : maskSecrets(d.error || t('err.generic'))));
+        showRes(el, 'err', '✗ ' + errText({ status: r.status, data: d }));
       } else showRes(el, 'err', '✗ ' + errText(r));
     } catch (e) { showRes(el, 'err', '✗ ' + t('err.network')); }
     btn.disabled = !isAdmin();
@@ -755,7 +761,7 @@
       setMineMsg(t('testing'));
       try { const r = await aiApi('/api/me/ai-credentials/' + encodeURIComponent(id) + '/test', { method: 'POST' }); const d = r.data || {};
         if (r.ok && d.ok) setMineMsg('✓ ' + [d.model, d.latency_ms != null ? d.latency_ms + ' ms' : null, d.tools === true ? 'tools ✓' : null].filter(Boolean).join(' · '));
-        else setMineMsg('✗ ' + (d.code ? errText({ data: { code: d.code } }) : errText(r)), true);
+        else setMineMsg('✗ ' + errText({ status: r.status, data: d }), true);
       } catch (e) { setMineMsg('✗ ' + t('err.network'), true); }
       await loadCreds(); await refreshMe(); return;
     }

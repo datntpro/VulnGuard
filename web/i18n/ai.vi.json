@@ -234,5 +234,6 @@
  "code.UNKNOWN": "Lỗi không xác định.",
  "t3cw": "Co-work",
  "routeLocal": "Local (mặc định)",
- "routeCloud": "Cloud"
+ "routeCloud": "Cloud",
+ "code.AUTH_FAILED": "Key bị từ chối (401). Tạo key mới ở trang quản trị của provider rồi bấm Thay."
 }

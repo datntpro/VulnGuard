@@ -234,5 +234,6 @@
  "title": "AI",
  "t3cw": "Co-work",
  "routeLocal": "Local (default)",
- "routeCloud": "Cloud"
+ "routeCloud": "Cloud",
+ "code.AUTH_FAILED": "Key rejected (401). Create a new key in the provider's console, then press Replace."
 }

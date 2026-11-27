@@ -577,3 +577,72 @@ def test_cowork_row_in_hybrid_rules_is_selectable_default_local(base_url, browse
         assert c.calls("PUT", "/api/ai/settings")[0][2]["hybrid"]["tasks"] == {"coworker": "cloud"}
     finally:
         ctx.close()
+
+
+LEAK_KEY = "sk-ant-api03-LEAKEDKEY-ZZZ999888777"
+LEAK_URL = "https://evil.example/v1/messages?token=LEAKEDTOKEN123"
+LEAK_BODY = f"Error code: 401 - invalid x-api-key {LEAK_KEY} at {LEAK_URL} request_id=req_LEAK"
+
+
+def _no_leak(page):
+    html = page.evaluate("() => document.documentElement.outerHTML + ' ' + [...document.querySelectorAll('input,textarea')].map(e => e.value).join(' ')")
+    for bad in ("LEAKEDKEY", "LEAKEDTOKEN", "evil.example", "req_LEAK", "invalid x-api-key", "Error code: 401"):
+        assert bad not in html, bad
+
+
+def test_server_error_text_is_never_rendered_only_mapped_codes(base_url, browser):
+    ctx, page, c = open_ai(browser, base_url, UserRole.ADMIN)
+    try:
+        # 1) ok:false + code + text của provider → chỉ câu i18n của UI
+        c.test_result = {"ok": False, "provider": "anthropic", "code": "INVALID_KEY", "error": LEAK_BODY}
+        page.click("#aiu-cloud-test"); page.wait_for_selector("#aiu-cloud-res.err")
+        assert "401" in page.locator("#aiu-cloud-res").inner_text()
+        _no_leak(page)
+        # 2) code lạ + message → câu chung đã dịch
+        c.test_result = {"ok": False, "code": "WEIRD_NEW_CODE", "error": LEAK_BODY, "message": LEAK_BODY}
+        page.click("#aiu-cloud-test"); page.wait_for_function("() => document.querySelector('#aiu-cloud-res').innerText.includes('Có lỗi xảy ra')")
+        _no_leak(page)
+        # 3) chỉ có text thô, không có code (backend cũ) → câu chung
+        c.test_result = {"ok": False, "provider": "anthropic", "error": LEAK_BODY}
+        page.click("#aiu-cloud-test"); page.wait_for_function("() => document.querySelector('#aiu-cloud-res').innerText.includes('Có lỗi xảy ra')")
+        _no_leak(page)
+        # 4) tiền tố "[auth_failed] …" → chỉ lấy mã
+        c.test_result = {"ok": False, "provider": "anthropic", "error": "[auth_failed] " + LEAK_BODY}
+        page.click("#aiu-cloud-test"); page.wait_for_function("() => document.querySelector('#aiu-cloud-res').innerText.includes('401')")
+        _no_leak(page)
+        # 5) HTTP 500/422 với body có detail chứa key + URL
+        page.route("**/api/ai/test", lambda r: r.fulfill(status=500, content_type="application/json", body=json.dumps({"detail": LEAK_BODY})))
+        page.click("#aiu-cloud-test"); page.wait_for_function("() => document.querySelector('#aiu-cloud-res').innerText.includes('Có lỗi xảy ra')")
+        _no_leak(page)
+        # 6) EN: chuỗi chung bằng tiếng Anh
+        page.click('#aiu-lang [data-v="en"]')
+        page.wait_for_selector("#aiu-cloud-res", state="hidden")
+        page.click("#aiu-cloud-test")
+        page.wait_for_function("() => document.querySelector('#aiu-cloud-res').innerText.includes('Something went wrong')")
+        _no_leak(page)
+        # 7) lưu thất bại (422 + detail có key/URL) → toast chung
+        page.route("**/api/ai/settings", lambda r: r.fulfill(status=422, content_type="application/json", body=json.dumps({"detail": LEAK_BODY})) if r.request.method == "PUT" else r.fallback())
+        page.fill("#aiu-h-lo", "20"); page.click("#aiu-save")
+        page.wait_for_selector("#toast-stack .toast.error")
+        _no_leak(page)
+        assert page.locator("#toast-stack .toast.error").inner_text().strip() != ""
+        # 8) Ollama check lỗi + text, và Test 1 khoá cá nhân
+        c.check_result = {"ok": False, "code": "NETWORK", "error": LEAK_BODY}
+        page.click("#aiu-ol-test"); page.wait_for_selector("#aiu-ol-checks li.x")
+        _no_leak(page)
+    finally:
+        ctx.close()
+    ctx, page, c = open_ai(browser, base_url, UserRole.ANALYST, settings=settings_fixture("ANALYST"))
+    try:
+        c.test_result = {"ok": False, "code": "NO_MODEL_ACCESS", "error": LEAK_BODY}
+        page.wait_for_selector("#aiu-mine-table tr[data-id]")
+        page.click('#aiu-mine-table tr[data-id="c1"] [data-act=c-test]')
+        page.wait_for_function("() => document.querySelector('#aiu-mine-msg').textContent.includes('✗')")
+        _no_leak(page)
+        # tạo khoá thất bại: server trả text chứa key/URL
+        c.create_result = ({"detail": LEAK_BODY}, 422)
+        page.click("#aiu-add-btn"); page.fill("#aiu-add-key", SECRET); page.click("#aiu-add-go")
+        page.wait_for_function("() => document.querySelector('#aiu-add-err').textContent.trim() !== ''")
+        _no_leak(page)
+    finally:
+        ctx.close()
