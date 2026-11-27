@@ -73,6 +73,12 @@ def _run_migrations():
             "ALTER TABLE pentest_runs ADD COLUMN scope_snapshot TEXT",  # 1.7 audit
             "ALTER TABLE scans ADD COLUMN triggered_by_user_id VARCHAR(64)",  # [AI PR-1]
             "ALTER TABLE agent_conversations ADD COLUMN owner_user_id VARCHAR(64)",  # [AI PR-1]
+            "ALTER TABLE agent_conversations ADD COLUMN route_kind VARCHAR(8)",  # [AI PR-3b]
+            "ALTER TABLE agent_conversations ADD COLUMN provider VARCHAR(32)",
+            "ALTER TABLE agent_conversations ADD COLUMN model VARCHAR(120)",
+            "ALTER TABLE agent_conversations ADD COLUMN ai_credential_id VARCHAR(36)",
+            "ALTER TABLE agent_conversations ADD COLUMN transcript JSON",
+            "ALTER TABLE agent_conversations ADD COLUMN cloud_state JSON",
             "ALTER TABLE scans ADD COLUMN ai_credential_id VARCHAR(36)",  # [AI PR-3]
             "ALTER TABLE scans ADD COLUMN ai_sched_policy VARCHAR(16)",
             "ALTER TABLE scans ADD COLUMN ai_sched_owner_id VARCHAR(64)",

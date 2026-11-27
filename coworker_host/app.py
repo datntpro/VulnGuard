@@ -48,7 +48,7 @@ logging.basicConfig(level=logging.INFO)
 # Cấu hình / persistence
 # ─────────────────────────────────────────────────────────────
 DATA_DIR = Path(os.environ.get("COWORKER_DATA_DIR", str(Path.home() / ".vulnguard_coworker")))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Import KHÔNG được có tác dụng phụ lên filesystem (tạo thư mục/sinh token): mọi thứ làm lười, khi host thật sự chạy.
 FOLDERS_FILE = DATA_DIR / "folders.json"
 WHITELIST_FILE = DATA_DIR / "whitelist.json"
 
@@ -79,6 +79,13 @@ DANGEROUS_PATTERNS = [
 _DANGEROUS_RE = re.compile("|".join(DANGEROUS_PATTERNS))
 
 app = FastAPI(title="VulnGuard Coworker Host", version="1.0.0")
+
+
+@app.on_event("startup")
+def _startup_materialize():
+    """Host thật sự chạy: tạo thư mục dữ liệu + token (in hướng dẫn nếu phải tự sinh)."""
+    _ensure_data_dir()
+    get_token()
 
 
 class CodedError(Exception):
@@ -117,6 +124,7 @@ def _effective_token() -> str:
     if not tok:
         tok = _secrets.token_urlsafe(32)
         try:
+            _ensure_data_dir()
             _TOKEN_FILE.write_text(tok)
             os.chmod(_TOKEN_FILE, 0o600)
         except Exception:
@@ -127,7 +135,21 @@ def _effective_token() -> str:
     return tok
 
 
-COWORKER_TOKEN = _effective_token()
+_TOKEN_CACHE: Optional[str] = None
+
+
+def get_token() -> str:
+    """Token của host — sinh/đọc LẦN ĐẦU khi cần (khởi động hoặc request đầu), không phải lúc import."""
+    global _TOKEN_CACHE
+    if _TOKEN_CACHE is None:
+        _TOKEN_CACHE = _effective_token()
+    return _TOKEN_CACHE
+
+
+def __getattr__(name):      # PEP 562: `coworker_host.app.COWORKER_TOKEN` vẫn dùng được, nhưng chỉ tính khi được hỏi
+    if name == "COWORKER_TOKEN":
+        return get_token()
+    raise AttributeError(name)
 
 # Host được phép (chống DNS rebinding): chỉ localhost/loopback + host.docker.internal.
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1", "host.docker.internal"}
@@ -165,7 +187,7 @@ async def _guard(request, call_next):
     if request.url.path not in _PUBLIC_PATHS:
         auth = request.headers.get("authorization") or ""
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        if not token or not hmac.compare_digest(token, COWORKER_TOKEN):
+        if not token or not hmac.compare_digest(token, get_token()):
             return JSONResponse(status_code=401, content={"detail": "Thiếu/sai token (Authorization: Bearer <VULNGUARD_COWORKER_TOKEN>)"})
     return await call_next(request)
 
@@ -183,7 +205,12 @@ def _load_json(path: Path, default):
         return default
 
 
+def _ensure_data_dir() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
 def _save_json(path: Path, data):
+    _ensure_data_dir()
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -474,6 +501,32 @@ def _looks_binary(raw: bytes) -> bool:
         return True
 
 
+def _path_meta(folder: dict, rel_path: str, target: Path) -> dict:
+    """[AI PR-3b] Thông tin đường dẫn THẬT của file sắp đọc (cho cổng đường dẫn nhạy cảm của Co-work cloud):
+    đường dẫn đã resolve (tương đối root), có symlink ở BẤT KỲ thành phần nào không, có hard link (nlink>1) không."""
+    root = Path(folder["path"]).resolve()
+    try:
+        resolved = target.relative_to(root).as_posix()
+    except ValueError:
+        resolved = ""
+    link = False
+    cur = root
+    for part in [x for x in (rel_path or "").replace("\\", "/").split("/") if x not in ("", ".")]:
+        cur = cur / part
+        try:
+            if cur.is_symlink():
+                link = True
+                break
+        except OSError:
+            link = True
+            break
+    try:
+        hard = target.stat().st_nlink > 1
+    except OSError:
+        hard = False
+    return {"resolved": resolved, "symlink": link, "hardlink": hard}
+
+
 @app.get("/fs/file")
 def fs_read_file(folder_id: str, path: str):
     folder = _get_folder(folder_id)
@@ -487,9 +540,10 @@ def fs_read_file(folder_id: str, path: str):
 
     raw = target.read_bytes()
     if _looks_binary(raw):
-        return {"path": path, "binary": True, "content": None, "size": size}
+        return {"path": path, "binary": True, "content": None, "size": size, **_path_meta(folder, path, target)}
 
-    return {"path": path, "binary": False, "content": raw.decode("utf-8"), "size": size}
+    return {"path": path, "binary": False, "content": raw.decode("utf-8"), "size": size,
+            **_path_meta(folder, path, target)}
 
 
 @app.get("/fs/file_b64")
@@ -505,7 +559,8 @@ def fs_read_file_b64(folder_id: str, path: str):
     if size > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"File quá lớn ({size} bytes, giới hạn {MAX_FILE_BYTES})")
     raw = target.read_bytes()
-    return {"path": path, "size": size, "b64": base64.b64encode(raw).decode("ascii")}
+    return {"path": path, "size": size, "b64": base64.b64encode(raw).decode("ascii"),
+            **_path_meta(folder, path, target)}
 
 
 _WRITE_DENY_DIRS = {".git", ".husky", ".vscode", ".idea", ".direnv"}
