@@ -118,6 +118,13 @@ def _location(g: dict) -> str:
     return out or "—"
 
 
+def _fmt_cvss(x) -> str:
+    try:
+        return f"{float(x):.1f}"
+    except (TypeError, ValueError):
+        return str(x)
+
+
 def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[str, int],
            vulns: list) -> str:
     from api.routes.report import _md_lite          # tái dùng markdown-lite
@@ -226,7 +233,7 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
             risk_line += f'<span style="color:#9a3412;">EPSS {g["epss"]*100:.0f}%</span> '
         cvss = (g.get("items") or [{}])[0].get("cvss_score")
         if cvss:
-            risk_line += f'<span style="color:#374151;">CVSS {_esc(cvss)}</span>'
+            risk_line += f'<span style="color:#374151;">CVSS {_esc(_fmt_cvss(cvss))}</span>'
 
         cwe_disp = _esc(info_cwe.get("cwe") or _cwe_of(g) or "—")
         if info_cwe.get("ten"):
@@ -270,7 +277,6 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Báo cáo bảo mật — {_esc(project.name)} — Scan #{getattr(scan,'scan_number','')}</title>
 <style>{css}</style></head><body>
-<div class="print-footer">{_esc(footer_text)} · {_esc(confidential)}</div>
 
 <!-- TRANG BÌA -->
 <section class="cover page">
@@ -333,9 +339,42 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
   dương/âm tính giả. Tài liệu thuộc loại {_esc(confidential)}.</p>
 </section>
 
-<div class="actions no-print">
-  <button onclick="window.print()">🖨️ Lưu PDF / In</button>
+<div class="actions">
+  <a class="pdf-link" id="vg-pdf" href="/api/scans/{_esc(getattr(scan, 'id', ''))}/report?format=pdf" data-scan="{_esc(getattr(scan, 'id', ''))}">⬇ Tải PDF</a>
 </div>
+<script>
+/* Same flow as the app's downloadPdf(): direct file, or 202 -> poll the job -> download. Never shows job JSON. */
+(function(){{
+  var a=document.getElementById('vg-pdf'); if(!a) return;
+  var id=a.getAttribute('data-scan'), label=a.textContent, busy=false;
+  function msg(r){{return r.json().then(function(j){{var d=j&&j.detail;return (d&&d.message)||(typeof d==='string'?d:'')||('HTTP '+r.status);}},function(){{return 'HTTP '+r.status;}});}}
+  function name(r){{var cd=r.headers.get('Content-Disposition')||'',m=/filename\*=UTF-8''([^;]+)/i.exec(cd);
+    if(m){{try{{return decodeURIComponent(m[1]);}}catch(e){{}}}} m=/filename="([^"]+)"/.exec(cd); return m?m[1]:'VulnGuard_report.pdf';}}
+  function save(r){{return r.blob().then(function(b){{var u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=name(r);
+    document.body.appendChild(l);l.click();l.remove();setTimeout(function(){{URL.revokeObjectURL(u);}},4000);}});}}
+  function fail(t){{a.textContent='⚠ '+t;setTimeout(function(){{a.textContent=label;}},6000);}}
+  function poll(jid,t0){{
+    return fetch('/api/reports/pdf-jobs/'+encodeURIComponent(jid)).then(function(r){{
+      if(!r.ok) return msg(r).then(fail);
+      return r.json().then(function(s){{
+        if(s.status==='failed') return fail((s.error&&s.error.message)||'Tạo PDF thất bại');
+        if(s.status==='done') return fetch('/api/reports/pdf-jobs/'+encodeURIComponent(jid)+'/file').then(function(f){{return f.ok?save(f).then(function(){{a.textContent=label;}}):msg(f).then(fail);}});
+        if(Date.now()-t0>900000) return fail('Tạo PDF quá lâu');
+        a.textContent='⏳ Đang tạo PDF… '+Math.round((Date.now()-t0)/1000)+'s';
+        return new Promise(function(res){{setTimeout(res,1500);}}).then(function(){{return poll(jid,t0);}});
+      }});
+    }});
+  }}
+  a.addEventListener('click',function(e){{
+    e.preventDefault(); if(busy) return; busy=true; a.textContent='⏳ Đang tạo PDF…';
+    fetch('/api/scans/'+encodeURIComponent(id)+'/report?format=pdf').then(function(r){{
+      if(r.status===202) return r.json().then(function(j){{return poll(j.job_id,Date.now());}});
+      if(!r.ok) return msg(r).then(fail);
+      return save(r).then(function(){{a.textContent=label;}});
+    }}).catch(function(x){{fail(String(x&&x.message||x));}}).then(function(){{busy=false;}});
+  }});
+}})();
+</script>
 </body></html>"""
 
 
@@ -380,16 +419,6 @@ h3{color:__ACCENT__;font-size:15px;margin:18px 0 8px}
 .dtable th,.dtable td{border-bottom:1px solid #eef2f7;padding:8px 14px;vertical-align:top;font-size:13px}
 .dtable tr:last-child th,.dtable tr:last-child td{border-bottom:none}
 .actions{max-width:900px;margin:0 auto 30px;text-align:right}
-.actions button{background:__ACCENT__;color:#fff;border:none;padding:9px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}
-.print-footer{display:none}
-@media print{
-  body{background:#fff}
-  .page{box-shadow:none;margin:0;max-width:none;padding:26px 30px;border-radius:0;page-break-after:always}
-  .page:last-of-type{page-break-after:auto}
-  .no-print{display:none!important}
-  .finding{break-inside:avoid}
-  .conclusion,.finding-head,.data-table thead th,.sev-table td{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .print-footer{display:block;position:fixed;bottom:6px;left:0;right:0;text-align:center;font-size:9px;color:#94a3b8}
-  @page{margin:16mm 12mm 14mm}
-}
+.actions a.pdf-link{display:inline-block;background:__ACCENT__;color:#fff;text-decoration:none;padding:9px 18px;border-radius:6px;font-size:13px;font-weight:600}
+
 """

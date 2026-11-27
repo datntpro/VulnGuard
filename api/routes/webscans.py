@@ -252,9 +252,13 @@ def list_findings(scan_id: str, severity: Optional[str] = None, db: Session = De
 
 
 @router.get("/api/webscans/{scan_id}/export")
-def export_webscan(scan_id: str, format: str = Query(default="json", pattern="^(json|csv|html)$"),
+def export_webscan(scan_id: str, format: str = Query(default="json", pattern="^(json|csv|html|pdf)$"),
+                   request: Request = None, async_: bool = Query(default=False, alias="async"),
                    db: Session = Depends(get_db)):
-    """1.1: xuất báo cáo web scan — JSON / CSV / HTML (HTML in ra PDF được từ trình duyệt)."""
+    """1.1: xuất báo cáo web scan — JSON / CSV / HTML / PDF (Typst, tải trực tiếp)."""
+    if format == "pdf":
+        from api.services import pdf_export
+        return pdf_export.pdf_response("webscan", scan_id, request, db, {}, want_async=async_)
     import csv as _csv
     import html as _html
     import io as _io
@@ -287,7 +291,7 @@ def export_webscan(scan_id: str, format: str = Query(default="json", pattern="^(
         return StreamingResponse(iter([buf.getvalue().encode()]), media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{base}.csv"'})
 
-    # HTML (self-contained, in ra PDF được)
+    # HTML (self-contained)
     e = _html.escape
     sev_color = {"critical": "#d03b3b", "high": "#ec835a", "medium": "#fab219", "low": "#0ca30c", "info": "#3987e5"}
     bars = "".join(f'<span style="background:{sev_color[s]};color:#fff;padding:2px 8px;border-radius:4px;margin-right:6px;">{s}: {counts[s]}</span>'
@@ -306,7 +310,7 @@ th{{background:#1F3864;color:#fff;}}</style></head><body>
 <div style="margin:12px 0;">{bars or '<em>Không có lỗ hổng</em>'}</div>
 <table><thead><tr><th>Mức</th><th>Tên</th><th>Vị trí</th><th>CVE/CWE</th><th>Khuyến nghị</th></tr></thead>
 <tbody>{rows_html}</tbody></table>
-<p style="margin-top:24px;color:#888;font-size:12px;">In trang này (Ctrl/Cmd+P) → lưu PDF nếu cần.</p>
+<p style="margin-top:24px;font-size:12px;"><a href="/api/webscans/{e(scan_id)}/export?format=pdf">⬇ Tải PDF</a></p>
 </body></html>"""
     return StreamingResponse(iter([html_doc.encode()]), media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f'inline; filename="{base}.html"'})

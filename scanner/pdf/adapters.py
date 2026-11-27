@@ -34,6 +34,17 @@ def _scrub(s: Any) -> str:
         return "[REDACTED]"
 
 
+def fmt_score(x: Any) -> str:
+    """CVSS score with one decimal (7.3, never 7.300000000000001). Non-numeric text passes through."""
+    if x is None or x == "":
+        return ""
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return _s(x)
+    return f"{f:.1f}" if f == f and abs(f) != float("inf") else _s(x)
+
+
 def _g(o: Any, name: str, default: Any = None) -> Any:
     if isinstance(o, Mapping):
         return o.get(name, default)
@@ -190,7 +201,7 @@ def scan_doc(
             start = first.get("line_start")
             snippet = _scrub(snippet)
             code = number_code(snippet, int(start), int(start)) if isinstance(start, int) and start > 0 else snippet
-        cvss = _s(first.get("cvss_score"))
+        cvss = fmt_score(first.get("cvss_score"))
         cwe = _s(first.get("cwe"))
         owasp = _owasp(g)
         tools = ", ".join(g.get("tools") or [])
@@ -292,7 +303,7 @@ def pentest_doc(model: Mapping[str, Any], *, lang: str = "vi", org: str = "VulnG
         v4 = f.get("cvss_v4") or {}
         ver = f.get("verification") or {}
         score = v4.get("score")
-        cvss = f"{L['cvss4']} {score} · {_s(v4.get('severity')).upper()}" if score is not None else L["cvss_na"]
+        cvss = f"{L['cvss4']} {fmt_score(score)} · {_s(v4.get('severity')).upper()}" if score is not None else L["cvss_na"]
         extra: List[dict] = []
         tr = _traffic_text(f.get("evidence_traffic"))
         if tr:
@@ -373,7 +384,7 @@ def webscan_doc(scan: Any, findings_in: Iterable[Mapping[str, Any]], *, lang: st
     findings = []
     for i, f in enumerate(rows, 1):
         sev = _sev(f.get("severity"))
-        cvss = _s(f.get("cvss_score"))
+        cvss = fmt_score(f.get("cvss_score"))
         # curl_command / nuclei `extracted` values are deliberately NOT included: they carry the
         # actual keys/tokens the templates matched, and the webscan HTML report omits them too.
         findings.append({

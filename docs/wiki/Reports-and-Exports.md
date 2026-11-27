@@ -41,7 +41,7 @@ Scan theo lịch SCM có thể gửi PDF cho owner qua SMTP. Xem [[SCM Integrati
 
 ## Web scan
 
-`GET /api/webscans/{scan_id}/export?format=json|csv|html`. Bản HTML in ra PDF bằng trình duyệt.
+`GET /api/webscans/{scan_id}/export?format=json|csv|html|pdf`.
 
 ## Crawl
 
@@ -79,3 +79,11 @@ python3 scripts/setup.py --check      # liệt kê tool + chạy self-test này 
 - **Lỗi:** chạy lại `pip install --require-hashes -r api/requirements.txt` (native) hoặc `docker compose build --no-cache` (Docker).
 
 **Nâng cấp bản cũ:** `git pull`, sau đó `docker compose build` (Docker) hoặc `bash setup.sh` (native) để nhận engine mới.
+
+
+### Tải PDF trực tiếp (API/UI)
+
+- `GET /api/scans/{id}/report?format=pdf` (alias `/report.pdf`, `/api/projects/scans/{id}/export?format=pdf`), `/api/pentest/runs/{id}/report?format=pdf`, `/api/webscans/{id}/export?format=pdf`, `/api/docreview/versions/{id}/export?format=pdf` trả `application/pdf` với `Content-Disposition: attachment; filename="VulnGuard_<slug>_Scan<N>_<YYYYMMDD>.pdf"; filename*=UTF-8''…` (tên tiếng Việt qua RFC 5987), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`.
+- Quyền xem giống báo cáo HTML/JSON (VIEWER xuất được những gì xem được; engagement đã xoá mềm chỉ ADMIN). Giới hạn `VG_PDF_RATE_PER_MIN` (mặc định 10/phút/user); mỗi lần xuất ghi 1 dòng log `vulnguard.audit` (`pdf_export user=… kind=… outcome=…`).
+- Trên `VG_PDF_ASYNC_THRESHOLD` phát hiện (mặc định 300) hoặc `?async=1`: trả `202 {job_id}`; `GET /api/reports/pdf-jobs/{job_id}` (trạng thái, số trang), `GET …/file` (tải). Job gắn với user tạo (người khác nhận 404), tối đa 3 job/user, file giữ 1 giờ trong `storage/reports/pdf-jobs` (0600).
+- Lỗi: `503 pdf_busy` + `Retry-After` khi hết slot dựng; `pdf_compile_error` / `pdf_timeout` / `pdf_worker_killed` / `pdf_input_too_large` là JSON `{code, message}` không kèm đường dẫn; không bao giờ trả HTML hay mở hộp thoại in.

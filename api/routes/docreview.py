@@ -18,7 +18,7 @@ import os
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import io
@@ -460,7 +460,12 @@ def compare_versions(
 # Export báo cáo HTML
 # ─────────────────────────────────────────────
 @router.get("/versions/{version_id}/export")
-def export_version_report(version_id: str, download: bool = False, db: Session = Depends(get_db)):
+def export_version_report(version_id: str, request: Request, download: bool = False,
+                          format: str = Query(default="html", pattern="^(html|pdf)$"),
+                          async_: bool = Query(default=False, alias="async"), db: Session = Depends(get_db)):
+    if format == "pdf":   # PDF PR-3
+        from api.services import pdf_export
+        return pdf_export.pdf_response("docreview", version_id, request, db, {}, want_async=async_)
     from scanner.doc_review_report import build_report_html
 
     version = db.query(DocumentVersion).filter(DocumentVersion.id == version_id).first()

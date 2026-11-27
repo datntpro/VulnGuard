@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 
@@ -746,8 +746,13 @@ def export_scan(
     scan_type: str = None,
     diff: str = Query(default="all", pattern="^(all|new|recurrent)$"),
     scope: str = Query(default="all", pattern="^(all|active)$"),
+    async_: bool = Query(default=False, alias="async"),
+    request: Request = None,
     db: Session = Depends(get_db)
 ):
+    if format == "pdf":   # PDF PR-3: Typst engine, cùng builder với /report?format=pdf
+        from api.services import pdf_export
+        return pdf_export.pdf_response("scan", scan_id, request, db, {}, want_async=async_)
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan không tồn tại")
@@ -792,10 +797,6 @@ def export_scan(
 
     # PDF / Markdown / AI-JSON — dùng scanner/report_builder
     from scanner import report_builder as rb
-    if format == "pdf":
-        data = rb.build_pdf(scan, vulns, project_name, scope_note=scope_note)
-        return StreamingResponse(iter([data]), media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'})
     if format == "md":
         text = rb.build_markdown(scan, vulns, project_name)
         return StreamingResponse(iter([text.encode("utf-8")]), media_type="text/markdown; charset=utf-8",

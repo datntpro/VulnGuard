@@ -222,7 +222,7 @@ def test_p217_static_sinks_escaped():
         for n in needles:
             assert n in body, (name, n)
     # định dạng báo cáo đi qua jsStr trong handler
-    assert "ptDownloadReport('${jsStr(f)}')" in INDEX
+    assert "ptDownloadReport('${jsStr(f)}', this)" in INDEX
     for raw in ("${t.title}", "${n.key}", "${v.details}", "${j.last_error}", "${c.source_excerpt}", "${f.cvss_v4_vector}", "${f.wstg_id}"):
         assert raw not in INDEX, raw
 
