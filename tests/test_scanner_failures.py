@@ -375,7 +375,7 @@ def test_gitleaks_real_binary_finds_known_secret(tmp_path):
     if not exe:
         pytest.skip("gitleaks not installed")
     # Fixture secret split so this test file itself isn't a secret hit.
-    (tmp_path / "creds.py").write_text('AWS_KEY = "' + "AKIA" + "IOSFODNN7EXAMPLE" + '"\nTOKEN = "ghp_' + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" + '"\n')
+    (tmp_path / "creds.py").write_text('T = "ghp_' + "x7K9mQ2wLp4RtZ8vB3nYc6HdJ1sFa5GuE0oW" + '"\n')
     # argv shape comes from the scanner itself, so a flag the binary rejects fails here.
     captured = {}
 

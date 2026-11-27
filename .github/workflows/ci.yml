@@ -69,7 +69,7 @@ jobs:
           import asyncio, os, tempfile
           from scanner.scanners.secrets import GitleaksScanner
           d = tempfile.mkdtemp()
-          open(os.path.join(d, "creds.py"), "w").write("AWS_KEY = \"" + "AKIA" + "IOSFODNN7EXAMPLE" + "\"\n")
+          open(os.path.join(d, "creds.py"), "w").write("T = \"ghp_" + "x7K9mQ2wLp4RtZ8vB3nYc6HdJ1sFa5GuE0oW" + "\"\n")
           out = asyncio.run(GitleaksScanner(d).scan())
           assert out, "gitleaks found nothing: pinned binary rejected the argv or rules changed"
           print("gitleaks findings:", len(out))
