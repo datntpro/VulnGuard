@@ -97,6 +97,8 @@ def sanitize_error(exc: BaseException) -> str:
     name = type(exc).__name__
     if status in (401, 403):
         code, msg = "auth_failed", f"Provider từ chối khoá ({status}) — kiểm tra/ thay API key"
+    elif status in (400, 413, 422):
+        code, msg = "bad_request", f"Yêu cầu bị từ chối ({status}) — kiểm tra model id / độ dài prompt"
     elif status == 404:
         code, msg = "not_found", "Model hoặc endpoint không tồn tại (404)"
     elif status == 429:

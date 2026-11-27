@@ -12,6 +12,7 @@ from api.database import get_db, SessionLocal
 from api.domain_models import Domain, DomainCrawl, CrawlEndpoint, CrawlStatus, AIAnalysisStatus
 from api.domain_schemas import DomainCreate, DomainOut, CrawlCreate, CrawlOut, EndpointOut
 from api.config import settings
+from scanner.cloud_ai import sanitize_error, redact_text_basic
 
 router = APIRouter(prefix="/api/domains", tags=["domains"])
 
@@ -234,11 +235,11 @@ async def _run_ai_crawl_analysis(crawl_id: str, domain_url: str):
         db.commit()
 
     except Exception as e:
-        logger.error(f"AI crawl analysis {crawl_id} failed: {e}", exc_info=True)
+        logger.error(f"AI crawl analysis {crawl_id} failed: {redact_text_basic(str(e))[:500]}")
         crawl = db.query(DomainCrawl).filter(DomainCrawl.id == crawl_id).first()
         if crawl:
             crawl.ai_status = AIAnalysisStatus.FAILED
-            crawl.ai_error = str(e)[:500]
+            crawl.ai_error = sanitize_error(e)[:500]
             db.commit()
     finally:
         db.close()

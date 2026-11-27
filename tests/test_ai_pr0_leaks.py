@@ -65,7 +65,8 @@ def test_spawn_child_does_not_inherit_provider_secrets(monkeypatch):
         return out.decode()
 
     out = _run(run())
-    assert "HARMLESS_VAR" in out
+    assert "HARMLESS_VAR" not in out   # allowlist: biến lạ không được kế thừa
+    assert "PATH" in out
     for secret in (BEDROCK_KEY, "sk-ant-xxxxxxxxxxxx", "sk-yyyy", "ksk_zzzz", "sk-or-v1-q", "AWS_BEARER_TOKEN_BEDROCK"):
         assert secret not in out
 
@@ -146,3 +147,136 @@ def test_no_kiro_profile_claim():
     html = open("web/index.html", encoding="utf-8").read()
     assert "tạo bằng kiro-cli login" not in html
     assert "profile do <span class=\"text-mono\">kiro-cli</span>" not in html
+
+
+# ───────────── PR-0 round 2 (verify feedback) ─────────────
+SECRET_ENV = {"GITHUB_TOKEN": "ghp_" + "a" * 36, "DATABASE_URL": "postgres://u:dbpass@h/db",
+              "AWS_ACCESS_KEY_ID": "AKIAABCDEFGHIJKLMNOP", "AWS_BEARER_TOKEN_BEDROCK": BEDROCK_KEY,
+              "ANTHROPIC_API_KEY": "sk-ant-aaaaaaaaaaaa", "MY_SERVICE_SECRET": "s3cr3t", "STRIPE_KEY": "stripe-val-9f3"}
+DUMP = "import os,json;print(json.dumps(dict(os.environ)))"
+
+
+def _assert_clean(out):
+    for k, v in SECRET_ENV.items():
+        assert v not in out and k not in out, k
+    assert "PATH" in out
+
+
+@pytest.fixture
+def secret_env(monkeypatch):
+    for k, v in SECRET_ENV.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_spawn_allowlist_env(secret_env):
+    from scanner.pentest.procs import spawn
+
+    async def go():
+        p = await spawn(sys.executable, "-c", DUMP, run_id="t-al", stdout=asyncio.subprocess.PIPE)
+        return (await p.communicate())[0].decode()
+    _assert_clean(_run(go()))
+
+
+def test_spawn_explicit_env_replaces(secret_env):
+    from scanner.pentest.procs import spawn
+
+    async def go():
+        p = await spawn(sys.executable, "-c", DUMP, run_id="t-rep", env={"FOO": "1"}, stdout=asyncio.subprocess.PIPE)
+        return (await p.communicate())[0].decode()
+    out = _run(go())
+    assert '"FOO": "1"' in out and "GITHUB_TOKEN" not in out and "HOME" not in out
+
+
+def test_run_command_allowlist_env(secret_env):
+    from scanner.scanners.base import run_command
+    rc, out, _ = _run(run_command([sys.executable, "-c", DUMP]))
+    assert rc == 0
+    _assert_clean(out)
+
+
+def test_katana_style_and_which_env(secret_env):
+    import subprocess
+    from scanner.scanners.base import scrubbed_env
+    out = subprocess.run([sys.executable, "-c", DUMP], capture_output=True, text=True, env=scrubbed_env()).stdout
+    _assert_clean(out)
+
+
+def test_git_clone_child_env_scrubbed(secret_env, tmp_path, monkeypatch):
+    """scm_service.clone chạy git với env sạch: dùng `git` giả in env ra file."""
+    import stat
+    from api.services import scm_service
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    dump = tmp_path / "env.json"
+    g = fake / "git"
+    g.write_text(f"#!{sys.executable}\nimport os,json\nopen({str(dump)!r},'w').write(json.dumps(dict(os.environ)))\n")
+    g.chmod(g.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    import types
+    monkeypatch.setattr(scm_service.providers, "check_base_url", lambda u: None)
+    monkeypatch.setattr(scm_service.providers, "clone_url", lambda *a, **k: "https://example.test/r.git")
+    monkeypatch.setattr(scm_service, "decrypt_secret", lambda x: "tok")
+    conn = types.SimpleNamespace(base_url="https://example.test", token_enc="x", provider=types.SimpleNamespace(value="github"))
+    repo = types.SimpleNamespace(repo_full_name="o/r", default_branch="main")
+    try:
+        scm_service._clone(conn, repo, str(tmp_path / "d"))
+    except Exception:
+        pass
+    _assert_clean(dump.read_text())
+
+
+def test_tool_check_child_env_scrubbed(secret_env, tmp_path):
+    from api.routes.settings import _check_tool_sync
+    _check_tool_sync({"tool": "x", "check_cmd": [sys.executable, "-c", f"import os;open({str(tmp_path/'e')!r},'w').write(str(dict(os.environ)))"]}, {})
+    _assert_clean((tmp_path / "e").read_text())
+
+
+RAW = "Incorrect API key provided: sk-proj-abcdefghijklmnop1234 https://api.openai.com/v1/x?key=zz"
+
+
+class _E401(Exception):
+    status_code = 401
+
+
+def test_agent_in_loop_llm_error_sanitised():
+    src = open("scanner/pentest/agent.py", encoding="utf-8").read()
+    assert "Lỗi gọi LLM ({driver.family}/{driver.model}): {e}" not in src
+    assert "sanitize_error(e)" in src and "logger.exception(\"LLM call lỗi\")" not in src
+
+
+def test_ai_analyzer_cloud_error_sanitised(monkeypatch):
+    import scanner.cloud_ai as cai
+    from scanner.ai_analyzer import AIAnalyzer
+
+    class Boom:
+        def __init__(self, *a, **k): pass
+        async def analyze_finding(self, *a, **k): raise _E401(RAW)
+    monkeypatch.setattr(cai, "CloudAnalyzer", Boom)
+    out = _run(AIAnalyzer().analyze_cloud({"title": "t"}, cfg={}))
+    blob = repr(out)
+    assert "sk-proj" not in blob and "openai.com" not in blob and "auth_failed" in out["error"]
+
+
+def test_ai_analyzer_crawl_error_sanitised(monkeypatch):
+    from scanner.ai_analyzer import AIAnalyzer
+    a = AIAnalyzer()
+
+    async def boom(*_a, **_k): raise _E401(RAW)
+    monkeypatch.setattr(a, "_call_ollama_crawl", boom, raising=False)
+    out = _run(a.analyze_crawl("http://x.test", [{"path": "/", "methods": ["GET"]}]))
+    assert "sk-proj" not in repr(out)
+
+
+def test_scans_domains_routes_use_sanitizer():
+    for p, needle in (("api/routes/scans.py", 's["ai_error"] = sanitize_error(e)'),
+                      ("api/routes/domains.py", "crawl.ai_error = sanitize_error(e)")):
+        src = open(p, encoding="utf-8").read()
+        assert needle in src and "ai_error = str(e)" not in src.replace('s["ai_error"] = str(e)', 'ai_error = str(e)')
+
+
+def test_bad_request_bucket():
+    from scanner.cloud_ai import sanitize_error
+
+    class E(Exception):
+        status_code = 400
+    assert "bad_request" in sanitize_error(E("model foo: prompt too long sk-ant-aaaaaaaaaaaaa"))

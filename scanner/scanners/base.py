@@ -1,4 +1,5 @@
 import asyncio
+import re
 import subprocess
 import json
 import hashlib
@@ -12,22 +13,28 @@ def make_fingerprint(tool: str, rule_id: str, file_path: str, line: int, title: 
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-# Biến môi trường nhạy cảm KHÔNG được kế thừa bởi subprocess của scanner (N-7/N-8: giảm
-# nguy cơ lộ token qua tool bên thứ ba). Muốn truyền thì dùng tham số `env` tường minh.
-_SCRUB_ENV = {
-    "VULNGUARD_COWORKER_TOKEN", "VULNGUARD_SECRET_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "SONARQUBE_TOKEN",
-}
-# Tiền tố provider AI — luôn bị loại khỏi env tiến trình con (kể cả AWS_BEARER_TOKEN_BEDROCK, AWS_PROFILE…)
-_SCRUB_ENV_PREFIXES = ("AWS_", "ANTHROPIC_", "OPENAI_", "OPENROUTER_", "KIRO_", "AZURE_OPENAI_", "GOOGLE_")
+# Env của tiến trình con = ALLOWLIST (không phải denylist): chỉ các biến vận hành vô hại đi qua.
+# GITHUB_TOKEN / DATABASE_URL / *_TOKEN / *_SECRET / *_KEY / AWS_* / ANTHROPIC_* … KHÔNG BAO GIỜ được kế thừa.
+# Tool cần biến riêng → truyền tham số `env` tường minh (vd trivy_env()).
+_ENV_ALLOW = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TEMP", "TMP", "TERM",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONUTF8", "VIRTUAL_ENV", "JAVA_HOME",
+    "GOPATH", "GOCACHE", "GOFLAGS", "GOMODCACHE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+    "DOCKER_HOST", "VULNGUARD_WORDLIST_DIRS",
+})
+_ENV_ALLOW_PREFIXES = ("LC_",)
+# Phòng thủ chiều sâu: biến trong allowlist mà tên có dạng secret vẫn bị loại.
+_SECRET_NAME = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|PRIVATE_?KEY|_KEY$|DATABASE_URL)", re.I)
 
 
 def scrubbed_env(base=None, extra=None) -> dict:
-    """Bản sao env đã bỏ secret provider AI + secret app. `extra` (tường minh) được merge SAU cùng."""
+    """Env tối thiểu cho tiến trình con (allowlist). `extra` do caller truyền tường minh, merge SAU cùng."""
     import os as _os
     src = _os.environ if base is None else base
     out = {k: v for k, v in src.items()
-           if k not in _SCRUB_ENV and not k.upper().startswith(_SCRUB_ENV_PREFIXES)}
+           if (k in _ENV_ALLOW or k.startswith(_ENV_ALLOW_PREFIXES)) and not _SECRET_NAME.search(k)}
     if extra:
         out.update(extra)
     return out
@@ -101,7 +108,7 @@ class BaseScanner(ABC):
         """Kiểm tra tool có được cài không."""
         result = subprocess.run(
             ["which", self.tool_name],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=scrubbed_env()
         )
         return result.returncode == 0
 

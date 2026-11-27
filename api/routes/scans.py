@@ -15,6 +15,7 @@ from api.database import get_db, SessionLocal
 from api.models import Project, Scan, Vulnerability, ScanStatus, Severity, ACTIVE_VULN_STATUS_VALUES
 from api.schemas import ScanCreate, ScanOut, VulnOut
 from api.config import settings
+from scanner.cloud_ai import sanitize_error, redact_text_basic
 
 router = APIRouter(prefix="/api/projects", tags=["scans"])
 
@@ -357,7 +358,7 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
         logger.info(f"[AI] ✔ Hoàn thành {done_count}/{total} vulns cho scan {scan_id}")
 
     except Exception as e:
-        logger.error(f"[AI] Fatal error scan {scan_id}: {e}", exc_info=True)
+        logger.error(f"[AI] Fatal error scan {scan_id}: {type(e).__name__}: {redact_text_basic(str(e))[:500]}")
         # Cập nhật status AI failed nhưng scan vẫn COMPLETED
         try:
             _db2 = SessionLocal()
@@ -365,7 +366,7 @@ async def _run_ai_analysis(scan_id: str, scanner_logs: dict):
             if _scan2 and _scan2.summary:
                 s = dict(_scan2.summary)
                 s["ai_status"] = "error"
-                s["ai_error"] = str(e)[:200]
+                s["ai_error"] = sanitize_error(e)[:200]
                 _scan2.summary = s
                 _db2.commit()
             _db2.close()

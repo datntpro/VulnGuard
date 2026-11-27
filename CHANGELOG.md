@@ -6,7 +6,8 @@
 - Bedrock API key không còn ghi vào `os.environ`; truyền theo từng client. Tiến trình con của scanner/pentest (`spawn`, `run_command`, katana) loại `AWS_*`, `ANTHROPIC_*`, `OPENAI_*`, `OPENROUTER_*`, `KIRO_*`, `AZURE_OPENAI_*`, `GOOGLE_*` (env tường minh của caller vẫn được tôn trọng).
 - Lỗi provider không còn trả nguyên văn: `/api/ai/test` và `run.error_message` dùng mã chuẩn hoá + chi tiết đã che. Thêm mẫu che `ABSK…`, `ksk_…`, `sk-or-v1-…`, Bearer/query token.
 - Co-work, Document Review, File Assistant dùng Ollama URL cấu hình trong UI. Thẻ trạng thái báo "model đã cấu hình chưa cài" thay vì lặng lẽ đổi model.
-- Sửa nhãn sai "kiro-cli login tạo AWS profile".
+- Sửa nhãn sai "kiro-cli login tạo AWS profile" (UI + docs).
+- Verify round 2: lỗi LLM trong vòng lặp pentest, ai_analyzer, scans, domains đều qua `sanitize_error`; log chỉ ghi bản đã che. Env tiến trình con (spawn/run_command/git clone/tool check/which) là ALLOWLIST — `GITHUB_TOKEN`, `DATABASE_URL`, `*_TOKEN/_SECRET/_KEY` không bao giờ lọt; `spawn(env=…)` thay thế thay vì trộn.
 
 ### Added — PDF PR-3: tải PDF trực tiếp (Typst)
 - `format=pdf` cho scan / pentest / web scan / doc review dựng bằng engine Typst và trả file đính kèm (tên file an toàn + `filename*` RFC 5987); job nền `POST|GET /api/reports/pdf-jobs` cho báo cáo > 300 phát hiện; `503 pdf_busy` + `Retry-After`; rate-limit + audit log.
