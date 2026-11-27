@@ -257,8 +257,10 @@ def run_worker(
 
 def _scrub_paths(msg: str, ws: Workspace) -> str:
     """Never leak the temp workspace (or any absolute path) in error text."""
-    for p in {str(ws.base), str(ws.base.resolve()), str(ws.root), str(ws.root.resolve())}:
+    paths = {str(ws.base), str(ws.base.resolve()), str(ws.root), str(ws.root.resolve())}
+    for p in sorted(paths, key=len, reverse=True):  # longest first: /private/var/... before /var/...
         msg = msg.replace(p, "<work>")
+    msg = msg.replace("/private<work>", "<work>")
     msg = re.sub(r"vg-pdf-[A-Za-z0-9_]+", "<work>", msg)
     return re.sub(r"(?<![\w<])/(?:[\w.@+-]+/)+", "<path>/", msg)
 

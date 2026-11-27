@@ -24,7 +24,7 @@ def _strip_comments(src: str) -> str:
 _LITERAL_CALL = re.compile(rf"(?<![\w.-])(?:{FILE_FUNCS})\s*\(\s*\"[^\"\\]*\"\s*[,)]")
 _STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 # identifiers that must never appear anywhere (aliasing / method / field access included)
-_NEVER = re.compile(r"(?<![\w-])(eval|plugin|std|read|image|json|csv|yaml|toml|xml|cbor|bibliography)(?![\w-])")
+_NEVER = re.compile(r"(?<![\w-])(eval|plugin|std|read|image|json|csv|yaml|toml|xml|cbor|bibliography|cite|pdf|attach|embed|syntaxes|theme|style|csl|path|source)(?![\w-])")
 
 
 def lint_typ(src: str) -> list[str]:
@@ -89,6 +89,15 @@ def test_shipped_templates_are_clean(path):
         '#{ let f = read; f(d.p) }',
         '#import d.mod: read',
         '#include d.p',
+        '#pdf.attach(d.p)',
+        '#pdf.embed(d.p)',
+        '#let a = pdf.attach\n#a(d.p)',
+        '#raw("x", syntaxes: d.p)',
+        '#raw("x", theme: d.p)',
+        '#bibliography(d.p)',
+        '#bibliography("refs.bib", style: d.p)',
+        '#cite(<k>, style: d.p)',
+        '#image(path: d.p)',
     ],
 )
 def test_lint_catches_bad_patterns(src):

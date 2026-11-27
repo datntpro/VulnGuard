@@ -139,7 +139,8 @@ def test_font_dir_symlink_still_refused(tmp_path, canary):
             pass
 
 
-def test_compile_error_does_not_leak_temp_path():
+@pytest.mark.parametrize("n", range(8))  # was flaky on macOS (set iteration order)
+def test_compile_error_does_not_leak_temp_path(n):
     import tempfile
 
     with pytest.raises(PdfCompileError) as ei:
@@ -147,3 +148,18 @@ def test_compile_error_does_not_leak_temp_path():
     msg = str(ei.value)
     assert "vg-pdf-" not in msg and tempfile.gettempdir() not in msg and "/private" not in msg
     assert msg  # still informative
+
+
+def test_scrub_paths_both_var_and_private_forms(tmp_path):
+    from scanner.pdf.engine import _scrub_paths
+    from scanner.pdf.root import Workspace
+
+    base = tmp_path / "vg-pdf-abc"
+    base.mkdir()
+    root = base / "root"
+    root.mkdir()
+    ws = Workspace(base, root, base, base, base)
+    for _ in range(20):
+        for form in (str(base), str(base.resolve()), "/private" + str(base)):
+            out = _scrub_paths(f"searched at {form}/root/hosts", ws)
+            assert "/private" not in out and "vg-pdf-" not in out
