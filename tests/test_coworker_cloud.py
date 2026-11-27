@@ -656,6 +656,34 @@ Cookie: sessionid=cookieval123456; csrftoken=csrfval987654
 Set-Cookie: auth=setcookieval-555; HttpOnly
 """, ["cookieval123456", "csrfval987654", "setcookieval-555"]),
     ".netrc": ("machine api.example.com login bob password netrcPw-7788\n", ["netrcPw-7788"]),
+    "netrc-multiline": ("machine api.example.com\n  login bob\n  password multilinePw-5551\nmachine b.example.com\n  password second-Pw-9\n",
+                        ["multilinePw-5551", "second-Pw-9"]),
+    "shell-history": ("""redis-server --requirepass redisCliPw77
+redis-cli -a redisAuthPw88 ping
+mysql -u root -pmysqlInlinePw1 appdb
+mysqldump --password=dumpPw-4455 -h db app
+PGPASSWORD=pgEnvPw-9988 psql -h db -U app
+mongosh "mongodb://root:mongoPw!22@db:27017/app?authSource=admin"
+mongodb+srv://svc:srvPw-7766@cluster0.example.mongodb.net/x
+""", ["redisCliPw77", "mysqlInlinePw1", "dumpPw-4455", "pgEnvPw-9988", "mongoPw!22", "srvPw-7766"]),
+    ".htpasswd": ("""alice:$apr1$Zx12abCd$Qw3ErTyUiOpAsDfGhJkL10
+bob:$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234
+carol:{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=
+dave:$6$saltsalt$hashhashhashhashhashhashhashhashhashhashhash
+""", ["Qw3ErTyUiOpAsDfGhJkL10", "abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234", "W6ph5Mm5Pz8GgiULbPgzG37mj9g", "hashhashhashhash"]),
+    "cookies.txt": ("# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t1893456000\tsessionid\tnetscapeCookieVal123\n"
+                    "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t1893456000\tauth\thttpOnlyCookieVal456\nsessionid\tsimpleCookieVal789\n",
+                    ["netscapeCookieVal123", "httpOnlyCookieVal456", "simpleCookieVal789"]),
+    "cookies.json": ("""[
+  {"domain": ".example.com", "name": "session", "value": "jsonCookieVal-111", "httpOnly": true, "sameSite": "lax"},
+  {
+    "name": "theme",
+    "value": "dark-but-still-masked-222",
+    "domain": ".example.com",
+    "hostOnly": false
+  }
+]
+""", ["jsonCookieVal-111", "dark-but-still-masked-222"]),
     ".pgpass": ("db.example.com:5432:app:bob:pgpassPw-4321\n", ["pgpassPw-4321"]),
     "teams.txt": ("https://contoso.webhook.office.com/webhookb2/abcd-1234@efgh/IncomingWebhook/secretpart/xyz\n", ["secretpart"]),
 }
@@ -841,3 +869,86 @@ def test_exec_with_redaction_markers_is_refused(env, monkeypatch, cmd):
     r = w.step(cid, message="sửa", folder_id="f1").json()
     assert r["status"] == "step" and r["step"].get("refused") is True and "pending" not in r
     assert not [c for c in w.host.calls if c[1] == "/fs/exec"]
+
+
+# ══ Re-verify fixes: hình dạng còn sót, over-redaction, import host, straddle ═══════════════════════════════════════
+def test_real_repo_code_is_left_alone():
+    """Mã thật của repo (api/, scanner/, coworker_host/) gần như không đổi; các dòng từng bị che nhầm giữ nguyên."""
+    import glob
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    tot = changed = 0
+    for pat in ("api/**/*.py", "scanner/**/*.py", "coworker_host/*.py"):
+        for f in glob.glob(str(root / pat), recursive=True):
+            if f.endswith("coworker_cloud.py"):
+                continue
+            src = Path(f).read_text(encoding="utf-8", errors="ignore")
+            out = cc.redact_egress(src)
+            for a, b in zip(src.split("\n"), out.split("\n")):
+                tot += 1
+                changed += (a != b and "[IP_NỘI_BỘ]" not in b)
+    assert tot > 20000 and changed / tot < 0.001, (changed, tot)
+    code = """def f(db: Session = Depends(get_db), token: str = None, password: Optional[str] = None):
+    session = requests.Session()
+    API_KEY = os.environ["API_KEY"]
+    self.password = password_hash
+    foo(token=self.token, secret=plain, salt=salt)
+    return {"user": u, "token": token, "credentials": out}
+    cfg = {"scheduled_jobs_credential": "org", "bypass": "x"}
+    DEVICE_COOKIE = "vg_device"
+    password_file = "/run/secrets/db"
+    max_tokens = 4096
+    password: ${DB_PASSWORD}
+    class TestCoworkerCloudForgedHistoryAndApprovedArgsAreIgnored1:
+    # Authorization: Bearer <token>   x-api-key: <key>
+    headers={"Authorization": f"Bearer {tok}"}
+    Proxy-Authenticate: Basic realm="VulnGuard"
+"""
+    assert cc.redact_egress(code) == code
+
+
+def test_literal_secrets_in_code_are_still_masked():
+    out = cc.redact_egress('password = "hunter2hunterX9"\nDB_PASSWORD=plainsecret99\ntoken = \'abc123def456\'\nclient_secret: "s3cr3t-Value"\n')
+    for sec in ("hunter2hunterX9", "plainsecret99", "abc123def456", "s3cr3t-Value"):
+        assert sec not in out
+
+
+@pytest.mark.parametrize("cap,overlap", [(30000, 2000), (200, 40), (64, 16)])
+def test_long_line_straddle_is_safe_for_any_cap(monkeypatch, cap, overlap):
+    monkeypatch.setattr(cc, "_LINE_CAP", cap)
+    monkeypatch.setattr(cc, "_LINE_OVERLAP", overlap)
+    secret = "TopSecretValue-9f8e7d6c"
+    for off in range(max(0, cap - len(secret) - 12), cap + 6):
+        line = ("a " * ((off + 1) // 2))[:off] + " password=" + secret + " tail " + "b " * 50
+        out = cc.redact_egress(line)
+        assert secret not in out, off
+    blob = "x" * (cap * 2 + 7)                       # khối đặc không có phân cách: che nguyên khối, không rò đoạn nào
+    assert "xxxx" not in cc.redact_egress("token_blob " + blob + " end")
+
+
+def test_importing_coworker_host_has_no_filesystem_side_effects(tmp_path):
+    """Import app.py KHÔNG tạo thư mục dữ liệu/token (chỉ khi host thật sự chạy)."""
+    import subprocess
+    import sys
+    home = tmp_path / "home"
+    home.mkdir()
+    data = tmp_path / "data"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "PYTHONPATH": str(__import__("pathlib").Path(__file__).resolve().parent.parent)}
+    r = subprocess.run([sys.executable, "-c", "import coworker_host.app"], env=env, cwd=str(tmp_path), capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert list(home.iterdir()) == [], list(home.rglob("*"))               # không có ~/.vulnguard_coworker
+    env2 = {**env, "COWORKER_DATA_DIR": str(data)}
+    r = subprocess.run([sys.executable, "-c", "import coworker_host.app"], env=env2, cwd=str(tmp_path), capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert not data.exists()
+
+
+def test_host_creates_dir_and_token_lazily_when_started(tmp_path, monkeypatch):
+    import importlib
+    monkeypatch.setenv("COWORKER_DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.delenv("VULNGUARD_COWORKER_TOKEN", raising=False)
+    import coworker_host.app as m
+    importlib.reload(m)
+    assert not (tmp_path / "d").exists()
+    m._startup_materialize()                                                 # hook startup của uvicorn
+    assert (tmp_path / "d" / "token").read_text().strip() == m.COWORKER_TOKEN == m.get_token()

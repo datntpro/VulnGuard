@@ -244,6 +244,7 @@ def test_allowed_roots(tmp_path, monkeypatch):
 def test_existing_bad_grant_refused_at_use(tmp_path, monkeypatch):
     m, c, home = _make(tmp_path, monkeypatch)
     (home / ".ssh").mkdir()
+    m._ensure_data_dir()
     m.FOLDERS_FILE.write_text('[{"id":"abc","path":"%s","label":"x","created_at":0}]' % (home / ".ssh"))
     r = c.get("/fs/tree", params={"folder_id": "abc"}, headers=H)
     assert r.status_code == 403
