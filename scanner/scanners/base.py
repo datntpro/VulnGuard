@@ -103,6 +103,9 @@ class BaseScanner(ABC):
 
     def __init__(self, scan_path: str):
         self.scan_path = scan_path
+        # Partial failures (some inputs failed, findings from the rest kept). The
+        # orchestrator turns a non-empty list into status "partial".
+        self.warnings: List[str] = []
 
     @abstractmethod
     async def scan(self) -> List[Dict[str, Any]]:

@@ -229,4 +229,5 @@ class PipAuditScanner(BaseScanner):
             raise ScannerRunError("pip-audit thất bại: " + "; ".join(errors[:3]))
         if errors:
             logger.warning("pip-audit lỗi một phần: %s", "; ".join(errors[:3]))
+            self.warnings.append(f"pip-audit lỗi {len(errors)}/{len(req_files)} file: " + "; ".join(errors[:3]))
         return findings

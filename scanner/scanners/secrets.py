@@ -67,7 +67,7 @@ class GitleaksScanner(BaseScanner):
             "--no-git",
             "--exit-code=0",   # Không fail khi tìm thấy secret (Gitleaks v8)
             "--redact",        # Che giá trị secret trong output
-            "--quiet",
+            "--log-level", "error",   # gitleaks 8.18.4 (pinned) rejects --quiet (exit 126)
         ]
 
         try:

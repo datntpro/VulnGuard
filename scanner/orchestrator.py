@@ -157,6 +157,17 @@ class Orchestrator:
                     "duration_s": round(duration, 1),
                     "label": TOOL_LABELS.get(tool, tool),
                 }
+            elif getattr(scanner, "warnings", None):
+                # Một phần đầu vào lỗi: giữ findings của phần còn lại nhưng KHÔNG báo "ok".
+                warn = "; ".join(scanner.warnings)
+                logger.warning(f"◐ {tool}: partial — {warn} ({count} findings)")
+                scanner_logs[tool] = {
+                    "status": "partial",
+                    "error": warn,
+                    "count": count,
+                    "duration_s": round(duration, 1),
+                    "label": TOOL_LABELS.get(tool, tool),
+                }
             else:
                 logger.info(f"✓ {tool}: {count} findings ({duration:.1f}s)")
                 scanner_logs[tool] = {

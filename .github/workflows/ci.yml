@@ -63,3 +63,14 @@ jobs:
         run: |
           docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python \
             vulnguard-api:pdfcheck -m scanner.pdf.selftest
+      - name: Gitleaks scanner finds a planted secret with the pinned binary (argv contract)
+        run: |
+          docker run --rm --network none --entrypoint python vulnguard-api:pdfcheck -c '
+          import asyncio, os, tempfile
+          from scanner.scanners.secrets import GitleaksScanner
+          d = tempfile.mkdtemp()
+          open(os.path.join(d, "creds.py"), "w").write("AWS_KEY = \"" + "AKIA" + "IOSFODNN7EXAMPLE" + "\"\n")
+          out = asyncio.run(GitleaksScanner(d).scan())
+          assert out, "gitleaks found nothing: pinned binary rejected the argv or rules changed"
+          print("gitleaks findings:", len(out))
+          '

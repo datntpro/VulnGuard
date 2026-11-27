@@ -6,6 +6,7 @@ IaC Scanners:
 """
 import json
 import logging
+import shutil
 from typing import List, Dict, Any
 
 from scanner.scanners.sca import _trivy_err, trivy_env
@@ -108,6 +109,10 @@ class TrivyIaCScanner(BaseScanner):
     """Trivy IaC scan — Terraform, K8s manifests."""
     scan_type = "IAC"
     tool_name = "trivy-iac"
+
+    def is_available(self) -> bool:
+        # No binary named "trivy-iac": it is `trivy fs --scanners misconfig`.
+        return shutil.which("trivy") is not None
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
@@ -232,4 +237,5 @@ class HadolintScanner(BaseScanner):
             raise ScannerRunError("hadolint thất bại: " + "; ".join(errors[:3]))
         if errors:
             logger.warning("hadolint lỗi một phần: %s", "; ".join(errors[:3]))
+            self.warnings.append(f"hadolint lỗi {len(errors)}/{len(dockerfiles)} file: " + "; ".join(errors[:3]))
         return findings
