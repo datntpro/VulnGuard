@@ -42,6 +42,10 @@ jobs:
           python -m venv "$RUNNER_TEMP/pipaudit"
           "$RUNNER_TEMP/pipaudit/bin/pip" install -q --require-hashes -r docker/scanners/pip-audit.txt
           "$RUNNER_TEMP/pipaudit/bin/pip-audit" -r api/requirements.txt --require-hashes --disable-pip
+      - name: Audit scanner lockfiles (docker/scanners/*.txt) with expiring, evidenced ignores
+        # #101 PR-C: blocking. Ignores live in docker/scanners/audit-ignores.toml (expiry <= 120 days).
+        # Needs Python >= 3.11 (tomllib): this job runs 3.12.
+        run: python scripts/audit_scanner_locks.py --pip-audit "$RUNNER_TEMP/pipaudit/bin/pip-audit"
       - name: PDF engine self-test (native, same check as Docker build / setup.py --check)
         run: python -m scanner.pdf.selftest
       - name: Run tests
@@ -94,3 +98,19 @@ jobs:
             -e SEMGREP_ENABLE_VERSION_CHECK=0 -e SEMGREP_SEND_METRICS=off \
             -v "$PWD/tests/fixtures:/fx:ro" --entrypoint python \
             vulnguard-api:pdfcheck -m scanner.scanners.selftest /fx
+
+
+      # #101 PR-C: the audit-ignores for mcp/opentelemetry/wcmatch (semgrep) and soupsieve/bs4/ecdsa (checkov)
+      # claim "imported but never executed during a scan". This proves it in the shipped image with the real
+      # production argv; if a bump makes that code run, CI goes red before the ignore expires.
+      - name: Scanner reachability probe in the image (offline, required)
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /home/appuser \
+            -v "$PWD/scripts/scanner_reachability:/probe:ro" -v "$PWD/tests/fixtures:/fx:ro" \
+            --entrypoint python vulnguard-api:pdfcheck /probe/check.py --fixtures /fx
+      - name: Scanner reachability probe in the image (registry rulesets, needs network)
+        continue-on-error: true  # registry may be flaky; the offline run above is the required one
+        run: |
+          docker run --rm --tmpfs /tmp --tmpfs /home/appuser \
+            -v "$PWD/scripts/scanner_reachability:/probe:ro" -v "$PWD/tests/fixtures:/fx:ro" \
+            --entrypoint python vulnguard-api:pdfcheck /probe/check.py --fixtures /fx --online

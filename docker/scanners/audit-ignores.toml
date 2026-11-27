@@ -1,0 +1,187 @@
+# Evidenced, expiring ignores for `pip-audit` over docker/scanners/*.txt (#101 PR-C).
+# Enforced by scripts/audit_scanner_locks.py (CI `test` job). Rules:
+#   * every entry needs id, lock, package, version, reason, evidence, added, expires, tracking
+#   * expires - added <= 120 days; an expired entry FAILS the gate (re-verify or bump the lock)
+#   * an ignore only applies while the lock still pins package==version (a bump re-opens it)
+#   * reachability argument is re-checked on every CI run by scripts/scanner_reachability/check.py
+# Re-verify on every semgrep/checkov bump (see .github/dependabot.yml). Do NOT add multi-`*`
+# `paths:` globs to scanner/rules/*.yaml (wcmatch ReDoS argument below depends on it).
+
+# ---------------------------------------------------------------- semgrep: mcp 1.29.0
+# Upstream semgrep pins mcp==1.29.0 (1.187.0 is the latest semgrep). Fix: mcp 1.30.0.
+[[ignore]]
+id = "CVE-2026-59951"
+aliases = ["GHSA-84m7-p3x7-pcfv"]
+lock = "semgrep"
+package = "mcp"
+version = "1.29.0"
+reason = "StreamableHTTP session exhaustion needs a running MCP server; VulnGuard never runs `semgrep mcp`."
+evidence = "sast.py:_run_semgrep runs only `semgrep --config ... --json`; mcp is imported (semgrep/cli.py -> commands/mcp.py) but 0 mcp functions execute after import: scripts/scanner_reachability/check.py (bundled + registry)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-116685"
+aliases = ["GHSA-5h93-6whr-6q8j"]
+lock = "semgrep"
+package = "mcp"
+version = "1.29.0"
+reason = "Client-transport cross-origin redirect needs an MCP client connection; none is made."
+evidence = "sast.py:_run_semgrep (no mcp subcommand); probe: 0 mcp RUN calls (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-116684"
+aliases = ["GHSA-w4fh-qvv9-3v23"]
+lock = "semgrep"
+package = "mcp"
+version = "1.29.0"
+reason = "Server bearer-audience check only matters for a running MCP server; none is run."
+evidence = "sast.py:_run_semgrep (no mcp subcommand); probe: 0 mcp RUN calls (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-116686"
+aliases = ["GHSA-rwrf-2pqf-9j8j"]
+lock = "semgrep"
+package = "mcp"
+version = "1.29.0"
+reason = "Client `$ref` fetch in call_tool needs an MCP client session; none is made."
+evidence = "sast.py:_run_semgrep (no mcp subcommand); probe: 0 mcp RUN calls (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-115563"
+aliases = ["GHSA-qx49-fqc8-xw99"]
+lock = "semgrep"
+package = "mcp"
+version = "1.29.0"
+reason = "OAuth client flow is only used when connecting to a remote MCP server; none is configured."
+evidence = "sast.py:_run_semgrep (no mcp subcommand); probe: 0 mcp RUN calls (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+# ---------------------------------------------------------------- semgrep: opentelemetry-api 1.37.0
+# Upstream pins opentelemetry-api~=1.37.0 (fixes: 1.45.1 / 1.45.2).
+[[ignore]]
+id = "CVE-2026-114603"
+aliases = ["GHSA-xcq7-p3pf-p88h"]
+lock = "semgrep"
+package = "opentelemetry-api"
+version = "1.37.0"
+reason = "tracestate parsing is reached only via propagate.extract, which semgrep calls only when tracing is enabled (--trace, never passed) on env vars semgrep sets itself."
+evidence = "semgrep/telemetry.py extract(); probe: 0 calls to TraceState.from_header / propagate.extract (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-126360"
+aliases = ["GHSA-mf5v-w3w3-f6cg"]
+lock = "semgrep"
+package = "opentelemetry-api"
+version = "1.37.0"
+reason = "traceparent ReDoS is reached only via propagate.extract on SEMGREP_TRACE_PARENT_* env set by semgrep itself, not attacker data."
+evidence = "semgrep/telemetry.py extract(); probe: 0 calls to TraceContextTextMapPropagator.extract (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+# ---------------------------------------------------------------- semgrep: wcmatch 8.5.2
+# MOST FRAGILE argument: attacker controls file names. Upstream pins wcmatch~=8.3 (fix: 11.2).
+[[ignore]]
+id = "CVE-2026-132276"
+aliases = ["GHSA-53pm-wgxf-c6qf"]
+lock = "semgrep"
+package = "wcmatch"
+version = "8.5.2"
+reason = "Multi-`*` glob ReDoS needs attacker-influenced glob patterns; ours are single-segment dir names (base.EXCLUDE_DIR_NAMES) and filtering is done in semgrep-core."
+evidence = "sast.py:_run_semgrep --exclude <dir names>; bundled rules use no `paths:` globs; probe: 0 wcmatch RUN calls in bundled and registry scans (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+# ---------------------------------------------------------------- checkov: asteval 1.0.6
+# Upstream checkov 3.4.11 (latest) pins asteval==1.0.6 (fix: 1.0.9).
+[[ignore]]
+id = "GHSA-9w56-46f6-3qhx"
+aliases = []
+lock = "checkov"
+package = "asteval"
+version = "1.0.6"
+reason = "numpy ctypes memory r/w primitive is absent: checkov builds the interpreter with use_numpy=False, minimal=True."
+evidence = "checkov/terraform/graph_builder/variable_rendering/safe_eval_functions.py get_asteval(): Interpreter(symtable=SAFE_EVAL_DICT, use_numpy=False, minimal=True)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "PYSEC-2026-3807"
+aliases = ["CVE-2026-55244", "GHSA-89v8-rhwq-hf77"]
+lock = "checkov"
+package = "asteval"
+version = "1.0.6"
+reason = "REACHABLE in principle (untrusted terraform is evaluated) but impact is limited to terminating the checkov subprocess (DoS of one IaC scan); no code execution. Residual risk: IacScanner returns [] on empty stdout, so IaC findings can silently be 0 - tracked in the follow-up issue."
+evidence = "checkov safe_eval_functions.py; scanner/scanners/iac.py CheckovScanner.scan() `if not stdout.strip(): return []`. Follow-up issue: IacScanner empty stdout must raise ScannerRunError."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101 (follow-up: IacScanner silent-zero)"
+
+# ---------------------------------------------------------------- checkov: ecdsa 0.19.2
+[[ignore]]
+id = "PYSEC-2026-1325"
+aliases = ["GHSA-wj6h-64fc-37mp", "CVE-2024-23342"]
+lock = "checkov"
+package = "ecdsa"
+version = "0.19.2"
+reason = "Minerva timing leak affects signing; checkov uses ecdsa only to VERIFY external-check signatures. No fixed version exists."
+evidence = "checkov/common/external_checks/verification/*; probe: 0 ecdsa RUN calls during `checkov -d` (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+# ---------------------------------------------------------------- checkov: soupsieve 2.10
+# Pulled in via beautifulsoup4 <- policy-sentry / spdx-tools. Fixes: 3.0.2 / 4.0.0.
+[[ignore]]
+id = "CVE-2026-126190"
+aliases = ["GHSA-mmhr-3c5m-f64f"]
+lock = "checkov"
+package = "soupsieve"
+version = "2.10"
+reason = "Transitive of beautifulsoup4; checkov's own code does not import bs4/soupsieve."
+evidence = "probe: 0 soupsieve/bs4 RUN calls during `checkov -d` (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-126193"
+aliases = ["GHSA-7g44-g9rc-x53w"]
+lock = "checkov"
+package = "soupsieve"
+version = "2.10"
+reason = "Transitive of beautifulsoup4; checkov's own code does not import bs4/soupsieve."
+evidence = "probe: 0 soupsieve/bs4 RUN calls during `checkov -d` (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
+
+[[ignore]]
+id = "CVE-2026-126191"
+aliases = ["GHSA-6655-6qjp-jx7x"]
+lock = "checkov"
+package = "soupsieve"
+version = "2.10"
+reason = "Transitive of beautifulsoup4; checkov's own code does not import bs4/soupsieve."
+evidence = "probe: 0 soupsieve/bs4 RUN calls during `checkov -d` (scripts/scanner_reachability/check.py)."
+added = 2026-11-28
+expires = 2027-02-26
+tracking = "#101"
