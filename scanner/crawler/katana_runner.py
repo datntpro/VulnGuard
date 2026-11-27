@@ -24,6 +24,8 @@ import tempfile
 import urllib.parse
 from typing import List, Dict, Any, Optional, Tuple
 
+from scanner.scanners.base import scrubbed_env
+
 
 KATANA_BIN = "katana"
 
@@ -31,7 +33,7 @@ KATANA_BIN = "katana"
 def is_katana_available() -> bool:
     import subprocess
     try:
-        result = subprocess.run(["which", KATANA_BIN], capture_output=True, text=True)
+        result = subprocess.run(["which", KATANA_BIN], capture_output=True, text=True, env=scrubbed_env())
         return result.returncode == 0
     except Exception:
         return False
@@ -123,6 +125,7 @@ async def run_katana(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=scrubbed_env(),
             )
             try:
                 _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)

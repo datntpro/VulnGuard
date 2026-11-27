@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from scanner import report_builder as rb
+from scanner.scanners.base import scrubbed_env
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -169,7 +170,7 @@ def _check_tool_sync(tool_info: dict, enabled_map: Dict[str, bool]) -> dict:
     try:
         result = subprocess.run(
             tool_info["check_cmd"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5, env=scrubbed_env()
         )
         output = (result.stdout + result.stderr).strip()
         # Lấy version từ output

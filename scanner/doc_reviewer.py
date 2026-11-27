@@ -71,7 +71,11 @@ Chú ý:
 class DocReviewer:
     def __init__(self):
         from api.config import settings as _settings
-        self.ollama_url = _settings.ollama_url
+        try:
+            from api.services import runtime_settings
+            self.ollama_url = runtime_settings.ollama_url()
+        except Exception:
+            self.ollama_url = _settings.ollama_url
         self.timeout = _settings.ollama_timeout
         self.model = self._get_active_model()
 

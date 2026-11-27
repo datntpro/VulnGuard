@@ -21,6 +21,7 @@ from api.models import Project, Scan, ScanStatus
 from api.security import decrypt_secret
 from api.scm_models import ScmConnection, ScmRepo
 from scanner.scm import providers
+from scanner.scanners.base import scrubbed_env
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +41,14 @@ def _clone(conn: ScmConnection, repo: ScmRepo, dest: str) -> None:
         hard += ["-c", "protocol.http.allow=always"]
     cmd = hard + ["clone", "--depth", "1", "--single-branch", "--branch", branch, url, dest]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)  # nosec B603
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600, env=scrubbed_env())  # nosec B603
     except subprocess.CalledProcessError as e:
         # thử lại không chỉ định branch (repo có thể dùng master/khác)
         err = providers.redact((e.stderr or e.stdout or ""), token)
         logger.warning(f"[scm] clone branch '{branch}' lỗi, thử nhánh mặc định: {err[-200:]}")
         cmd2 = hard + ["clone", "--depth", "1", url, dest]
         try:
-            subprocess.run(cmd2, check=True, capture_output=True, text=True, timeout=600)  # nosec B603
+            subprocess.run(cmd2, check=True, capture_output=True, text=True, timeout=600, env=scrubbed_env())  # nosec B603
         except subprocess.CalledProcessError as e2:
             raise RuntimeError("Clone thất bại: " + providers.redact((e2.stderr or e2.stdout or "")[-300:], token))
 

@@ -78,7 +78,11 @@ async def ollama_health():
         async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
             r = await client.get(f"{_url()}/api/tags")
             r.raise_for_status()
-            return {"status": "ok", "ollama_url": _url(), "active_model": get_active_model(),
+            active = get_active_model()
+            names = {m.get("name", "") for m in (r.json().get("models") or [])}
+            installed = active in names or (":" not in active and f"{active}:latest" in names)
+            return {"status": "ok", "ollama_url": _url(), "active_model": active,
+                    "model_installed": installed,
                     "custom_endpoint": runtime_settings.ollama_url_is_custom()}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Ollama không khả dụng: {e}")

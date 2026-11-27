@@ -220,11 +220,22 @@ class OllamaClient:
 _ollama_client = None
 
 
-def get_ollama_client(base_url: str = "http://localhost:11434") -> OllamaClient:
-    """Get or create Ollama client"""
+def _resolve_url(base_url: Optional[str]) -> str:
+    if base_url:
+        return base_url.rstrip("/")
+    try:
+        from api.services import runtime_settings
+        return runtime_settings.ollama_url()
+    except Exception:
+        return "http://localhost:11434"
+
+
+def get_ollama_client(base_url: Optional[str] = None) -> OllamaClient:
+    """Client Ollama theo URL HIỆU LỰC (UI override > env) — tái tạo khi URL đổi."""
     global _ollama_client
-    if _ollama_client is None:
-        _ollama_client = OllamaClient(base_url=base_url)
+    url = _resolve_url(base_url)
+    if _ollama_client is None or _ollama_client.base_url != url:
+        _ollama_client = OllamaClient(base_url=url)
     return _ollama_client
 
 

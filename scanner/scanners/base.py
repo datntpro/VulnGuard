@@ -1,4 +1,5 @@
 import asyncio
+import re
 import subprocess
 import json
 import hashlib
@@ -12,12 +13,36 @@ def make_fingerprint(tool: str, rule_id: str, file_path: str, line: int, title: 
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-# Biến môi trường nhạy cảm KHÔNG được kế thừa bởi subprocess của scanner (N-7/N-8: giảm
-# nguy cơ lộ token qua tool bên thứ ba). Muốn truyền thì dùng tham số `env` tường minh.
-_SCRUB_ENV = {
-    "VULNGUARD_COWORKER_TOKEN", "VULNGUARD_SECRET_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "SONARQUBE_TOKEN",
-}
+# Env của tiến trình con = ALLOWLIST (không phải denylist): chỉ các biến vận hành vô hại đi qua.
+# GITHUB_TOKEN / DATABASE_URL / *_TOKEN / *_SECRET / *_KEY / AWS_* / ANTHROPIC_* … KHÔNG BAO GIỜ được kế thừa.
+# Tool cần biến riêng → truyền tham số `env` tường minh (vd trivy_env()).
+_ENV_ALLOW = frozenset({
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TEMP", "TMP", "TERM",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONUTF8", "VIRTUAL_ENV", "JAVA_HOME",
+    "GOPATH", "GOCACHE", "GOFLAGS", "GOMODCACHE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+    "DOCKER_HOST", "VULNGUARD_WORDLIST_DIRS",
+    # cấu hình tool được tài liệu hoá (không phải secret):
+    "SEMGREP_HOME",                                  # install/run.sh đặt $PROJECT_DIR/.semgrep (cache rule pre-seeded)
+    "LD_LIBRARY_PATH", "JAVA_TOOL_OPTIONS",          # native libs / JVM của sonar-scanner
+})
+# Tiền tố cấu hình theo tool (DB mirror/air-gap, skip-update, cache…). Tên chứa TOKEN/SECRET/PASSWORD/KEY/
+# CREDENTIAL (vd TRIVY_PASSWORD, GRYPE_REGISTRY_AUTH_TOKEN, SEMGREP_APP_TOKEN) VẪN bị _SECRET_NAME loại.
+_ENV_ALLOW_PREFIXES = ("LC_", "TRIVY_", "GRYPE_", "SEMGREP_", "NUCLEI_", "CHECKOV_", "GITLEAKS_", "KATANA_")
+# Phòng thủ chiều sâu: biến trong allowlist mà tên có dạng secret vẫn bị loại.
+_SECRET_NAME = re.compile(r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH_?KEY|API_?KEY|PRIVATE_?KEY|_KEY$|DATABASE_URL)", re.I)
+
+
+def scrubbed_env(base=None, extra=None) -> dict:
+    """Env tối thiểu cho tiến trình con (allowlist). `extra` do caller truyền tường minh, merge SAU cùng."""
+    import os as _os
+    src = _os.environ if base is None else base
+    out = {k: v for k, v in src.items()
+           if (k in _ENV_ALLOW or k.startswith(_ENV_ALLOW_PREFIXES)) and not _SECRET_NAME.search(k)}
+    if extra:
+        out.update(extra)
+    return out
 
 
 async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
@@ -25,10 +50,7 @@ async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
     """Chạy command async và trả về (returncode, stdout, stderr).
 
     env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế)."""
-    import os as _os
-    run_env = {k: v for k, v in _os.environ.items() if k not in _SCRUB_ENV}
-    if env:
-        run_env.update(env)
+    run_env = scrubbed_env(extra=env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -91,7 +113,7 @@ class BaseScanner(ABC):
         """Kiểm tra tool có được cài không."""
         result = subprocess.run(
             ["which", self.tool_name],
-            capture_output=True, text=True
+            capture_output=True, text=True, env=scrubbed_env()
         )
         return result.returncode == 0
 

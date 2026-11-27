@@ -222,9 +222,11 @@ class AIAnalyzer:
             from scanner.cloud_ai import CloudAnalyzer
             return await CloudAnalyzer(cfg).analyze_finding(vuln_data, local_opinion=local_opinion)
         except Exception as e:
-            logger.error(f"Cloud AI analysis failed for {str(vuln_data.get('title', '?'))[:50]}: {e}")
-            out = self._fallback_analysis(f"Cloud AI: {e}")
-            out["error"] = str(e)[:300]
+            from scanner.cloud_ai import sanitize_error, redact_text_basic
+            logger.error(f"Cloud AI analysis failed for {str(vuln_data.get('title', '?'))[:50]}: {redact_text_basic(str(e))[:500]}")
+            safe = sanitize_error(e)
+            out = self._fallback_analysis(f"Cloud AI: {safe}")
+            out["error"] = safe
             return out
 
     async def _call_ollama(self, prompt: str) -> str:
@@ -329,12 +331,13 @@ class AIAnalyzer:
             response_text = await self._call_ollama_crawl(prompt)
             return self._parse_crawl_response(response_text)
         except Exception as e:
-            logger.error(f"AI crawl analysis failed for {domain_url}: {e}")
+            from scanner.cloud_ai import sanitize_error, redact_text_basic
+            logger.error(f"AI crawl analysis failed for {domain_url}: {redact_text_basic(str(e))[:500]}")
             return {
                 "summary": "",
                 "sensitive_endpoints": [],
                 "waf_suggestions": [],
-                "error": str(e)[:300],
+                "error": sanitize_error(e),
             }
 
     async def _call_ollama_crawl(self, prompt: str) -> str:

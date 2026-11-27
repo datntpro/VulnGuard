@@ -72,6 +72,9 @@ _SECRET_PATTERNS = [
     re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{10,}"),
     re.compile(r"\bsk-[A-Za-z0-9]{20,}"),
+    re.compile(r"\bsk-or-v1-[A-Za-z0-9_\-]{20,}"),
+    re.compile(r"\bABSK[A-Za-z0-9+/=_\-]{20,}"),         # Bedrock API key
+    re.compile(r"\bksk_[A-Za-z0-9_\-]{16,}"),             # Kiro API key
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"),
     re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
@@ -81,6 +84,46 @@ _ASSIGN_PATTERN = re.compile(
     r"""(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)"""
     r"""[\w\-]*\s*[:=]\s*['"])([^'"\s]{4,})(['"])"""
 )
+
+
+_BEARER_PATTERN = re.compile(r"(?i)\b(bearer|x-api-key:?|api-key:?)\s+[A-Za-z0-9._~+/=\-]{8,}")
+_URL_QS_SECRET = re.compile(r"(?i)([?&](?:key|api[_-]?key|token|access_token|sig|signature)=)[^&\s'\"]+")
+
+
+def sanitize_error(exc: BaseException) -> str:
+    """Thông điệp lỗi AN TOÀN để trả UI / lưu DB: mã chuẩn hoá + chi tiết đã che.
+    Không bao giờ trả nguyên body/URL/key của provider."""
+    status = getattr(exc, "status_code", None)
+    name = type(exc).__name__
+    if status in (401, 403):
+        code, msg = "auth_failed", f"Provider từ chối khoá ({status}) — kiểm tra/ thay API key"
+    elif status in (400, 413, 422):
+        code, msg = "bad_request", f"Yêu cầu bị từ chối ({status}) — kiểm tra model id / độ dài prompt"
+    elif status == 404:
+        code, msg = "not_found", "Model hoặc endpoint không tồn tại (404)"
+    elif status == 429:
+        code, msg = "rate_limited", "Bị giới hạn tốc độ (429) — thử lại sau"
+    elif isinstance(status, int) and status >= 500:
+        code, msg = "provider_error", f"Provider lỗi ({status})"
+    elif "timeout" in name.lower():
+        code, msg = "timeout", "Hết thời gian chờ provider"
+    elif "connection" in name.lower() or isinstance(exc, OSError):
+        code, msg = "connection_error", "Không kết nối được provider"
+    elif isinstance(exc, RuntimeError):
+        # lỗi cấu hình do chính VulnGuard raise (thông điệp tự viết, không chứa body provider)
+        code, msg = "config_error", redact_text_basic(str(exc))[:200]
+    else:
+        code, msg = "error", f"Lỗi không xác định ({name})"
+    return f"[{code}] {msg}"
+
+
+def redact_text_basic(text: str) -> str:
+    """Che secret + bearer + query-secret (không che PII) — dùng cho thông điệp lỗi."""
+    for pat in _SECRET_PATTERNS:
+        text = pat.sub(lambda m: _mask(m.group(0)), text)
+    text = _BEARER_PATTERN.sub(lambda m: m.group(1) + " [REDACTED]", text)
+    text = _URL_QS_SECRET.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    return re.sub(r"https?://\S+", "[url]", text)
 
 
 def _mask(value: str) -> str:
@@ -212,14 +255,16 @@ def build_client(cfg: Dict[str, Any]) -> Tuple[Any, str, str]:
     if provider == "bedrock":
         b = cfg["bedrock"]
         auth_mode = b.get("auth_mode", "aws_chain")
+        bedrock_tok = None
         if auth_mode == "bedrock_api_key":
             from api.services.ai_config import get_api_key
             tok = get_api_key("bedrock", cfg)
             if not tok:
                 raise RuntimeError("Chưa cấu hình Bedrock API key (Settings → AI Provider)")
-            # botocore đọc token qua biến môi trường này
-            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = tok
+            # Truyền token theo TỪNG client — KHÔNG ghi os.environ (tiến trình con sẽ thừa hưởng)
+            bedrock_tok = tok
         client = anthropic.AsyncAnthropicBedrockMantle(
+            api_key=bedrock_tok,
             aws_region=b.get("region") or None,
             aws_profile=(b.get("aws_profile") or None) if auth_mode == "profile" else None,
             timeout=timeout,

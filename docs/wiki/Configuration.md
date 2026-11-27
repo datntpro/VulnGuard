@@ -92,7 +92,7 @@ Lưu trong `storage/ai_config.json` (ghi với quyền 600). API key được m�
 | `provider` | Xác thực | Model mặc định trong code |
 |---|---|---|
 | `anthropic` | `auth_mode`: `api_key`, `wif` (Workload Identity Federation: `federation_rule_id`, `organization_id`, `identity_token_file`), `environment` (SDK tự lấy từ môi trường máy chủ) | `claude-opus-5-5` |
-| `bedrock` | `auth_mode`: `aws_chain`, `profile` (`aws sso login` / `kiro-cli login`), `bedrock_api_key`; `region` mặc định `us-east-1` | `anthropic.claude-opus-5-5` |
+| `bedrock` | `auth_mode`: `aws_chain`, `profile` (`aws sso login` / `aws configure` — `kiro-cli login` chỉ đăng nhập Kiro, không tạo AWS profile), `bedrock_api_key`; `region` mặc định `us-east-1` | `anthropic.claude-opus-5-5` |
 | `openai` | API key, `base_url` tuỳ chọn | `gpt-4o` |
 | `openrouter` | API key, base `https://openrouter.ai/api/v1` | `anthropic/claude-3.5-sonnet` |
 
