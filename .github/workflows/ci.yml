@@ -86,3 +86,11 @@ jobs:
           assert out, "gitleaks found nothing: pinned binary rejected the argv or rules changed"
           print("gitleaks findings:", len(out))
           '
+      - name: Scanner smoke in the image (non-root, read-only rootfs, no network)
+        # Chạy từng scanner đóng gói sẵn trên fixture có lỗi đã biết; tool hỏng im lặng → đỏ.
+        # (#120 đã merge: gitleaks/trivy-iac phải đạt, không còn xfail.)
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /home/appuser:uid=10001,gid=10001,mode=0700 \
+            -e SEMGREP_ENABLE_VERSION_CHECK=0 -e SEMGREP_SEND_METRICS=off \
+            -v "$PWD/tests/fixtures:/fx:ro" --entrypoint python \
+            vulnguard-api:pdfcheck -m scanner.scanners.selftest /fx
