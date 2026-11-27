@@ -252,7 +252,7 @@
     const q = p.org_quota || {};
     setVal('aiu-p-usd', q.usd_per_user_month == null ? '' : q.usd_per_user_month); setVal('aiu-p-rpm', q.rpm_per_user == null ? '' : q.rpm_per_user);
     setVal('aiu-p-sched', p.scheduled_jobs_credential || 'org'); setVal('aiu-p-baseurl', p.custom_base_url || 'admin_only');
-    setVal('aiu-route-cw', (d.routing && d.routing.coworker) || 'local');
+    setVal('aiu-route-cw', (h.tasks && h.tasks.coworker) || 'local');
     S.olCheck = o.check || null;
     renderAll();
     S.base = formState();
@@ -559,7 +559,7 @@
   function buildContractPayload() {
     const pl = buildPayload();
     pl.ollama = { url: val('aiu-ol-url').trim(), model: val('aiu-ol-model'), vision_model: val('aiu-ol-vision') };
-    pl.routing = { coworker: val('aiu-route-cw') };
+    pl.hybrid.tasks = { coworker: val('aiu-route-cw') };   // plan §4.11 A1: hybrid.tasks.coworker = local|cloud
     pl.advanced = { pentest_models: { planner: val('aiu-pt-planner').trim(), executor: val('aiu-pt-executor').trim(), summarizer: val('aiu-pt-summarizer').trim() } };
     if (isAdmin()) {
       const usd = val('aiu-p-usd').trim(), rpm = val('aiu-p-rpm').trim();

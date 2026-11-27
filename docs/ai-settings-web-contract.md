@@ -1,5 +1,7 @@
 # Settings › AI — web ↔ API contract (PR-5, refs #109)
 
+> **Source of truth:** the plan's §6 (endpoints/roles) and §4.11 (Co-work). §6 specifies no response bodies, so the shapes below are only what the web UI currently expects; if PR-3 defines different bodies, change the UI + this file to match PR-3.
+
 The page (`web/ai-settings.js`) probes `GET /api/ai/settings`. 200 → **contract** mode (below). 404/405/501 → **bridge** mode:
 sections 1–3 are assembled from `/api/ai/config` + `/api/ollama/*`; sections 4–5, testing unsaved values and the tool-calling
 check show "not available yet" (never a fake success) and the two legacy tabs stay reachable. Endpoints are exactly those of §6 of the plan;
@@ -18,4 +20,4 @@ the *shapes* below are what the UI expects (PR-3/PR-4 must match or update this 
 
 Secrets: the UI sends a key once in a request body, clears the input immediately, keeps nothing in JS state/localStorage, and never prints server text (only normalised `code`s; legacy `error` strings are masked and truncated).
 
-**Co-work (owner decision, overrides D8 for Co-work only; field name provisional until the amended §6 lands):** Co-work follows Settings › AI (Local → Ollama; Cloud → configured provider via the normal resolver; Hybrid → `routing.coworker: "local"|"cloud"`, default `local`, in `GET/PUT /api/ai/settings`). No separate policy toggle and no picker inside Co-work. Document Review and File Assistant stay local-only.
+**Co-work (plan §4.11 / amendment A1):** the ADMIN-editable Co-work row of the Hybrid task table is `hybrid.tasks.coworker: "local"|"cloud"` (default `local`) in `GET/PUT /api/ai/settings`. No separate policy toggle, no picker inside Co-work. Document Review and File Assistant stay local-only.

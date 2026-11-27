@@ -566,6 +566,6 @@ def test_cowork_row_in_hybrid_rules_is_selectable_default_local(base_url, browse
         page.select_option("#aiu-route-cw", "cloud")
         page.click("#aiu-save")
         page.wait_for_selector("#toast-stack .toast")
-        assert c.calls("PUT", "/api/ai/settings")[0][2]["routing"] == {"coworker": "cloud"}
+        assert c.calls("PUT", "/api/ai/settings")[0][2]["hybrid"]["tasks"] == {"coworker": "cloud"}
     finally:
         ctx.close()
