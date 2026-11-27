@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.database import get_db
 from api.models import Vulnerability
-from api.routes.auth import require_admin
+from api.routes.auth import current_user, require_admin
 from api.services.ai_config import load_config, public_config, validate_and_save
 
 router = APIRouter(tags=["ai"])
@@ -47,15 +47,31 @@ def put_ai_config(payload: Dict[str, Any], _=Depends(require_admin)):
 
 
 @router.get("/api/ai/models")
-async def list_ai_models(provider: str, _=Depends(require_admin)):
+async def list_ai_models(provider: str, credential_id: Optional[str] = None, user=Depends(current_user),
+                         db: Session = Depends(get_db)):
     """Danh sách model provider hỗ trợ (để UI chọn dropdown thay vì gõ tay).
 
-    provider ∈ anthropic | bedrock | openai | openrouter. Credential do llm_resolver chọn; offline
-    hoặc chưa có key → trả danh sách mặc định (source=static)."""
+    provider ∈ anthropic | bedrock | openai | openrouter. Không có `credential_id` → credential ORG (chỉ ADMIN).
+    Có `credential_id` → CHỦ credential đó (ANALYST/ADMIN, key của chính mình; người khác/admin → 404).
+    Offline hoặc chưa có key → danh sách mặc định (source=static)."""
+    from api.auth_models import UserRole
     from api.services.ai_models import STATIC_MODELS, list_models
-    from api.services.llm_resolver import resolve_provider
+    from api.services.llm_resolver import Cloud, resolve_provider, route_for_own_credential
     if provider not in STATIC_MODELS:
         raise HTTPException(status_code=422, detail="provider không hợp lệ")
+    if credential_id:
+        if user.role == UserRole.VIEWER or not getattr(user, "id", None):
+            raise HTTPException(status_code=403, detail="Không có khoá AI cá nhân")
+        from api.ai_cred_models import AiCredential
+        row = db.get(AiCredential, credential_id)
+        if row is None or row.scope != "user" or row.owner_user_id != user.id or row.provider != provider:
+            raise HTTPException(status_code=404, detail={"code": "AI_CRED_NOT_FOUND"})
+        route = route_for_own_credential(db, credential_id, user.id, feature="models_list")
+        if not isinstance(route, Cloud):
+            raise HTTPException(status_code=409, detail={"code": getattr(route, "code", "AI_CRED_REVOKED")})
+        return {"provider": provider, **await list_models(provider, route)}
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Chỉ ADMIN")
     return {"provider": provider, **await list_models(provider, resolve_provider(provider))}
 
 
@@ -112,6 +128,12 @@ async def test_ai(request: Request, payload: Optional[Dict[str, Any]] = Body(Non
     elif moved:
         sec["api_key_enc"] = None
     res = await probe_cloud(cloud_route_for(cfg))
+    if res.ok and res.tools is not None and res.model:     # [AI PR-3] Co-work cloud chỉ dùng model đã qua probe tool-calling
+        try:
+            from api.services.ai_policy import record_cloud_probe
+            record_cloud_probe(provider, res.model, bool(res.tools))
+        except Exception:      # nosec B110 — ghi nhận best-effort, không làm hỏng test
+            pass
     return {"provider": provider, **res.to_dict()}
 
 

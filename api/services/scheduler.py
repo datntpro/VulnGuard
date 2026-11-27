@@ -79,6 +79,33 @@ async def _kb_tick():
         logger.debug("[scheduler] KB: %s", res.get("reason"))
 
 
+_last_ai_purge = None
+
+
+async def _ai_purge_tick():
+    """[AI PR-3] mỗi ngày: purge credential revoked/disabled quá 30 ngày (D13) + usage events quá 180 ngày (D11)."""
+    global _last_ai_purge
+    now = datetime.utcnow()
+    if _last_ai_purge is not None and (now - _last_ai_purge).total_seconds() < 86400:
+        return
+    _last_ai_purge = now
+    await asyncio.to_thread(_ai_purge_once)
+
+
+def _ai_purge_once():
+    from api.database import SessionLocal
+    from api.services import ai_credentials, ai_usage
+    db = SessionLocal()
+    try:
+        c = ai_credentials.purge_expired(db)
+        u = ai_usage.purge_old(db)
+        db.commit()
+        if c or u:
+            logger.info("[scheduler] AI purge: %s credential, %s usage event", c, u)
+    finally:
+        db.close()
+
+
 async def _loop():
     logger.info("[scheduler] khởi động — kiểm tra lịch mỗi %ss", _TICK_SECONDS)
     while True:
@@ -90,6 +117,10 @@ async def _loop():
             await _kb_tick()
         except Exception as e:
             logger.warning(f"[scheduler] KB tick lỗi: {e}")
+        try:
+            await _ai_purge_tick()
+        except Exception as e:
+            logger.warning(f"[scheduler] AI purge lỗi: {e}")
         await asyncio.sleep(_TICK_SECONDS)
 
 

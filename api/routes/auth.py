@@ -56,6 +56,8 @@ ACTIVE_SCAN_PREFIXES = ("/api/pentest", "/api/webscans", "/api/domains")
 ADMIN_ONLY = [
     ("*", "/api/auth/users"),
     ("PUT", "/api/ai/config"),
+    ("PUT", "/api/ai/settings"),         # [AI PR-3]
+    ("*", "/api/ai/credentials"),        # [AI PR-3] danh sách + thu hồi credential của mọi user (không có /api/me ở đây)
     ("PUT", "/api/settings"),
     # L-1: các endpoint con của settings (logo, sonarqube/smtp test) + SCM (SSRF/dùng token đã lưu) + AI test
     ("POST", "/api/settings"),
@@ -767,7 +769,21 @@ def update_user(user_id: str, payload: UserUpdate, admin: User = Depends(require
         user.token_version += 1
     db.commit()
     db.refresh(user)
+    _disable_ai_creds_if_needed(db, user, admin)
     return user
+
+
+def _disable_ai_creds_if_needed(db: Session, user: User, actor: User) -> None:
+    """[AI PR-3] D13: vô hiệu hoá user / hạ xuống VIEWER → credential AI của họ `disabled` ngay (purge sau 30 ngày)."""
+    if user.is_active and user.role != UserRole.VIEWER:
+        return
+    try:
+        from api.services import ai_credentials
+        ai_credentials.disable_for_user(db, user.id, actor=actor.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logging.getLogger(__name__).exception("không disable được credential AI của user (sẽ bị chặn lúc dùng vì user inactive)")
 
 
 @router.delete("/users/{user_id}", status_code=204)
@@ -779,6 +795,11 @@ def delete_user(user_id: str, admin: User = Depends(require_admin), db: Session 
         raise HTTPException(status_code=400, detail="Không thể tự xoá tài khoản đang đăng nhập")
     if user.role == UserRole.ADMIN and _active_admin_count(db) <= 1:
         raise HTTPException(status_code=400, detail="Phải còn ít nhất 1 ADMIN đang hoạt động")
+    try:   # [AI PR-3] xoá user → credential AI của họ bị vô hiệu ngay (hàng còn để audit/usage resolve id)
+        from api.services import ai_credentials
+        ai_credentials.disable_for_user(db, user.id, actor=admin.id)
+    except Exception:
+        logging.getLogger(__name__).exception("disable credential AI khi xoá user lỗi")
     db.delete(user)
     db.commit()
     return None

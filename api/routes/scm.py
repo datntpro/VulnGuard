@@ -4,7 +4,7 @@ và lịch quét định kỳ. Token mã hoá, không bao giờ trả raw.
 """
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -132,12 +132,13 @@ def delete_repo(repo_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/repos/{repo_id}/scan-now")
-async def scan_now(repo_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def scan_now(repo_id: str, background_tasks: BackgroundTasks, request: Request, db: Session = Depends(get_db)):
     r = db.query(ScmRepo).filter(ScmRepo.id == repo_id).first()
     if not r:
         raise HTTPException(404, "Repo không tồn tại")
     from api.services.scm_service import run_repo_scan
-    background_tasks.add_task(run_repo_scan, repo_id, False, None)
+    uid = getattr(getattr(request.state, "user", None), "id", None)   # [AI PR-3] scan thủ công = job của người bấm
+    background_tasks.add_task(run_repo_scan, repo_id, False, None, uid)
     return {"ok": True, "message": "Đã kích hoạt scan — xem tiến trình trong Projects/Scans."}
 
 
@@ -147,14 +148,22 @@ class ScheduleUpsert(BaseModel):
     interval_minutes: int = 1440
     email_report: bool = True
     enabled: bool = True
+    ai_credential_policy: str = "inherit"     # [AI PR-3] org | owner | local_only | inherit
 
 
 def _sch_public(s: ScanSchedule) -> dict:
     return {"id": s.id, "repo_id": s.repo_id, "interval_minutes": s.interval_minutes,
             "enabled": s.enabled, "email_report": s.email_report,
+            "ai_credential_policy": s.ai_credential_policy or "inherit",
             "last_run_at": s.last_run_at.isoformat() + "Z" if s.last_run_at else None,
             "last_status": s.last_status, "last_error": s.last_error,
             "next_run_at": s.next_run_at.isoformat() + "Z" if s.next_run_at else None}
+
+
+def _check_sched_policy(v: str) -> None:
+    from api.services.ai_policy import SCHEDULE_POLICIES
+    if v not in SCHEDULE_POLICIES:
+        raise HTTPException(422, "ai_credential_policy phải là org | owner | local_only | inherit")
 
 
 @router.get("/schedules")
@@ -163,13 +172,16 @@ def list_schedules(db: Session = Depends(get_db)):
 
 
 @router.post("/schedules", status_code=201)
-def create_schedule(body: ScheduleUpsert, db: Session = Depends(get_db)):
+def create_schedule(body: ScheduleUpsert, request: Request, db: Session = Depends(get_db)):
     if not db.query(ScmRepo).filter(ScmRepo.id == body.repo_id).first():
         raise HTTPException(400, "repo_id không hợp lệ")
     if body.interval_minutes < 5:
         raise HTTPException(422, "interval_minutes tối thiểu 5 phút")
+    _check_sched_policy(body.ai_credential_policy)
     s = ScanSchedule(repo_id=body.repo_id, interval_minutes=body.interval_minutes,
-                     email_report=body.email_report, enabled=body.enabled)
+                     email_report=body.email_report, enabled=body.enabled,
+                     created_by_user_id=getattr(getattr(request.state, "user", None), "id", None),
+                     ai_credential_policy=body.ai_credential_policy)
     s.next_run_at = s.compute_next()
     db.add(s); db.commit(); db.refresh(s)
     return _sch_public(s)
@@ -182,6 +194,8 @@ def update_schedule(sch_id: str, body: ScheduleUpsert, db: Session = Depends(get
         raise HTTPException(404, "Lịch không tồn tại")
     if body.interval_minutes < 5:
         raise HTTPException(422, "interval_minutes tối thiểu 5 phút")
+    _check_sched_policy(body.ai_credential_policy)
+    s.ai_credential_policy = body.ai_credential_policy
     s.interval_minutes = body.interval_minutes
     s.email_report = body.email_report
     s.enabled = body.enabled

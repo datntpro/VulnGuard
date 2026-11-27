@@ -40,6 +40,11 @@ AI_BAD_PROVIDER = "AI_BAD_PROVIDER"
 AI_UNKNOWN_FEATURE = "AI_UNKNOWN_FEATURE"
 AI_CRED_REVOKED = "AI_CRED_REVOKED"        # [AI PR-2] credential đã revoked/disabled
 AI_CRED_FORBIDDEN = "AI_CRED_FORBIDDEN"    # [AI PR-2] credential của user khác
+AI_QUOTA = "AI_QUOTA"                      # [AI PR-3] hết hạn mức org-key tháng
+AI_RATE_LIMIT = "AI_RATE_LIMIT"            # [AI PR-3] vượt rpm
+AI_NOT_ALLOWED = "AI_NOT_ALLOWED"          # [AI PR-3] provider/model ngoài policy.allowed
+AI_ROUTE_CHANGED = "AI_ROUTE_CHANGED"      # [AI PR-3] Co-work: cuộc hội thoại cloud nhưng Settings giờ là local
+AI_CLOUD_NO_TOOLS = "AI_CLOUD_NO_TOOLS"    # [AI PR-3] Co-work cloud: model chưa qua probe tool-calling
 
 _OLLAMA_DUMMY_KEY = "ollama"   # SDK openai bắt buộc api_key khác rỗng; Ollama bỏ qua — người dùng KHÔNG phải nhập
 
@@ -53,6 +58,10 @@ class LLMContext:
     pinned_credential_id: Optional[str] = None
     needs_tools: bool = False
     escalate: bool = False               # triage hybrid: bước leo thang lên cloud (luật vẫn ở AIAnalyzer)
+    # [AI PR-3] job hệ thống/lịch: policy hiệu lực (org|owner|local_only) + chủ lịch; Co-work: route đã ghim của hội thoại
+    sched_policy: Optional[str] = None
+    sched_owner_id: Optional[str] = None
+    pinned_route_kind: Optional[str] = None   # 'local' | 'cloud' (Co-work, §4.11.1)
 
 
 class RouteRefused(RuntimeError):
@@ -84,6 +93,16 @@ class ResolvedCredential:
     @property
     def scope(self) -> str:
         return self._scope
+
+    @property
+    def cid(self) -> Optional[str]:
+        """Id credential (không phải secret) — cho ghim job, usage event, audit."""
+        return self._cid
+
+    @property
+    def hint(self) -> str:
+        """`…abcd` (4 ký tự cuối) — hiển thị cho CHỦ; không phải secret."""
+        return self._hint()
 
     def _hint(self) -> str:
         """Hint cuối key (…abcd), tính MỘT lần rồi nhớ — repr không giải mã lại mỗi lần."""
@@ -148,6 +167,11 @@ class Cloud:
     model: str
     family: str          # 'anthropic_first' | 'bedrock' | 'openai'
     kind: str = "cloud"
+    ctx: Optional[LLMContext] = None     # [AI PR-3] để Meter ghi usage / kiểm hạn mức mỗi lần gọi
+
+    @property
+    def credential_id(self) -> Optional[str]:
+        return self.credential.cid
 
     @property
     def label(self) -> str:
@@ -181,23 +205,186 @@ def _local_route() -> LocalOllama:
                        vision_model=runtime_settings.ollama_vision_model())
 
 
-def _cloud_route(cfg: Dict[str, Any]) -> Route:
+def _model_family(provider: str, sec: Dict[str, Any]) -> Tuple[str, str]:
+    if provider == "openrouter":
+        from api.services.ai_config import DEFAULT_OPENROUTER_MODEL
+        return sec.get("model") or DEFAULT_OPENROUTER_MODEL, "openai"
+    if provider == "openai":
+        return sec.get("model") or "gpt-4o", "openai"
+    if provider == "bedrock":
+        return sec.get("model") or "anthropic.claude-opus-5-5", "bedrock"
+    return sec.get("model") or "claude-opus-5-5", "anthropic_first"
+
+
+def _cloud_route(cfg: Dict[str, Any], ctx: Optional[LLMContext] = None) -> Route:
+    """Route org (cấu hình ai_config). `cid` = hàng ai_credentials(scope='org') tương ứng nếu đã migrate."""
     provider = cfg.get("provider")
     if provider not in _CLOUD_PROVIDERS or not isinstance(cfg.get(provider), dict):
         return Refuse(AI_BAD_PROVIDER, "ai.error.bad_provider")
     sec = cfg[provider]
-    if provider == "openrouter":
-        from api.services.ai_config import DEFAULT_OPENROUTER_MODEL
-        model, family = sec.get("model") or DEFAULT_OPENROUTER_MODEL, "openai"
-    elif provider == "openai":
-        model, family = sec.get("model") or "gpt-4o", "openai"
-    elif provider == "bedrock":
-        model, family = sec.get("model") or "anthropic.claude-opus-5-5", "bedrock"
-    else:
-        model, family = sec.get("model") or "claude-opus-5-5", "anthropic_first"
+    model, family = _model_family(provider, sec)
     # Chỉ giữ section của provider được chọn (không kéo key của provider khác vào route)
-    cred = ResolvedCredential(provider, copy.deepcopy(sec), scope="org")
-    return Cloud(credential=cred, provider=provider, model=model, family=family)
+    cred = ResolvedCredential(provider, copy.deepcopy(sec), scope="org", cid=cfg.get("org_credential_id"))
+    return Cloud(credential=cred, provider=provider, model=model, family=family, ctx=ctx)
+
+
+# ── [AI PR-3] precedence: pinned → default của người khởi chạy → org (nếu policy cho + còn hạn mức) → refuse ──
+_USABLE = ("valid", "unknown")
+
+
+def _org_cloud(ctx: LLMContext, cfg: Dict[str, Any], policy: Dict[str, Any], *, check_quota: bool) -> Route:
+    from api.services import ai_policy, ai_usage
+    r = _cloud_route(cfg, ctx)
+    if isinstance(r, Refuse):
+        return r
+    if not ai_policy.is_allowed(policy, r.provider, r.model):
+        return Refuse(AI_NOT_ALLOWED, "ai.error.not_allowed")
+    if check_quota and ctx.user_id:
+        from api.database import SessionLocal
+        db = SessionLocal()
+        try:
+            if ai_usage.quota_exhausted(db, ctx.user_id, policy):
+                return Refuse(AI_QUOTA, "ai.error.quota")
+        finally:
+            db.close()
+    return r
+
+
+def _user_cloud(db, row, ctx: LLMContext, policy: Dict[str, Any], *, act_as: Optional[str] = None,
+                deny_code: str = AI_NOT_ALLOWED) -> Route:
+    """Dựng route từ MỘT hàng credential của user (đã chọn). Giải mã đúng lúc qua open_for_call."""
+    from api.services import ai_credentials
+    from api.services.ai_credentials import CredentialError
+    model, family = _model_family(row.provider, row.params or {})
+    from api.services import ai_policy
+    if not ai_policy.is_allowed(policy, row.provider, model):
+        return Refuse(deny_code, "ai.error.cred_revoked" if deny_code == AI_CRED_REVOKED else "ai.error.not_allowed")
+    cctx = replace(ctx, user_id=act_as) if act_as else ctx
+    try:
+        cred = ai_credentials.open_for_call(db, row.id, cctx)
+    except RouteRefused as e:
+        return Refuse(e.code, e.message_key)
+    except CredentialError:
+        return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
+    return Cloud(credential=cred, provider=row.provider, model=model, family=family, ctx=ctx)
+
+
+def _default_row(db, user_id: str, policy: Dict[str, Any]):
+    """Credential mặc định hợp lệ của user (valid|unknown), hoặc None."""
+    from api.ai_cred_models import AiCredential
+    return (db.query(AiCredential)
+            .filter(AiCredential.scope == "user", AiCredential.owner_user_id == user_id,
+                    AiCredential.is_default.is_(True), AiCredential.status.in_(_USABLE),
+                    AiCredential.secret_enc.isnot(None)).first())
+
+
+def _resolve_pinned(db, ctx: LLMContext, cfg, policy) -> Route:
+    from api.ai_cred_models import AiCredential
+    row = db.get(AiCredential, ctx.pinned_credential_id)
+    if row is None or row.status not in _USABLE:
+        # revoked/disabled/invalid/forbidden…: dừng, KHÔNG rơi sang key khác giữa job
+        return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
+    if row.scope == "user":
+        if row.owner_user_id != ctx.user_id:
+            return Refuse(AI_CRED_FORBIDDEN, "ai.error.cred_forbidden")
+        if policy["byok"] == "off":
+            return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
+        return _user_cloud(db, row, ctx, policy, deny_code=AI_CRED_REVOKED)
+    # org: job của user chỉ dùng org khi policy cho; provider org đổi giữa job → dừng (không tự chuyển provider)
+    if policy["byok"] == "required" or not policy["fallback_to_org"]:
+        return Refuse(AI_NO_CREDENTIAL, "ai.error.no_credential")
+    r = _org_cloud(ctx, cfg, policy, check_quota=True)
+    if isinstance(r, Cloud) and row.provider != r.provider:
+        return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
+    return r
+
+
+def _resolve_user_cloud(ctx: LLMContext, cfg, policy) -> Route:
+    from api.database import SessionLocal
+    db = SessionLocal()
+    try:
+        if ctx.pinned_credential_id:
+            return _resolve_pinned(db, ctx, cfg, policy)      # KHÔNG rơi tiếp sang key khác
+        if policy["byok"] != "off":
+            row = _default_row(db, ctx.user_id, policy)
+            if row is not None:
+                from api.services import ai_policy
+                model, _ = _model_family(row.provider, row.params or {})
+                if ai_policy.is_allowed(policy, row.provider, model):
+                    return _user_cloud(db, row, ctx, policy)
+                # default bị policy chặn → coi như không có (rơi sang org nếu policy cho)
+        if policy["byok"] != "required" and policy["fallback_to_org"]:
+            return _org_cloud(ctx, cfg, policy, check_quota=True)
+        return Refuse(AI_NO_CREDENTIAL, "ai.error.no_credential")
+    finally:
+        db.close()
+
+
+def _resolve_system_cloud(ctx: LLMContext, cfg, policy) -> Route:
+    """Job không có user (lịch/hệ thống): key org, hoặc key của CHỦ LỊCH khi policy 'owner'. Không bao giờ key user khác."""
+    eff = ctx.sched_policy or policy["scheduled_jobs_credential"]
+    if eff == "local_only":
+        return Refuse(AI_NO_CREDENTIAL, "ai.error.sched_local_only")
+    if eff == "owner":
+        owner = ctx.sched_owner_id
+        if not owner or policy["byok"] == "off":
+            return Refuse(AI_NO_CREDENTIAL, "ai.error.no_credential")
+        from api.ai_cred_models import AiCredential
+        from api.database import SessionLocal
+        db = SessionLocal()
+        try:
+            row = None
+            if ctx.pinned_credential_id:
+                row = db.get(AiCredential, ctx.pinned_credential_id)
+                if row is None or row.scope != "user" or row.owner_user_id != owner:
+                    return Refuse(AI_CRED_FORBIDDEN, "ai.error.cred_forbidden")
+                if row.status in ("revoked", "disabled"):
+                    return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
+            else:
+                row = _default_row(db, owner, policy)
+            if row is None:
+                return Refuse(AI_NO_CREDENTIAL, "ai.error.no_credential")
+            return _user_cloud(db, row, ctx, policy, act_as=owner)
+        finally:
+            db.close()
+    return _org_cloud(ctx, cfg, policy, check_quota=False)
+
+
+def _resolve_cloud(ctx: LLMContext, cfg: Dict[str, Any]) -> Route:
+    from api.services import ai_policy
+    policy = ai_policy.get_policy(cfg)
+    if ctx.user_id is None:
+        return _resolve_system_cloud(ctx, cfg, policy)
+    return _resolve_user_cloud(ctx, cfg, policy)
+
+
+def _tools_ok(route: Cloud) -> bool:
+    from api.services import ai_policy
+    return ai_policy.cloud_tools_ok(route.provider, route.model)
+
+
+def _resolve_coworker(ctx: LLMContext, cfg: Dict[str, Any]) -> Route:
+    """§4.11: Co-work đi theo Settings › AI. Route được ghim theo hội thoại; không bao giờ tự leo local→cloud
+    và không bao giờ rơi cloud→local/key khác."""
+    from api.services import ai_policy
+    if ctx.job_kind != "coworker_conversation":      # suggest / vision / health: luôn Ollama (D15)
+        return _local_route()
+    desired = ai_policy.coworker_route(cfg)
+    pinned = ctx.pinned_route_kind
+    if pinned == "local" or (pinned is None and desired == "local"):
+        return _local_route()                         # pinned local + Settings đã sang cloud → vẫn local
+    if pinned == "cloud" and desired == "local":
+        return Refuse(AI_ROUTE_CHANGED, "ai.error.route_changed")
+    r = _resolve_cloud(replace(ctx, needs_tools=True), cfg)
+    if isinstance(r, Cloud) and not _tools_ok(r):
+        return Refuse(AI_CLOUD_NO_TOOLS, "ai.error.cloud_no_tools")
+    return r
+
+
+def ollama_default_url() -> str:
+    """URL Ollama mặc định (env) — chỉ để UI hiển thị 'mặc định'."""
+    from api.config import settings
+    return settings.ollama_url
 
 
 def cloud_route_for(cfg: Dict[str, Any]) -> Route:
@@ -219,8 +406,11 @@ def resolve_local(ctx: LLMContext) -> LocalOllama:
 
 
 def resolve(ctx: LLMContext) -> Route:
-    """Chọn route cho một lần gọi LLM. PR-1: chỉ cấu hình org; hành vi y hệt trước đây."""
+    """Chọn route cho một lần gọi LLM (§4.3): mode/task → pinned → default của người khởi chạy → org → refuse."""
     f = ctx.feature
+    if f == "coworker":
+        from api.services.ai_config import load_config
+        return _resolve_coworker(ctx, load_config())
     if f in _LOCAL_ONLY_FEATURES:
         return _local_route()
     from api.services.ai_config import load_config
@@ -228,12 +418,97 @@ def resolve(ctx: LLMContext) -> Route:
     if f == "triage":
         mode = cfg.get("mode", "local_only")
         if mode == "cloud_only" or (mode == "hybrid" and ctx.escalate):
-            return _cloud_route(cfg)
+            return _resolve_cloud(ctx, cfg)
         return _local_route()
     if f in ("reanalyze", "pentest", "pentest_summarizer", "test"):
         # Hôm nay các feature này luôn dùng cloud provider đã cấu hình, bất kể `mode`
-        return _cloud_route(cfg)
+        return _resolve_cloud(ctx, cfg)
     return Refuse(AI_UNKNOWN_FEATURE, "ai.error.unknown_feature")
+
+
+def route_for_own_credential(db, cred_id: str, user_id: str, feature: str = "test") -> Route:
+    """Route từ MỘT credential của chính user (test/liệt kê model). Không áp precedence; credential của người khác,
+    đã thu hồi, hoặc ngoài policy → Refuse. Admin KHÔNG có đường này cho key của user khác."""
+    from api.ai_cred_models import AiCredential
+    from api.services import ai_policy
+    row = db.get(AiCredential, cred_id)
+    if row is None or row.scope != "user" or row.owner_user_id != user_id:
+        return Refuse(AI_CRED_FORBIDDEN, "ai.error.cred_forbidden")
+    if row.status in ("revoked", "disabled"):
+        return Refuse(AI_CRED_REVOKED, "ai.error.cred_revoked")
+    return _user_cloud(db, row, LLMContext(feature=feature, user_id=user_id), ai_policy.get_policy())
+
+
+def ephemeral_route(provider: str, auth_mode: str, params: Dict[str, Any], secret: str,
+                    user_id: Optional[str]) -> Route:
+    """Route cho key CHƯA LƯU (kiểm tra trước khi lưu). Secret chỉ ở RAM, được bọc ngay (Fernet hộp chung)."""
+    from api.security import encrypt_secret
+    if provider not in _CLOUD_PROVIDERS:
+        return Refuse(AI_BAD_PROVIDER, "ai.error.bad_provider")
+    section = dict(params or {})
+    section["auth_mode"] = auth_mode
+    section["api_key_enc"] = encrypt_secret(secret)
+    model, family = _model_family(provider, section)
+    cred = ResolvedCredential(provider, section, scope="user", cid=None)
+    return Cloud(credential=cred, provider=provider, model=model, family=family,
+                 ctx=LLMContext(feature="test", user_id=user_id))
+
+
+def describe_effective(user_id: Optional[str]) -> Dict[str, Any]:
+    """Cho status 'Khoá của bạn': {source: own|org|none, provider, hint} — chỉ đọc metadata, KHÔNG giải mã/không đụng last_used."""
+    from api.database import SessionLocal
+    from api.services import ai_policy
+    from api.services.ai_config import load_config, public_config
+    cfg = load_config()
+    policy = ai_policy.get_policy(cfg)
+    if user_id:
+        db = SessionLocal()
+        try:
+            if policy["byok"] != "off":
+                row = _default_row(db, user_id, policy)
+                if row is not None and ai_policy.is_allowed(policy, row.provider, _model_family(row.provider, row.params or {})[0]):
+                    return {"source": "own", "provider": row.provider, "hint": row.key_hint}
+        finally:
+            db.close()
+    if (not user_id or (policy["byok"] != "required" and policy["fallback_to_org"])):
+        prov = cfg.get("provider")
+        sec = public_config(cfg).get(prov) or {}
+        if sec.get("api_key_set") or sec.get("auth_mode") in ("wif", "environment", "aws_chain", "profile"):
+            return {"source": "org", "provider": prov, "hint": ""}
+    return {"source": "none", "provider": None, "hint": ""}
+
+
+def pin_for_user(user_id: Optional[str], *, include_org: bool = False) -> Optional[str]:
+    """Id credential để GHIM vào job lúc tạo: default hợp lệ + được policy cho phép của user; nếu không có và
+    `include_org` → hàng org (nếu policy cho dùng org). None = để resolver chọn lúc chạy."""
+    if not user_id:
+        return None
+    from api.database import SessionLocal
+    from api.services import ai_policy
+    from api.services.ai_config import load_config
+    cfg = load_config()
+    policy = ai_policy.get_policy(cfg)
+    db = SessionLocal()
+    try:
+        if policy["byok"] != "off":
+            row = _default_row(db, user_id, policy)
+            if row is not None and ai_policy.is_allowed(policy, row.provider, _model_family(row.provider, row.params or {})[0]):
+                return row.id
+        if include_org and policy["byok"] != "required" and policy["fallback_to_org"]:
+            return cfg.get("org_credential_id") or None
+        return None
+    finally:
+        db.close()
+
+
+def schedule_pin(created_by_user_id: Optional[str], schedule_policy: Optional[str]) -> Tuple[str, Optional[str], Optional[str]]:
+    """Cho scan do lịch/hệ thống: (policy hiệu lực, chủ lịch nếu 'owner', credential ghim nếu 'owner')."""
+    from api.services import ai_policy
+    pol = ai_policy.get_policy()
+    eff = schedule_policy if schedule_policy in ai_policy.SCHED_CREDENTIALS else pol["scheduled_jobs_credential"]
+    if eff == "owner" and created_by_user_id:
+        return eff, created_by_user_id, pin_for_user(created_by_user_id)
+    return eff, None, None
 
 
 # ─────────────────────────────────────────────

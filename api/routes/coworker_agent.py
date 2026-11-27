@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from api.database import get_db
 
 from api.config import settings
+from api.services.llm_resolver import RouteRefused
 from api.routes.coworker import _host_request  # tái dùng proxy sang coworker_host
 
 logger = logging.getLogger(__name__)
@@ -154,13 +155,18 @@ class LocalJsonBackend(CoworkBackend):
             return data.get("message", {}).get("content", ""), model
 
 
-def _backend(conversation_id: Optional[str] = None) -> CoworkBackend:
-    """Chọn backend qua resolver. A1/PR-1: Co-work luôn LocalOllama → LocalJsonBackend."""
+def _backend(conversation_id: Optional[str] = None, user_id: Optional[str] = None,
+             pinned_route_kind: Optional[str] = None, pinned_credential_id: Optional[str] = None) -> CoworkBackend:
+    """Chọn backend qua resolver (§4.11: Co-work đi theo Settings › AI). Local → LocalJsonBackend.
+    Cloud: CloudToolBackend là PR-3b — chưa có thì TỪ CHỐI (không bao giờ lặng lẽ chạy local thay cho cloud)."""
     from api.services.llm_resolver import LLMContext, LocalOllama, RouteRefused, resolve
-    route = resolve(LLMContext(feature="coworker", job_kind="coworker_conversation",
-                               job_id=conversation_id, needs_tools=True))
+    route = resolve(LLMContext(feature="coworker", user_id=user_id, job_kind="coworker_conversation",
+                               job_id=conversation_id, needs_tools=True, pinned_route_kind=pinned_route_kind,
+                               pinned_credential_id=pinned_credential_id))
     if isinstance(route, LocalOllama):
         return LocalJsonBackend(route)
+    if getattr(route, "kind", None) == "cloud":
+        raise RouteRefused("AI_COWORKER_CLOUD_UNAVAILABLE", "ai.error.coworker_cloud_unavailable")   # PR-3b
     raise RouteRefused(getattr(route, "code", "AI_ROUTE"), getattr(route, "message_key", ""))
 
 
@@ -429,7 +435,7 @@ def _to_llm_messages(messages: List[ChatMessage]) -> List[Dict[str, str]]:
 
 
 async def _advance(folder_id: str, llm_messages: List[Dict[str, str]], skill_body: Optional[str] = None,
-                   backend: Optional[CoworkBackend] = None) -> Dict[str, Any]:
+                   backend: Optional[CoworkBackend] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
     """Chạy ĐÚNG MỘT bước agent rồi trả về (client tự gọi tiếp để có progress trực tiếp).
 
     - read_only  → thực thi, trả status "step" (kèm thought + observation) để render ngay.
@@ -438,7 +444,7 @@ async def _advance(folder_id: str, llm_messages: List[Dict[str, str]], skill_bod
     Chỉ tự retry NỘI BỘ khi model trả JSON sai định dạng (tối đa MAX_PARSE_RETRY lần).
     """
     model = None
-    backend = backend or _backend()
+    backend = backend or _backend(user_id=user_id)
     for _ in range(MAX_PARSE_RETRY):
         raw, model = await backend.chat(llm_messages, skill_body=skill_body)
         llm_messages.append({"role": "assistant", "content": raw})
@@ -495,7 +501,7 @@ def _resolve_skill_body(skill_id: Optional[str]) -> Optional[str]:
 
 
 @router.post("/step")
-async def agent_step(req: AgentStepRequest):
+async def agent_step(req: AgentStepRequest, request: Request):
     llm_messages = _to_llm_messages(req.messages)
     skill_body = _resolve_skill_body(req.skill_id)
 
@@ -512,8 +518,11 @@ async def agent_step(req: AgentStepRequest):
         llm_messages.append({"role": "user", "content": f"OBSERVATION:\n{obs}"})
 
     try:
-        return await _advance(req.folder_id, llm_messages, skill_body=skill_body)
+        return await _advance(req.folder_id, llm_messages, skill_body=skill_body,
+                              user_id=getattr(getattr(request.state, "user", None), "id", None))
     except HTTPException:
+        raise
+    except RouteRefused:      # [AI PR-3] → 409 {code} qua exception handler (không biến thành 500)
         raise
     except httpx.HTTPError as e:
         raise HTTPException(status_code=503, detail=f"Không gọi được Ollama: {e}")

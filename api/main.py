@@ -9,6 +9,8 @@ import os
 from api.config import settings as app_settings
 from api.database import Base, engine
 from api.routes import projects, scans, vulns, compare, ollama, settings, report, domains, coworker, coworker_agent, docreview, file_assistant
+from api.routes import ai_credentials as ai_credentials_routes, ai_settings
+from api.services.llm_resolver import RouteRefused
 from api.routes import auth, ai, webscans, pentest, assets, intel, connectors, dashboard, scm, knowledge
 # domain_models / docreview_models phải được import trước create_all() để SQLAlchemy
 # đăng ký các bảng tương ứng (module riêng, tách khỏi models.py)
@@ -71,6 +73,12 @@ def _run_migrations():
             "ALTER TABLE pentest_runs ADD COLUMN scope_snapshot TEXT",  # 1.7 audit
             "ALTER TABLE scans ADD COLUMN triggered_by_user_id VARCHAR(64)",  # [AI PR-1]
             "ALTER TABLE agent_conversations ADD COLUMN owner_user_id VARCHAR(64)",  # [AI PR-1]
+            "ALTER TABLE scans ADD COLUMN ai_credential_id VARCHAR(36)",  # [AI PR-3]
+            "ALTER TABLE scans ADD COLUMN ai_sched_policy VARCHAR(16)",
+            "ALTER TABLE scans ADD COLUMN ai_sched_owner_id VARCHAR(64)",
+            "ALTER TABLE pentest_runs ADD COLUMN ai_credential_id VARCHAR(36)",
+            "ALTER TABLE scan_schedules ADD COLUMN created_by_user_id VARCHAR(64)",
+            "ALTER TABLE scan_schedules ADD COLUMN ai_credential_policy VARCHAR(16)",
         ):
             try:
                 conn.execute(text(ddl))
@@ -225,7 +233,16 @@ app.middleware("http")(_security_headers)
 
 # API Routes
 app.include_router(auth.router)
+
+
+@app.exception_handler(RouteRefused)
+async def _route_refused_handler(request, exc):     # [AI PR-3] mã chuẩn hoá, không bao giờ văn bản provider
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": {"code": exc.code, "message_key": exc.message_key}, "code": exc.code}, status_code=409)
+
 app.include_router(ai.router)
+app.include_router(ai_settings.router)
+app.include_router(ai_credentials_routes.router)
 app.include_router(webscans.router)
 app.include_router(pentest.router)
 from api.routes import pentest_accounts  # noqa: E402  P2-11

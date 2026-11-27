@@ -90,6 +90,10 @@ class Scan(Base):
     summary = Column(JSON, nullable=True)                  # {critical: 2, high: 5, ...}
     scanner_progress = Column(JSON, nullable=True)         # live progress: {tools: {...}, pct: 60}
     triggered_by_user_id = Column(String(64), nullable=True)   # [AI PR-1] người kích hoạt (None = lịch/hệ thống)
+    # [AI PR-3] ghim credential AI lúc tạo scan (null = chọn lúc phân tích theo policy). KHÔNG đưa ra API/báo cáo.
+    ai_credential_id = Column(String(36), nullable=True)
+    ai_sched_policy = Column(String(16), nullable=True)        # scan do lịch/hệ thống: org | owner | local_only
+    ai_sched_owner_id = Column(String(64), nullable=True)      # chủ lịch khi policy=owner
 
     project = relationship("Project", back_populates="scans")
     vulnerabilities = relationship("Vulnerability", back_populates="scan", cascade="all, delete-orphan")

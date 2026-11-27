@@ -95,19 +95,23 @@ Chú ý:
 
 class AIAnalyzer:
     def __init__(self, user_id: Optional[str] = None, job_kind: Optional[str] = None,
-                 job_id: Optional[str] = None):
+                 job_id: Optional[str] = None, pinned_credential_id: Optional[str] = None,
+                 sched_policy: Optional[str] = None, sched_owner_id: Optional[str] = None):
         # Đọc fresh mỗi lần instantiate — không dùng module-level vars
         # để pick up model thay đổi qua UI (PUT /api/ollama/active-model).
         # [AI PR-1] URL/model Ollama đến từ resolver (route), không đọc runtime_settings trực tiếp.
         from api.config import settings as _settings
         self.user_id, self.job_kind, self.job_id = user_id, job_kind, job_id
+        # [AI PR-3] ghim credential lúc tạo job + policy job lịch (org|owner|local_only)
+        self.pinned_credential_id, self.sched_policy, self.sched_owner_id = pinned_credential_id, sched_policy, sched_owner_id
         self._ollama_timeout = _settings.ollama_timeout
         self._refresh_local()
 
     def _ctx(self, feature: str = "triage", **kw):
         from api.services.llm_resolver import LLMContext
         return LLMContext(feature=feature, user_id=self.user_id, job_kind=self.job_kind,
-                          job_id=self.job_id, **kw)
+                          job_id=self.job_id, pinned_credential_id=self.pinned_credential_id,
+                          sched_policy=self.sched_policy, sched_owner_id=self.sched_owner_id, **kw)
 
     def _refresh_local(self) -> None:
         from api.services.llm_resolver import resolve_local
