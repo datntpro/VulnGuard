@@ -96,8 +96,19 @@ def reset_throttle() -> None:
 # ─────────────────────────────────────────────
 # Phân loại lỗi → mã chuẩn hoá (không đọc/trả body của provider)
 # ─────────────────────────────────────────────
+def _guard_in_chain(exc: BaseException) -> bool:
+    """SDK (openai/anthropic) bọc lỗi transport thành APIConnectionError → guard nằm ở __cause__/__context__."""
+    seen = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 8:
+        if isinstance(exc, (url_guard.UrlRejected, url_guard.GuardRejected)):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 def classify(exc: BaseException, stage: str = "list") -> str:
-    if isinstance(exc, url_guard.UrlRejected):
+    if isinstance(exc, url_guard.UrlRejected) or _guard_in_chain(exc):
         return BAD_BASE_URL
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
         return TIMEOUT
@@ -151,7 +162,7 @@ async def probe_cloud(route, *, timeout: float = PROBE_TIMEOUT) -> ProbeResult:
     try:
         client, model, family = open_client(route, probe=True)
         mark = lambda: stage.__setitem__("v", "call")   # noqa: E731
-        coro = (_openai_calls_staged(client, model, mark) if family == "openai"
+        coro = (_openai_calls_staged(client, model, mark, route.provider) if family == "openai"
                 else _anthropic_calls_staged(client, model, family, mark))
         tools = await asyncio.wait_for(coro, timeout=timeout)
         return done(True, VALID, model, tools)
@@ -169,8 +180,18 @@ async def probe_cloud(route, *, timeout: float = PROBE_TIMEOUT) -> ProbeResult:
                 pass
 
 
-async def _openai_calls_staged(client, model, mark):
-    await client.models.list()
+# [AI PR-6] Azure (khoá theo deployment) và Vertex (không có /models) không có bước liệt kê model; endpoint
+# OpenAI-compatible tuỳ chỉnh có thể không hỗ trợ /models → 404/405 ở bước list không coi là lỗi.
+_NO_LIST = frozenset({"azure_openai", "vertex"})
+
+
+async def _openai_calls_staged(client, model, mark, provider: str = "openai"):
+    if provider not in _NO_LIST:
+        try:
+            await client.models.list()
+        except Exception as e:
+            if provider != "openai_compatible" or getattr(e, "status_code", None) not in (404, 405):
+                raise
     mark()
     return await _openai_chat(client, model)
 

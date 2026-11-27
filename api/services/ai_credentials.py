@@ -60,7 +60,8 @@ def _owner_tag(owner_user_id: Optional[str]) -> str:
 
 
 # Tham số ảnh hưởng NƠI key được gửi tới → ràng buộc toàn vẹn vào envelope (sửa DB không đổi được host)
-_BOUND_PARAMS = ("base_url", "region", "deployment", "project", "location", "api_version", "endpoint", "aws_profile")
+_BOUND_PARAMS = ("base_url", "region", "deployment", "project", "location", "api_version", "endpoint", "aws_profile",
+                 "tenant_id", "client_id")   # [PR-6] tenant/client quyết định nơi secret Entra được gửi
 
 
 def params_digest(params: Optional[Dict[str, Any]]) -> str:
@@ -104,6 +105,8 @@ def _open_envelope(row) -> str:
 def _hint(secret: Optional[str]) -> str:
     if not secret:
         return ""
+    if secret.lstrip().startswith("{"):      # [PR-6] service-account JSON: cuối file không phải "đuôi key" → không lộ ký tự nào
+        return "json"
     return "…" + secret[-4:] if len(secret) >= 8 else "…"
 
 
@@ -321,7 +324,10 @@ def open_for_call(db, cred_id: str, ctx):
 # ── Migration cấu hình org (§4.10) ───────────────────────
 def _org_params(provider: str, sec: Dict[str, Any]) -> Dict[str, Any]:
     keys = {"anthropic": ("model", "wif"), "bedrock": ("model", "region", "aws_profile"),
-            "openai": ("model", "base_url"), "openrouter": ("model",)}[provider]
+            "openai": ("model", "base_url"), "openrouter": ("model",),
+            "azure_openai": ("endpoint", "deployment", "api_version", "tenant_id", "client_id"),
+            "gemini": ("model",), "vertex": ("model", "project", "location"),
+            "openai_compatible": ("model", "base_url")}[provider]
     return {k: sec[k] for k in keys if k in sec and sec[k] not in (None, "")}
 
 

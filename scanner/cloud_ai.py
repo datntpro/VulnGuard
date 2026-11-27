@@ -84,6 +84,10 @@ _SECRET_PATTERNS = [
     re.compile(r"(?i)\bapi-key[\"':= ]{1,4}[0-9a-f]{32}\b"),
     re.compile(r"\"private_key_id\"\s*:\s*\"[0-9a-f]{20,}\""),
     re.compile(r"[A-Za-z0-9\-]{1,64}@[A-Za-z0-9\-]{1,64}\.iam\.gserviceaccount\.com"),
+    # [AI PR-6] Google OAuth access token (ya29.…) / refresh token (1//…); Entra client secret (…8Q~…)
+    re.compile(r"\bya29\.[A-Za-z0-9_\-]{20,}"),
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_.~\-]{3}8Q~[A-Za-z0-9_.~\-]{30,40}"),
+    re.compile(r"(?<![A-Za-z0-9/])1//[A-Za-z0-9_\-]{40,}"),
 ]
 _ASSIGN_PATTERN = re.compile(
     r"""(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth)"""
@@ -250,8 +254,8 @@ class CloudAnalyzer:
         prov = getattr(self.route, "provider", None) or self.cfg.get("provider", "")
         base = _PROVIDER_LABEL.get(self.family, prov)
         # openrouter dùng family openai nhưng ghi nhãn theo provider thật
-        if prov == "openrouter":
-            base = "openrouter"
+        if self.family == "openai" and prov and prov != "openai":   # openrouter/azure_openai/gemini/vertex/openai_compatible
+            base = prov
         return f"{base}:{self.model}"
 
     async def _create(self, system: str, user: str, schema: dict, max_tokens: int = 8000) -> str:

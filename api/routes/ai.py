@@ -51,7 +51,7 @@ async def list_ai_models(provider: str, credential_id: Optional[str] = None, use
                          db: Session = Depends(get_db)):
     """Danh sách model provider hỗ trợ (để UI chọn dropdown thay vì gõ tay).
 
-    provider ∈ anthropic | bedrock | openai | openrouter. Không có `credential_id` → credential ORG (chỉ ADMIN).
+    provider ∈ anthropic | bedrock | openai | openrouter | azure_openai | gemini | vertex | openai_compatible. Không có `credential_id` → credential ORG (chỉ ADMIN).
     Có `credential_id` → CHỦ credential đó (ANALYST/ADMIN, key của chính mình; người khác/admin → 404).
     Offline hoặc chưa có key → danh sách mặc định (source=static)."""
     from api.auth_models import UserRole
@@ -76,7 +76,8 @@ async def list_ai_models(provider: str, credential_id: Optional[str] = None, use
 
 
 # Trường được phép ghi đè khi test giá trị CHƯA LƯU (không có secret nào ngoài api_key — chỉ nằm trong RAM)
-_TEST_FIELDS = ("model", "base_url", "auth_mode", "region", "aws_profile")
+_TEST_FIELDS = ("model", "base_url", "auth_mode", "region", "aws_profile",
+                "endpoint", "deployment", "api_version", "tenant_id", "client_id", "project", "location")   # [PR-6]
 
 
 def _user_id(request: Request):

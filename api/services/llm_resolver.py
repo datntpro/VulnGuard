@@ -32,7 +32,9 @@ Feature = Literal["triage", "reanalyze", "pentest", "pentest_summarizer", "docre
 
 # Feature luôn chạy Ollama (theo thiết kế hiện tại: không bao giờ cloud)
 _LOCAL_ONLY_FEATURES = frozenset({"docreview", "coworker", "file_assistant"})
-_CLOUD_PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter")
+_CLOUD_PROVIDERS = ("anthropic", "bedrock", "openai", "openrouter", "azure_openai", "gemini", "vertex", "openai_compatible")
+# [AI PR-6] provider đi qua SDK openai (Chat Completions) — dùng chung driver/probe family "openai"
+_OPENAI_FAMILY = ("openai", "openrouter", "azure_openai", "gemini", "vertex", "openai_compatible")
 
 # Mã refuse (message_key do UI dịch ở PR-5)
 AI_NO_CREDENTIAL = "AI_NO_CREDENTIAL"
@@ -115,7 +117,8 @@ class ResolvedCredential:
                 else:
                     from api.security import decrypt_secret
                     tok = decrypt_secret(enc)
-                    h = f"…{tok[-4:]}" if tok and len(tok) >= 8 else "…"
+                    h = ("json" if tok and tok.lstrip().startswith("{")      # SA JSON: không lộ ký tự nào
+                         else f"…{tok[-4:]}" if tok and len(tok) >= 8 else "…")
             except Exception:
                 pass
             object.__setattr__(self, "_hint_cache", h)
@@ -211,6 +214,16 @@ def _model_family(provider: str, sec: Dict[str, Any]) -> Tuple[str, str]:
         return sec.get("model") or DEFAULT_OPENROUTER_MODEL, "openai"
     if provider == "openai":
         return sec.get("model") or "gpt-4o", "openai"
+    if provider == "azure_openai":     # [PR-6] "model" của lời gọi = tên deployment
+        return sec.get("deployment") or sec.get("model") or "", "openai"
+    if provider == "gemini":
+        from api.services.ai_provider_params import DEFAULT_GEMINI_MODEL
+        return sec.get("model") or DEFAULT_GEMINI_MODEL, "openai"
+    if provider == "vertex":
+        from api.services.ai_provider_params import DEFAULT_VERTEX_MODEL
+        return sec.get("model") or DEFAULT_VERTEX_MODEL, "openai"
+    if provider == "openai_compatible":
+        return sec.get("model") or "", "openai"
     if provider == "bedrock":
         return sec.get("model") or "anthropic.claude-opus-5-5", "bedrock"
     return sec.get("model") or "claude-opus-5-5", "anthropic_first"
@@ -555,8 +568,10 @@ def _sdk_http_client(cfg: Dict[str, Any], timeout: float):
     Anthropic/Bedrock (SDK 2.x) dùng httpx2; OpenAI-compatible dùng httpx."""
     from api.services import url_guard
     provider = cfg.get("provider")
-    lib = "httpx" if provider in ("openai", "openrouter") else "httpx2"
+    lib = "httpx" if provider in _OPENAI_FAMILY else "httpx2"
     if provider == "openai" and (cfg["openai"].get("base_url") or "").strip():
+        return url_guard.guarded_async_client("cloud", timeout=timeout, lib=lib)
+    if provider in ("azure_openai", "vertex", "openai_compatible"):    # [PR-6] host dựng từ tham số do người dùng/ADMIN đặt → kiểm IP + ghim ở MỖI request
         return url_guard.guarded_async_client("cloud", timeout=timeout, lib=lib)
     return url_guard.plain_async_client(lib, timeout=timeout)
 
@@ -589,6 +604,9 @@ def _build_cloud_client(cfg: Dict[str, Any], probe: bool = False) -> Tuple[Any, 
         client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=180.0,
                              default_headers=default_headers, http_client=http_client)
         return client, model, "openai"
+
+    if provider in ("azure_openai", "gemini", "vertex", "openai_compatible"):
+        return _build_extended_openai_client(cfg, http_client)
 
     import anthropic
 
@@ -641,3 +659,58 @@ def _build_cloud_client(cfg: Dict[str, Any], probe: bool = False) -> Tuple[Any, 
     else:  # environment — ANTHROPIC_API_KEY / ant auth login profile
         client = anthropic.AsyncAnthropic(timeout=timeout, http_client=http_client)
     return client, a.get("model") or "claude-opus-5-5", "anthropic_first"
+
+
+# ─────────────────────────────────────────────
+# [AI PR-6] Azure OpenAI / Gemini / Vertex / OpenAI-compatible — SDK openai, family "openai"
+# ─────────────────────────────────────────────
+def _build_extended_openai_client(cfg: Dict[str, Any], http_client) -> Tuple[Any, str, str]:
+    """Tham số quyết định NƠI gửi khoá được kiểm lại ở ĐÂY (hàng DB / body test có thể bị sửa)."""
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+    from api.services import ai_oauth, ai_provider_params as pp, url_guard
+    from api.services.ai_config import get_api_key
+    provider = cfg["provider"]
+    sec = cfg[provider]
+    key = get_api_key(provider, cfg)
+    model, _family = _model_family(provider, sec)
+
+    if provider == "azure_openai":
+        endpoint = pp.check_azure_endpoint(sec.get("endpoint"))
+        deployment = pp.check_deployment(sec.get("deployment") or sec.get("model"))
+        api_version = pp.check_api_version(sec.get("api_version"))
+        if sec.get("auth_mode", "api_key") == "entra":
+            if not key:
+                raise RuntimeError("Chưa cấu hình client secret Entra cho Azure OpenAI")
+            provider_fn = ai_oauth.entra_token_provider(sec.get("tenant_id"), sec.get("client_id"), key)
+            client = AsyncAzureOpenAI(azure_endpoint=endpoint, api_version=api_version, azure_ad_token_provider=provider_fn,
+                                      timeout=180.0, http_client=http_client)
+        else:
+            if not key:
+                raise RuntimeError("Chưa cấu hình API key cho Azure OpenAI (Settings → AI Provider)")
+            client = AsyncAzureOpenAI(azure_endpoint=endpoint, api_version=api_version, api_key=key,
+                                      timeout=180.0, http_client=http_client)
+        return client, deployment, "openai"
+
+    if provider == "gemini":
+        if not key:
+            raise RuntimeError("Chưa cấu hình API key Gemini (Settings → AI Provider)")
+        client = AsyncOpenAI(api_key=key, base_url=pp.GEMINI_BASE_URL, timeout=180.0, http_client=http_client)
+        return client, model, "openai"
+
+    if provider == "vertex":
+        if not key:
+            raise RuntimeError("Chưa cấu hình service account JSON cho Vertex AI (Settings → AI Provider)")
+        base_url = pp.vertex_base_url(sec.get("project"), sec.get("location"))
+        client = AsyncOpenAI(api_key=ai_oauth.google_token_provider(key), base_url=base_url, timeout=180.0,
+                             http_client=http_client)
+        return client, model, "openai"
+
+    # openai_compatible: ADMIN đặt base_url (bắt buộc) → check_url khi dựng + guard ở mỗi request
+    base = (sec.get("base_url") or "").strip()
+    if not base:
+        raise RuntimeError("Chưa cấu hình base_url cho endpoint OpenAI-compatible")
+    base_url = url_guard.check_url(base, "cloud")
+    if not model:
+        raise RuntimeError("Chưa cấu hình model cho endpoint OpenAI-compatible")
+    client = AsyncOpenAI(api_key=key or "no-key", base_url=base_url, timeout=180.0, http_client=http_client)
+    return client, model, "openai"
