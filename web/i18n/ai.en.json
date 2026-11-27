@@ -62,7 +62,7 @@
  "rule": "by rule",
  "t2": "Pentest Agent",
  "cloudIfNoTools": "cloud if Ollama lacks tools",
- "t3": "Document summaries / Co-work / Document Review",
+ "t3": "Document summaries / Document Review / File Assistant",
  "localAlways": "always local",
  "hPreview": "Preview",
  "hPreviewL": "Preview (last scan: {total} findings)",
@@ -231,5 +231,8 @@
  "code.AI_LOCAL_NO_TOOLS": "The Ollama model does not support tool-calling.",
  "code.UNKNOWN": "Unknown error.",
  "crumb": "Settings › AI",
- "title": "AI"
+ "title": "AI",
+ "t3cw": "Co-work",
+ "routeLocal": "Local (default)",
+ "routeCloud": "Cloud"
 }

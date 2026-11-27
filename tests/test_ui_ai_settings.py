@@ -556,3 +556,16 @@ def test_old_anchors_redirect_to_new_ones(base_url, browser):
         page.wait_for_function("() => location.hash === '#mode'")
     finally:
         ctx.close()
+
+
+def test_cowork_row_in_hybrid_rules_is_selectable_default_local(base_url, browser):
+    ctx, page, c = open_ai(browser, base_url, UserRole.ADMIN)
+    try:
+        assert page.locator("#aiu-route-cw").input_value() == "local"
+        assert page.locator("#aiu-p-cwcloud").count() == 0                       # không có toggle riêng cho Co-work
+        page.select_option("#aiu-route-cw", "cloud")
+        page.click("#aiu-save")
+        page.wait_for_selector("#toast-stack .toast")
+        assert c.calls("PUT", "/api/ai/settings")[0][2]["routing"] == {"coworker": "cloud"}
+    finally:
+        ctx.close()

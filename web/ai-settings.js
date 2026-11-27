@@ -252,6 +252,7 @@
     const q = p.org_quota || {};
     setVal('aiu-p-usd', q.usd_per_user_month == null ? '' : q.usd_per_user_month); setVal('aiu-p-rpm', q.rpm_per_user == null ? '' : q.rpm_per_user);
     setVal('aiu-p-sched', p.scheduled_jobs_credential || 'org'); setVal('aiu-p-baseurl', p.custom_base_url || 'admin_only');
+    setVal('aiu-route-cw', (d.routing && d.routing.coworker) || 'local');
     S.olCheck = o.check || null;
     renderAll();
     S.base = formState();
@@ -263,7 +264,7 @@
     const f = {};
     f.mode = S.sel;
     f['ollama.url'] = val('aiu-ol-url').trim(); f['ollama.model'] = val('aiu-ol-model'); f['ollama.vision_model'] = val('aiu-ol-vision');
-    f['hybrid.sev'] = val('aiu-h-sev'); f['hybrid.lo'] = val('aiu-h-lo'); f['hybrid.hi'] = val('aiu-h-hi');
+    f['hybrid.route_cw'] = val('aiu-route-cw'); f['hybrid.sev'] = val('aiu-h-sev'); f['hybrid.lo'] = val('aiu-h-lo'); f['hybrid.hi'] = val('aiu-h-hi');
     f['cloud.provider'] = S.prov;
     ['anthropic-auth', 'anthropic-model', 'bedrock-auth', 'bedrock-region', 'bedrock-profile', 'bedrock-model', 'openai-model', 'openai-base', 'openrouter-model',
       'wif-rule', 'wif-org', 'wif-token', 'wif-ws', 'wif-sa', 'pt-planner', 'pt-executor', 'pt-summarizer', 'pv-lines'].forEach((k) => { f['cloud.' + k] = val('aiu-' + k); });
@@ -558,6 +559,7 @@
   function buildContractPayload() {
     const pl = buildPayload();
     pl.ollama = { url: val('aiu-ol-url').trim(), model: val('aiu-ol-model'), vision_model: val('aiu-ol-vision') };
+    pl.routing = { coworker: val('aiu-route-cw') };
     pl.advanced = { pentest_models: { planner: val('aiu-pt-planner').trim(), executor: val('aiu-pt-executor').trim(), summarizer: val('aiu-pt-summarizer').trim() } };
     if (isAdmin()) {
       const usd = val('aiu-p-usd').trim(), rpm = val('aiu-p-rpm').trim();

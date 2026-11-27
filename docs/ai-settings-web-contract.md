@@ -17,3 +17,5 @@ the *shapes* below are what the UI expects (PR-3/PR-4 must match or update this 
 | `GET /api/ai/usage?scope=all&days=30` (ADMIN) | `{rows:[{user_email,credential_scope:user\|org\|system,provider,key_hint,calls,est_cost_usd,quota_pct?}]}` |
 
 Secrets: the UI sends a key once in a request body, clears the input immediately, keeps nothing in JS state/localStorage, and never prints server text (only normalised `code`s; legacy `error` strings are masked and truncated).
+
+**Co-work (owner decision, overrides D8 for Co-work only; field name provisional until the amended §6 lands):** Co-work follows Settings › AI (Local → Ollama; Cloud → configured provider via the normal resolver; Hybrid → `routing.coworker: "local"|"cloud"`, default `local`, in `GET/PUT /api/ai/settings`). No separate policy toggle and no picker inside Co-work. Document Review and File Assistant stay local-only.

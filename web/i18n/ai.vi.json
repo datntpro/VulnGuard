@@ -62,7 +62,7 @@
  "rule": "theo quy tắc",
  "t2": "Pentest Agent",
  "cloudIfNoTools": "cloud nếu Ollama không có tools",
- "t3": "Tóm tắt tài liệu / Co-work / Document Review",
+ "t3": "Tóm tắt tài liệu / Document Review / File Assistant",
  "localAlways": "luôn local",
  "hPreview": "Xem trước",
  "hPreviewL": "Xem trước (scan gần nhất: {total} finding)",
@@ -231,5 +231,8 @@
  "code.AI_CRED_REVOKED": "Khoá đã bị thu hồi.",
  "code.AI_NO_CREDENTIAL": "Chưa có khoá để dùng. Thêm khoá ở mục 4 hoặc nhờ admin bật khoá tổ chức.",
  "code.AI_LOCAL_NO_TOOLS": "Model Ollama không hỗ trợ tool-calling.",
- "code.UNKNOWN": "Lỗi không xác định."
+ "code.UNKNOWN": "Lỗi không xác định.",
+ "t3cw": "Co-work",
+ "routeLocal": "Local (mặc định)",
+ "routeCloud": "Cloud"
 }
