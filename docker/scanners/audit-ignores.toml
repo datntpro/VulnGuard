@@ -106,8 +106,8 @@ aliases = ["GHSA-53pm-wgxf-c6qf"]
 lock = "semgrep"
 package = "wcmatch"
 version = "8.5.2"
-reason = "REACHABLE in the online registry pass (rule `paths:` globs vs attacker file names). Impact = bounded CPU DoS of one scan, no code execution or data exposure; globs come from semgrep.dev rules, not from the scanned repo."
-evidence = "probe: bundled scan 0 wcmatch RUN calls; registry scan wcmatch/glob.py:globmatch RUN x650 (scripts/scanner_reachability/check.py --online). sast.py:scan() runs the online pass with timeout=120 and keeps the bundled findings when it times out; bundled rules use no `paths:` globs (do not add multi-`*` ones)."
+reason = "REACHABLE in the online registry pass (rule `paths:` globs vs attacker file names). Impact = CPU DoS of one scan, no code execution or data exposure; globs come from semgrep.dev rules, not from the scanned repo. Measured 2026-11-28: all 44 distinct globs in p/python, p/security-audit, p/owasp-top-ten, p/javascript have <=2 stars (worst crafted path 0.03 s); a hypothetical 5-star glob + 255-byte name = 61 s CPU per file."
+evidence = "probe: bundled scan 0 wcmatch RUN calls; registry scan wcmatch/glob.py:globmatch RUN x650 (scripts/scanner_reachability/check.py --online). Mitigations in code: (1) sast.py _registry_globs_safe fetches the registry rules before the online pass and SKIPS it (bundled findings kept) when any `paths:` glob has >3 stars (tests/test_run_command_timeout.py); (2) base.run_command kills the whole process group (SIGTERM, then SIGKILL after 3 s) on timeout, so the online pass is really bounded by timeout=120 and reported as a timeout error, never clean (same test file); bundled rules use no `paths:` globs (do not add multi-`*` ones)."
 added = 2026-11-28
 expires = 2027-02-26
 tracking = "#101"
