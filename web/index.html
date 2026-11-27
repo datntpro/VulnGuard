@@ -6,6 +6,7 @@
 <title>VulnGuard — DevSecOps Scanner</title>
 <link rel="icon" type="image/svg+xml" href="/static/assets/logo.svg">
 <link rel="stylesheet" href="/static/brand.css">
+<link rel="stylesheet" href="/static/ai-settings.css">
 <script>
   // Áp theme sớm để tránh nháy màu (dark / light / system)
   (function () { var t = 'system'; try { t = localStorage.getItem('vg-theme') || 'system'; } catch (e) {} document.documentElement.dataset.theme = t; })();
@@ -944,123 +945,197 @@
   <div class="page" id="page-settings">
     <h1>Settings</h1>
     <div class="tabs" id="settings-tabs">
-      <div class="tab active" id="st-tab-ollama" onclick="switchTab(this,'st-ollama')">🤖 Ollama &amp; Model</div>
+      <div class="tab active" id="st-tab-ai" onclick="switchTab(this,'st-ai');aiSettingsLoad()">AI</div>
       <div class="tab" id="st-tab-scanners" onclick="switchTab(this,'st-scanners')">🛠️ Scanner Tools</div>
-      <div class="tab" id="st-tab-ai" onclick="switchTab(this,'st-ai');loadAIConfig()">☁️ AI Provider</div>
       <div class="tab" id="st-tab-report" onclick="switchTab(this,'st-report');loadReportBranding()">📄 Báo cáo</div>
       <div class="tab" id="st-tab-knowledge" onclick="switchTab(this,'st-knowledge');loadKnowledge()">📚 Tri thức</div>
       <div class="tab" id="st-tab-users" onclick="switchTab(this,'st-users');loadUsers()" style="display:none;">👥 Người dùng</div>
     </div>
-    <div class="tab-content active" id="st-ollama">
-
-    <!-- Ollama Status -->
-    <div class="card">
-      <h2>🤖 Ollama AI Status</h2>
-      <div id="ollama-status-bar" class="notice" style="margin-bottom:0;">Đang kiểm tra...</div>
-    </div>
-
-    <!-- Ollama endpoint -->
-    <div class="card">
-      <div class="flex-between" style="margin-bottom:6px;">
-        <h2 style="margin-bottom:0;">🔗 Endpoint Ollama</h2>
-        <span id="ollama-endpoint-badge" class="text-sm" style="color:var(--text2);"></span>
-      </div>
-      <div class="notice" style="margin-bottom:12px;">
-        Ollama <strong>không bắt buộc chạy Docker</strong>. Bạn có thể: (1) cài trực tiếp trên máy
-        (<span class="text-mono">ollama serve</span> → <span class="text-mono">http://localhost:11434</span>),
-        hoặc (2) trỏ tới một máy khác trong mạng qua IP (ví dụ <span class="text-mono">http://192.168.1.50:11434</span>).
-        Khi chạy VulnGuard trong Docker, dùng <span class="text-mono">http://host.docker.internal:11434</span> để gọi Ollama trên máy thật.
-      </div>
-      <div class="flex" style="gap:8px;align-items:flex-end;flex-wrap:wrap;">
-        <div style="flex:1;min-width:260px;">
-          <label>Địa chỉ Ollama (để trống = mặc định hệ thống)</label>
-          <input id="ollama-endpoint-input" class="text-mono" placeholder="http://localhost:11434">
+    <!-- ── AI (hợp nhất: thay 2 tab Ollama & AI Provider) ── css: /static/ai-settings.css · js: /static/ai-settings.js ── -->
+    <div class="tab-content active" id="st-ai" data-aiu-root>
+      <div class="aiu-head">
+        <div>
+          <div class="aiu-crumb" data-i18n="crumb">Settings › AI</div>
+          <h2 class="aiu-title" data-i18n="title">AI</h2>
         </div>
-        <button class="btn btn-primary" onclick="saveOllamaEndpoint()">💾 Lưu &amp; kiểm tra</button>
+        <div class="aiu-seg" id="aiu-lang" role="group" aria-label="Language"><button type="button" data-v="vi">VI</button><button type="button" data-v="en">EN</button></div>
       </div>
-      <div id="ollama-endpoint-msg" class="text-sm" style="margin-top:8px;"></div>
-    </div>
 
-    <!-- Active Model -->
-    <div class="card">
-      <h2>Model đang dùng</h2>
-      <div class="flex" style="gap:10px;align-items:flex-end;">
-        <div style="flex:1;">
-          <label>Active model (dùng cho AI analysis)</label>
-          <select id="active-model-select" onchange="setActiveModel()">
-            <option value="">— Chưa có model nào —</option>
-          </select>
+      <div id="aiu-ro" class="aiu-ro aiu-hide" role="note" data-testid="aiu-ro"></div>
+      <div id="aiu-loaderr" class="notice warn aiu-hide" role="alert"></div>
+
+      <div class="aiu-status" id="aiu-status" aria-live="polite" data-testid="aiu-status"></div>
+
+      <!-- 1. Nơi xử lý -->
+      <section class="card aiu-card" id="aiu-sec-mode">
+        <span class="aiu-anchor">#mode</span>
+        <h3><span class="aiu-step">1</span><span data-i18n="s1">Nơi xử lý AI</span></h3>
+        <p class="aiu-sub" data-i18n="s1sub"></p>
+        <div class="aiu-modes" role="radiogroup" aria-label="AI mode" id="aiu-modes">
+          <button type="button" class="aiu-mode aiu-admin" data-mode="local_only" role="radio" aria-checked="false"><b data-i18n="mLocal"></b><span data-i18n="mLocalD"></span><em class="aiu-flow">finding → Ollama</em></button>
+          <button type="button" class="aiu-mode aiu-admin" data-mode="hybrid" role="radio" aria-checked="false"><b data-i18n="mHybrid"></b><span data-i18n="mHybridD"></span><em class="aiu-flow">finding → Ollama → (rule) → cloud</em></button>
+          <button type="button" class="aiu-mode aiu-admin" data-mode="cloud_only" role="radio" aria-checked="false"><b data-i18n="mCloud"></b><span data-i18n="mCloudD"></span><em class="aiu-flow">finding → cloud</em></button>
         </div>
-        <button class="btn btn-primary" onclick="setActiveModel()">Áp dụng</button>
-      </div>
-      <div id="active-model-msg" style="font-size:13px;margin-top:8px;"></div>
-    </div>
+        <div class="aiu-note" data-i18n="featNote"></div>
+      </section>
 
-    <!-- Vision Model -->
-    <div class="card">
-      <h2>🖼️ Vision model (đọc ảnh/sơ đồ trong tài liệu)</h2>
-      <div class="notice" style="margin-bottom:12px;">
-        Khi Co-work Agent đọc tài liệu .docx/.pdf, ảnh & sơ đồ nhúng sẽ được mô tả bằng vision model này.
-        Cần model hỗ trợ ảnh — pull ở mục dưới, ví dụ: <span class="text-mono">llama3.2-vision</span>, <span class="text-mono">llava</span>, <span class="text-mono">qwen2.5vl</span>.
-      </div>
-      <div class="flex" style="gap:10px;align-items:flex-end;">
-        <div style="flex:1;">
-          <label>Vision model</label>
-          <select id="vision-model-select" onchange="setVisionModel()">
-            <option value="">— Chưa có model nào —</option>
-          </select>
+      <!-- 2. Ollama -->
+      <section class="card aiu-card" id="aiu-sec-ollama">
+        <span class="aiu-anchor">#ollama</span>
+        <h3><span class="aiu-step">2</span><span data-i18n="s2">Ollama (local)</span></h3>
+        <p class="aiu-sub" data-i18n="s2sub"></p>
+        <div class="aiu-grid">
+          <div class="aiu-f">
+            <label for="aiu-ol-url" data-i18n="olUrl"></label>
+            <div class="aiu-row"><input id="aiu-ol-url" class="aiu-admin aiu-mono" inputmode="url" autocomplete="off" spellcheck="false" style="flex:1;min-width:0"><button type="button" class="btn btn-ghost btn-sm aiu-admin" id="aiu-ol-test" data-i18n="test"></button></div>
+            <div class="aiu-hint" id="aiu-ol-url-hint"></div>
+            <div class="aiu-err" id="aiu-ol-url-err" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label for="aiu-ol-model" data-i18n="olModel"></label>
+            <select id="aiu-ol-model" class="aiu-admin"></select>
+            <div class="aiu-hint" data-i18n="olModelHint"></div>
+            <div class="aiu-missing aiu-hide" id="aiu-ol-model-missing" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label for="aiu-ol-vision" data-i18n="olVision"></label>
+            <select id="aiu-ol-vision" class="aiu-admin"></select>
+            <div class="aiu-missing aiu-hide" id="aiu-ol-vision-missing" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label data-i18n="olCheck"></label>
+            <ul class="aiu-checks" id="aiu-ol-checks" aria-live="polite" data-testid="aiu-ol-checks"></ul>
+          </div>
         </div>
-        <button class="btn btn-primary" onclick="setVisionModel()">Áp dụng</button>
-      </div>
-      <div id="vision-model-msg" style="font-size:13px;margin-top:8px;"></div>
-    </div>
+        <details class="aiu-details" id="aiu-ol-manage">
+          <summary data-i18n="olManage"></summary>
+          <div class="aiu-row" style="margin-top:10px"><input id="aiu-pull-name" class="aiu-admin aiu-mono" placeholder="qwen2.5-coder:7b" autocomplete="off" style="flex:1;min-width:0"><button type="button" class="btn btn-ghost aiu-admin" id="aiu-pull-btn" data-i18n="pull"></button></div>
+          <div class="aiu-hint" data-i18n="pullHint"></div>
+          <div id="aiu-pull-prog" class="aiu-hide" style="margin-top:10px"><div class="aiu-hint" id="aiu-pull-text"></div><div class="progress-bar"><div class="progress-fill" id="aiu-pull-fill" style="width:0%"></div></div></div>
+          <div class="aiu-tablewrap"><table id="aiu-ol-table"></table></div>
+        </details>
+      </section>
 
-    <!-- Pull Model -->
-    <div class="card">
-      <h2>📥 Pull Model mới</h2>
-      <div class="notice" style="margin-bottom:14px;">
-        Model được lưu local, chỉ cần pull 1 lần. Internet cần thiết khi pull.
-        Sau khi pull xong, chọn model ở mục "Model đang dùng" phía trên.
-      </div>
-
-      <!-- Quick pick -->
-      <label style="margin-bottom:8px;display:block;">Chọn nhanh model phổ biến:</label>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('llama3.2')">llama3.2 (~2GB) ⚡</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('qwen2.5-coder:7b')">qwen2.5-coder:7b (~5GB) 👍 Code</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('deepseek-coder:6.7b')">deepseek-coder:6.7b (~4GB) ⭐ Best</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('codellama:7b')">codellama:7b (~4GB)</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('mistral:7b-instruct')">mistral:7b-instruct (~4GB)</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('phi3:mini')">phi3:mini (~2GB) 🪶 Nhẹ</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('llama3.2-vision')">llama3.2-vision (~8GB) 🖼️ Ảnh</button>
-        <button class="btn btn-ghost btn-sm" onclick="setPullModel('llava')">llava (~4.5GB) 🖼️ Ảnh</button>
-      </div>
-
-      <div class="flex" style="gap:8px;">
-        <input id="pull-model-input" placeholder="Tên model, ví dụ: llama3.2 hoặc deepseek-coder:6.7b" style="flex:1;">
-        <button class="btn btn-primary" onclick="pullModel()">Pull</button>
-      </div>
-
-      <!-- Pull progress -->
-      <div id="pull-progress" style="display:none;margin-top:14px;">
-        <div class="flex" style="margin-bottom:6px;">
-          <span id="pull-status-text" class="text-sm">Đang pull...</span>
-          <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="cancelPull()">Hủy</button>
+      <!-- 2b. Hybrid -->
+      <section class="card aiu-card" id="aiu-sec-hybrid">
+        <span class="aiu-anchor">#hybrid</span>
+        <h3><span class="aiu-step">2b</span><span data-i18n="s2b"></span></h3>
+        <p class="aiu-sub" data-i18n="s2bsub"></p>
+        <div class="aiu-grid">
+          <div class="aiu-f">
+            <label for="aiu-h-sev" data-i18n="hSev"></label>
+            <select id="aiu-h-sev" class="aiu-admin">
+              <option value="CRITICAL">CRITICAL</option>
+              <option value="HIGH" data-i18n="hHigh"></option>
+              <option value="MEDIUM" data-i18n="hMed"></option>
+              <option value="LOW" data-i18n="hLow"></option>
+            </select>
+            <div class="aiu-hint" data-i18n="hSevHint"></div>
+          </div>
+          <div class="aiu-f">
+            <label for="aiu-h-lo" data-i18n="hBand"></label>
+            <div class="aiu-row"><input id="aiu-h-lo" type="number" min="0" max="100" class="aiu-admin" style="width:84px"><span data-i18n="to"></span><input id="aiu-h-hi" type="number" min="0" max="100" class="aiu-admin" style="width:84px" aria-label="max"><span>%</span></div>
+            <div class="aiu-band" aria-hidden="true"><i id="aiu-h-band"></i></div>
+            <div class="aiu-hint" data-i18n="hBandHint"></div>
+            <div class="aiu-err" id="aiu-h-err" role="alert"></div>
+          </div>
+          <div class="aiu-f">
+            <label data-i18n="hTasks"></label>
+            <div class="aiu-tablewrap"><table>
+              <tr><td data-i18n="t1"></td><td><span class="aiu-tag b" data-i18n="rule"></span></td></tr>
+              <tr><td data-i18n="t2"></td><td><span class="aiu-tag" data-i18n="cloudIfNoTools"></span></td></tr>
+              <tr><td data-i18n="t3cw"></td><td><select id="aiu-route-cw" class="aiu-admin" aria-label="Co-work"><option value="local" data-i18n="routeLocal"></option><option value="cloud" data-i18n="routeCloud"></option></select></td></tr>
+              <tr><td data-i18n="t3"></td><td><span class="aiu-tag ok" data-i18n="localAlways"></span></td></tr>
+            </table></div>
+          </div>
         </div>
-        <div class="progress-bar"><div id="pull-progress-fill" class="progress-fill" style="width:0%;"></div></div>
-        <div id="pull-log" class="code-block" style="margin-top:8px;max-height:120px;overflow-y:auto;font-size:11px;color:var(--text2);"></div>
-      </div>
-    </div>
+      </section>
 
-    <!-- Installed Models -->
-    <div class="card">
-      <h2>📦 Models đã cài</h2>
-      <div id="installed-models-list">
-        <div class="sk-list" aria-busy="true" aria-label="Đang tải..."><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div><div class="vg-skeleton sk-row"></div></div>
-      </div>
-    </div>
+      <!-- 3. Cloud của tổ chức -->
+      <section class="card aiu-card" id="aiu-sec-cloud">
+        <span class="aiu-anchor">#cloud</span>
+        <h3><span class="aiu-step">3</span><span data-i18n="s3"></span></h3>
+        <p class="aiu-sub" data-i18n="s3sub"></p>
+        <div class="aiu-prov" id="aiu-prov" role="radiogroup" aria-label="Provider"></div>
+        <div id="aiu-prov-blocks"></div>
+        <div class="aiu-f" style="margin-top:12px">
+          <label data-i18n="testL"></label>
+          <div class="aiu-row"><button type="button" class="btn btn-ghost aiu-admin" id="aiu-cloud-test" data-i18n="testConn"></button></div>
+          <div class="aiu-res aiu-hide" id="aiu-cloud-res" role="status" aria-live="polite" data-testid="aiu-cloud-res"></div>
+        </div>
+        <details class="aiu-details">
+          <summary data-i18n="privacy"></summary>
+          <div class="aiu-grid" style="margin-top:10px">
+            <label class="aiu-check"><input type="checkbox" id="aiu-pv-send" class="aiu-admin"><span data-i18n="pv1"></span></label>
+            <div class="aiu-f"><label for="aiu-pv-lines" data-i18n="pvLines"></label><input id="aiu-pv-lines" type="number" min="0" max="200" class="aiu-admin" style="width:100px"></div>
+            <label class="aiu-check"><input type="checkbox" id="aiu-pv-redact" checked disabled><span data-i18n="pv2"></span></label>
+          </div>
+          <div class="aiu-note aiu-hide" id="aiu-pv-warn" data-i18n="pvWarn"></div>
+        </details>
+        <details class="aiu-details" id="aiu-adv">
+          <summary data-i18n="advanced"></summary>
+          <div class="aiu-grid" style="margin-top:10px">
+            <div class="aiu-f"><label for="aiu-pt-planner">Planner</label><input id="aiu-pt-planner" class="aiu-mono" placeholder="claude-opus-5-5" autocomplete="off" readonly></div>
+            <div class="aiu-f"><label for="aiu-pt-executor">Executor</label><input id="aiu-pt-executor" class="aiu-mono" placeholder="claude-sonnet-5-5" autocomplete="off" readonly></div>
+            <div class="aiu-f"><label for="aiu-pt-summarizer">Summarizer</label><input id="aiu-pt-summarizer" class="aiu-mono" placeholder="claude-haiku-5-5" autocomplete="off" readonly></div>
+          </div>
+          <div class="aiu-hint" data-i18n="advHint"></div>
+        </details>
+      </section>
 
-    </div><!-- /st-ollama -->
+      <!-- 4. Khoá AI của tôi -->
+      <section class="card aiu-card" id="aiu-sec-mine">
+        <span class="aiu-anchor">#my-keys</span>
+        <h3><span class="aiu-step">4</span><span data-i18n="s4"></span></h3>
+        <p class="aiu-sub" data-i18n="s4sub"></p>
+        <div class="aiu-note" id="aiu-policy-note" data-testid="aiu-policy-note"></div>
+        <div class="aiu-note warn aiu-hide" id="aiu-mine-unavail" data-i18n="mineUnavail"></div>
+        <div class="aiu-tablewrap"><table id="aiu-mine-table" data-testid="aiu-mine-table"></table></div>
+        <div class="aiu-row" style="margin-top:12px"><button type="button" class="btn btn-primary" id="aiu-add-btn" data-i18n="addKey"></button><span class="aiu-hint" id="aiu-mine-msg" role="status" aria-live="polite"></span></div>
+        <form id="aiu-add" class="aiu-add aiu-hide" autocomplete="off" onsubmit="return false">
+          <div class="aiu-grid">
+            <div class="aiu-f"><label for="aiu-add-prov" data-i18n="thProv"></label><select id="aiu-add-prov"></select></div>
+            <div class="aiu-f" id="aiu-add-model-wrap"><label for="aiu-add-model" data-i18n="model"></label><input id="aiu-add-model" class="aiu-mono" list="aiu-add-models" autocomplete="off"><datalist id="aiu-add-models"></datalist></div>
+            <div class="aiu-f"><label for="aiu-add-key" data-i18n="key"></label><input id="aiu-add-key" class="aiu-mono aiu-secret" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-testid="aiu-add-key"><div class="aiu-hint" data-i18n="saveHint"></div></div>
+            <div class="aiu-f aiu-hide" id="aiu-add-az-wrap"><label for="aiu-add-resource" data-i18n="azResource"></label><input id="aiu-add-resource" class="aiu-mono" placeholder="myres" autocomplete="off"><div class="aiu-hint" data-i18n="azResourceHint"></div></div>
+            <div class="aiu-f aiu-hide" id="aiu-add-dep-wrap"><label for="aiu-add-deployment" data-i18n="azDeployment"></label><input id="aiu-add-deployment" class="aiu-mono" placeholder="prod-chat" autocomplete="off"></div>
+            <div class="aiu-f aiu-hide" id="aiu-add-ver-wrap"><label for="aiu-add-version" data-i18n="azVersion"></label><input id="aiu-add-version" class="aiu-mono" placeholder="2024-10-21" autocomplete="off"></div>
+            <div class="aiu-f" id="aiu-add-region-wrap"><label for="aiu-add-region" data-i18n="region"></label><input id="aiu-add-region" class="aiu-mono" value="us-east-1" autocomplete="off"></div>
+            <div class="aiu-f"><label for="aiu-add-label" data-i18n="label"></label><input id="aiu-add-label" maxlength="80" autocomplete="off"></div>
+          </div>
+          <div class="aiu-err" id="aiu-add-err" role="alert"></div>
+          <div class="aiu-row" style="margin-top:10px"><button type="button" class="btn btn-primary" id="aiu-add-go" data-i18n="testSave"></button><button type="button" class="btn btn-ghost" id="aiu-add-cancel" data-i18n="cancel"></button></div>
+        </form>
+        <details class="aiu-details"><summary data-i18n="kiroQ"></summary><p class="aiu-sub" style="margin-top:8px" data-i18n="kiroA"></p></details>
+      </section>
+
+      <!-- 5. Chính sách (ADMIN) -->
+      <section class="card aiu-card aiu-hide" id="aiu-sec-policy">
+        <span class="aiu-anchor">#policy</span>
+        <h3><span class="aiu-step">5</span><span data-i18n="s5"></span></h3>
+        <div class="aiu-grid">
+          <div class="aiu-f"><label for="aiu-p-byok" data-i18n="p1"></label><select id="aiu-p-byok" class="aiu-admin"><option value="allowed" data-i18n="p1a"></option><option value="required" data-i18n="p1b"></option><option value="off" data-i18n="p1c"></option></select></div>
+          <div class="aiu-f"><label for="aiu-p-fallback" data-i18n="p2"></label><select id="aiu-p-fallback" class="aiu-admin"><option value="1" data-i18n="p2a"></option><option value="0" data-i18n="p2b"></option></select></div>
+          <div class="aiu-f"><label for="aiu-p-allowed" data-i18n="p3"></label><input id="aiu-p-allowed" class="aiu-admin aiu-mono" autocomplete="off" placeholder="anthropic:*, bedrock:*claude*"></div>
+          <div class="aiu-f"><label for="aiu-p-usd" data-i18n="p4"></label><div class="aiu-row"><input id="aiu-p-usd" type="number" min="0" step="1" class="aiu-admin" style="width:96px"><span>USD</span><input id="aiu-p-rpm" type="number" min="1" step="1" class="aiu-admin" style="width:96px" aria-label="rpm"><span data-i18n="rpm"></span></div></div>
+          <div class="aiu-f"><label for="aiu-p-sched" data-i18n="p5"></label><select id="aiu-p-sched" class="aiu-admin"><option value="org" data-i18n="p5a"></option><option value="owner" data-i18n="p5b"></option><option value="local_only" data-i18n="p5c"></option></select></div>
+          <div class="aiu-f"><label for="aiu-p-baseurl" data-i18n="p6"></label><select id="aiu-p-baseurl" class="aiu-admin"><option value="admin_only" data-i18n="p6a"></option><option value="off" data-i18n="p6b"></option></select></div>
+        </div>
+        <h4 class="aiu-h4" data-i18n="azMapTitle"></h4>
+        <p class="aiu-sub" data-i18n="azMapHint"></p>
+        <div id="aiu-azmap" data-testid="aiu-azmap"></div>
+        <div class="aiu-row" style="margin-top:8px"><button type="button" class="btn btn-ghost btn-sm aiu-admin" id="aiu-azmap-add" data-i18n="azMapAdd"></button></div>
+        <h4 class="aiu-h4" data-i18n="ukeys"></h4>
+        <div class="aiu-tablewrap"><table id="aiu-ukeys" data-testid="aiu-ukeys"></table></div>
+        <h4 class="aiu-h4" data-i18n="usage"></h4>
+        <div class="aiu-tablewrap"><table id="aiu-usage" data-testid="aiu-usage"></table></div>
+      </section>
+
+      <div class="aiu-sticky aiu-hide" id="aiu-savebar" data-testid="aiu-savebar">
+        <span class="aiu-unsaved" id="aiu-unsaved" role="status" aria-live="polite"></span>
+        <div class="aiu-row"><button type="button" class="btn btn-ghost" id="aiu-discard" data-i18n="discard"></button><button type="button" class="btn btn-primary" id="aiu-save" data-i18n="save"></button></div>
+      </div>
+    </div><!-- /st-ai -->
 
     <div class="tab-content" id="st-scanners">
     <!-- Scanner Tools Health -->
@@ -1119,220 +1194,6 @@
       <div id="threshold-info" class="notice">Đang tải...</div>
     </div>
     </div><!-- /st-scanners -->
-
-    <!-- ── AI PROVIDER ─────────────────────────────────────── -->
-    <div class="tab-content" id="st-ai">
-      <div id="ai-config-readonly" class="notice warn" style="display:none;">🔒 Chỉ ADMIN mới được thay đổi cấu hình AI Provider. Bạn đang xem ở chế độ chỉ đọc.</div>
-
-      <div class="card">
-        <div class="flex-between" style="margin-bottom:6px;">
-          <h2 style="margin-bottom:0;">🧭 Chế độ phân tích AI</h2>
-          <span id="ai-config-status" class="text-sm"></span>
-        </div>
-        <p class="text-sm" style="margin-bottom:14px;">Chọn nơi xử lý AI cho việc chấm False Positive, giải thích và gợi ý fix.</p>
-        <div class="opt-grid" id="ai-mode-group">
-          <label class="opt-card"><input type="radio" name="ai-mode" value="local_only" onchange="onAIModeChange()">
-            <div class="opt-title">🏠 Chỉ local (Ollama)</div>
-            <div class="opt-desc">Chỉ dùng Ollama — dữ liệu không rời máy.</div></label>
-          <label class="opt-card"><input type="radio" name="ai-mode" value="hybrid" onchange="onAIModeChange()">
-            <div class="opt-title">⚖️ Hybrid</div>
-            <div class="opt-desc">Ollama chấm trước; finding mức ≥ ngưỡng hoặc FP% nằm trong vùng không chắc chắn (fp_band) sẽ được gửi lên cloud AI để xác minh.</div></label>
-          <label class="opt-card"><input type="radio" name="ai-mode" value="cloud_only" onchange="onAIModeChange()">
-            <div class="opt-title">☁️ Chỉ cloud</div>
-            <div class="opt-desc">Mọi finding đều được phân tích bằng cloud AI (provider cấu hình bên dưới).</div></label>
-        </div>
-
-        <!-- Hybrid options -->
-        <div class="settings-section" id="ai-hybrid-section">
-          <div class="separator"></div>
-          <h3>⚖️ Ngưỡng escalate lên cloud (Hybrid)</h3>
-          <div class="grid2">
-            <div class="form-group">
-              <label>Mức severity tối thiểu gửi lên cloud AI</label>
-              <select id="ai-escalate-sev">
-                <option value="CRITICAL">CRITICAL</option>
-                <option value="HIGH">HIGH trở lên</option>
-                <option value="MEDIUM">MEDIUM trở lên</option>
-                <option value="LOW">LOW trở lên</option>
-              </select>
-              <div class="field-hint">Finding có severity ≥ mức này luôn được cloud AI xác minh lại.</div>
-            </div>
-            <div class="form-group">
-              <label>Vùng không chắc chắn của FP% (Ollama)</label>
-              <div class="row-inline">
-                <input id="ai-fp-low" type="number" min="0" max="100" style="width:90px;" oninput="renderFpBand()">
-                <span class="text-sm">đến</span>
-                <input id="ai-fp-high" type="number" min="0" max="100" style="width:90px;" oninput="renderFpBand()">
-                <span class="text-sm">%</span>
-              </div>
-              <div class="band-bar"><div class="band" id="ai-fp-band"></div></div>
-              <div class="field-hint" id="ai-fp-band-hint">FP% nằm trong khoảng này → gửi cloud AI xác minh.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Cloud provider -->
-      <div class="card" id="ai-cloud-card">
-        <h2>☁️ Cloud provider</h2>
-        <div class="opt-grid" id="ai-provider-group">
-          <label class="opt-card"><input type="radio" name="ai-provider" value="anthropic" onchange="onAIProviderChange()">
-            <div class="opt-title">✳️ Anthropic Claude API</div>
-            <div class="opt-desc">Gọi trực tiếp Claude API của Anthropic (API key, Workload Identity Federation hoặc credential trên máy chủ).</div></label>
-          <label class="opt-card"><input type="radio" name="ai-provider" value="bedrock" onchange="onAIProviderChange()">
-            <div class="opt-title">🟧 Amazon Bedrock</div>
-            <div class="opt-desc">Claude qua AWS Bedrock — AWS IAM / IAM Identity Center, profile do <span class="text-mono">aws sso login</span> / <span class="text-mono">aws configure</span> tạo, hoặc Bedrock API key (headless).</div></label>
-          <label class="opt-card"><input type="radio" name="ai-provider" value="openai" onchange="onAIProviderChange()">
-            <div class="opt-title">🟢 OpenAI (ChatGPT)</div>
-            <div class="opt-desc">OpenAI API — GPT-4o/GPT-4.1… (hoặc endpoint tương thích qua base URL).</div></label>
-          <label class="opt-card"><input type="radio" name="ai-provider" value="openrouter" onchange="onAIProviderChange()">
-            <div class="opt-title">🧩 OpenRouter</div>
-            <div class="opt-desc">Một API key, nhiều nhà cung cấp/model (Anthropic, OpenAI, Llama, Qwen…).</div></label>
-        </div>
-
-        <!-- Anthropic -->
-        <div class="settings-section" id="ai-anthropic-section">
-          <div class="separator"></div>
-          <div class="grid2">
-            <div class="form-group">
-              <label>Phương thức xác thực</label>
-              <select id="ai-anth-auth" onchange="onAIAuthModeChange()">
-                <option value="api_key">API key (cá nhân / workspace doanh nghiệp từ Claude Console)</option>
-                <option value="wif">Workload Identity Federation (doanh nghiệp — đổi token IdP của tổ chức lấy token Anthropic, không lưu API key)</option>
-                <option value="environment">Environment / “ant auth login” trên máy chủ</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>Model <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('anthropic');return false;">⟳ Tải model theo license</a></label>
-              <input id="ai-anth-model" class="text-mono" list="dl-anth-model" placeholder="claude-opus-5-5" autocomplete="off">
-              <datalist id="dl-anth-model"></datalist>
-              <div class="field-hint" id="ai-anth-model-note">Bấm "Tải model" để lấy đúng danh sách model key của bạn hỗ trợ (hoặc tự gõ).</div>
-            </div>
-          </div>
-          <div id="ai-auth-apikey">
-            <div class="form-group">
-              <label>API key</label>
-              <input id="ai-anth-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-ant-...">
-              <div class="field-hint"><span id="ai-anth-key-hint">Chưa có API key nào được lưu.</span>
-                <a href="#" id="ai-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey();return false;">Xóa key đã lưu</a></div>
-            </div>
-          </div>
-          <div id="ai-auth-wif" style="display:none;">
-            <div class="notice">Máy chủ VulnGuard đọc identity token của tổ chức (OIDC từ IdP / Kubernetes / CI) và đổi lấy access token ngắn hạn của Anthropic — không cần lưu API key lâu dài.</div>
-            <div class="grid2">
-              <div class="form-group"><label>Federation rule ID</label><input id="ai-wif-rule" class="text-mono"></div>
-              <div class="form-group"><label>Organization ID</label><input id="ai-wif-org" class="text-mono"></div>
-              <div class="form-group"><label>Đường dẫn identity token file</label><input id="ai-wif-token" class="text-mono" placeholder="/var/run/secrets/tokens/anthropic"></div>
-              <div class="form-group"><label>Workspace ID (tùy chọn)</label><input id="ai-wif-ws" class="text-mono"></div>
-              <div class="form-group"><label>Service account ID (tùy chọn)</label><input id="ai-wif-sa" class="text-mono"></div>
-            </div>
-          </div>
-          <div id="ai-auth-env" style="display:none;">
-            <div class="notice">Dùng credential sẵn có trên máy chủ chạy VulnGuard: biến môi trường (ví dụ <span class="text-mono">ANTHROPIC_API_KEY</span>) hoặc phiên đăng nhập tạo bởi <span class="text-mono">ant auth login</span>. Không lưu bí mật nào trong VulnGuard.</div>
-          </div>
-        </div>
-
-        <!-- Bedrock -->
-        <div class="settings-section" id="ai-bedrock-section" style="display:none;">
-          <div class="separator"></div>
-          <div class="grid2">
-            <div class="form-group">
-              <label>Phương thức đăng nhập AWS</label>
-              <select id="ai-br-auth" onchange="onBedrockAuthModeChange()">
-                <option value="aws_chain">Credential chain trên máy chủ (IAM role / biến môi trường / default profile)</option>
-                <option value="profile">AWS profile — tạo bằng aws sso login / aws configure</option>
-                <option value="bedrock_api_key">Bedrock API key (headless / CI — AWS_BEARER_TOKEN_BEDROCK)</option>
-              </select>
-            </div>
-            <div class="form-group"><label>Region</label><input id="ai-br-region" class="text-mono" placeholder="us-east-1"></div>
-            <div class="form-group">
-              <label>Model ID <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('bedrock');return false;">⟳ Tải model</a></label>
-              <input id="ai-br-model" class="text-mono" list="dl-br-model" placeholder="anthropic.claude-opus-5-5" autocomplete="off">
-              <datalist id="dl-br-model"></datalist>
-              <div class="field-hint" id="ai-br-model-note"></div>
-            </div>
-          </div>
-          <div id="ai-br-profile-wrap" class="form-group" style="display:none;">
-            <label>AWS profile</label>
-            <input id="ai-br-profile" class="text-mono" placeholder="default">
-            <div class="field-hint">Đăng nhập trước trên máy chủ bằng <span class="text-mono">aws sso login --profile &lt;tên&gt;</span> (<span class="text-mono">kiro-cli login</span> chỉ đăng nhập Kiro, không tạo AWS profile), rồi điền đúng tên profile ở đây.</div>
-          </div>
-          <div id="ai-br-key-wrap" class="form-group" style="display:none;">
-            <label>Bedrock API key</label>
-            <input id="ai-br-key" type="password" autocomplete="new-password" class="text-mono" placeholder="ABSK...">
-            <div class="field-hint"><span id="ai-br-key-hint">Chưa có key nào được lưu.</span>
-              <a href="#" id="ai-br-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('bedrock');return false;">Xóa key đã lưu</a></div>
-          </div>
-        </div>
-
-        <!-- OpenAI -->
-        <div class="settings-section" id="ai-openai-section" style="display:none;">
-          <div class="separator"></div>
-          <div class="grid2">
-            <div class="form-group">
-              <label>Model <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('openai');return false;">⟳ Tải model</a></label>
-              <input id="ai-oai-model" class="text-mono" list="dl-oai-model" placeholder="gpt-4o" autocomplete="off">
-              <datalist id="dl-oai-model"></datalist>
-              <div class="field-hint" id="ai-oai-model-note"></div>
-            </div>
-            <div class="form-group"><label>Base URL (tùy chọn)</label><input id="ai-oai-base" class="text-mono" placeholder="https://api.openai.com/v1"></div>
-          </div>
-          <div class="form-group">
-            <label>API key</label>
-            <input id="ai-oai-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-...">
-            <div class="field-hint"><span id="ai-oai-key-hint">Chưa có API key nào được lưu.</span>
-              <a href="#" id="ai-oai-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('openai');return false;">Xóa key đã lưu</a></div>
-          </div>
-        </div>
-
-        <!-- OpenRouter -->
-        <div class="settings-section" id="ai-openrouter-section" style="display:none;">
-          <div class="separator"></div>
-          <div class="notice">OpenRouter định tuyến tới nhiều nhà cung cấp. Model dạng <span class="text-mono">nhà-cung-cấp/model</span>, ví dụ <span class="text-mono">anthropic/claude-3.5-sonnet</span>, <span class="text-mono">openai/gpt-4o</span>, <span class="text-mono">meta-llama/llama-3.1-70b-instruct</span>.</div>
-          <div class="grid2">
-            <div class="form-group">
-              <label>Model <a href="#" class="text-sm" style="margin-left:6px;" onclick="loadModelList('openrouter');return false;">⟳ Tải model</a></label>
-              <input id="ai-or-model" class="text-mono" list="dl-or-model" placeholder="anthropic/claude-3.5-sonnet" autocomplete="off">
-              <datalist id="dl-or-model"></datalist>
-              <div class="field-hint" id="ai-or-model-note"></div>
-            </div>
-            <div class="form-group">
-              <label>API key</label>
-              <input id="ai-or-key" type="password" autocomplete="new-password" class="text-mono" placeholder="sk-or-...">
-              <div class="field-hint"><span id="ai-or-key-hint">Chưa có API key nào được lưu.</span>
-                <a href="#" id="ai-or-clear-key" style="display:none;margin-left:6px;color:var(--critical);" onclick="clearAIKey('openrouter');return false;">Xóa key đã lưu</a></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Privacy -->
-      <div class="card" id="ai-privacy-card">
-        <h2>🔐 Quyền riêng tư dữ liệu</h2>
-        <div id="ai-privacy-warning" class="notice warn" style="display:none;">
-          ⚠️ <strong>Lưu ý:</strong> khi bật "Gửi code context", đoạn mã nguồn quanh vị trí finding sẽ được <strong>gửi lên cloud provider</strong> (<span id="ai-privacy-provider">Anthropic</span>) để phân tích. Hãy chắc chắn chính sách dữ liệu của tổ chức cho phép.
-        </div>
-        <label class="check-row">
-          <span class="toggle"><input type="checkbox" id="ai-priv-send" onchange="renderPrivacyWarning()"><span class="toggle-slider"></span></span>
-          <span><strong>Gửi code context lên cloud</strong><br><span class="text-sm">Tăng độ chính xác khi chấm FP / gợi ý fix. Tắt = chỉ gửi metadata (rule, file, severity, mô tả).</span></span>
-        </label>
-        <div class="form-group" style="margin:4px 0 8px 50px;max-width:240px;">
-          <label>Số dòng context quanh finding</label>
-          <input id="ai-priv-lines" type="number" min="0" max="200">
-        </div>
-        <label class="check-row">
-          <span class="toggle"><input type="checkbox" id="ai-priv-redact"><span class="toggle-slider"></span></span>
-          <span><strong>Che secrets trước khi gửi</strong><br><span class="text-sm">Tự động mask API key, token, mật khẩu phát hiện được trong code context.</span></span>
-        </label>
-      </div>
-
-      <div class="flex" style="flex-wrap:wrap;">
-        <button class="btn btn-primary" id="ai-save-btn" onclick="saveAIConfig()">💾 Lưu cấu hình</button>
-        <button class="btn btn-ghost" id="ai-test-btn" onclick="testAIConfig()">🔌 Kiểm tra kết nối</button>
-        <span class="text-sm">Lưu trước khi kiểm tra nếu vừa thay đổi.</span>
-      </div>
-      <div id="ai-test-result" class="test-result"></div>
-    </div><!-- /st-ai -->
 
     <!-- ── BÁO CÁO (branding PDF) ──────────────────────────── -->
     <div class="tab-content" id="st-report">
@@ -3973,10 +3834,9 @@ function renderCompareSection(title, vulns, cls) {
 }
 
 // ─── SETTINGS ─────────────────────────────────────────────────
-let pullAbortController = null;
-
 async function loadSettings() {
-  await Promise.all([loadOllamaStatus(), loadOllamaEndpoint(), loadInstalledModels(), loadScannerHealth(), loadSonarConfig()]);
+  if (typeof aiSettingsLoad === 'function') aiSettingsLoad();   // trang AI hợp nhất (web/ai-settings.js)
+  await Promise.all([loadScannerHealth(), loadSonarConfig()]);
   document.getElementById('threshold-info').textContent =
     '🔒 Severity threshold: HIGH — Vuln CRITICAL hoặc HIGH còn OPEN sẽ block approve. Chỉnh BLOCK_SEVERITY_THRESHOLD trong .env để thay đổi.';
 }
@@ -4019,53 +3879,6 @@ async function testSonarConfig() {
       + ` · Token: ${r.token_valid == null ? '(chưa nhập)' : (r.token_valid ? '✅ hợp lệ' : '❌ không hợp lệ')}`
       + ` · sonar-scanner: ${r.has_scanner ? '✅ đã cài' : '❌ chưa cài'}`;
   } catch (e) { msg.style.color = 'var(--critical)'; msg.textContent = '❌ ' + e.message; }
-}
-
-async function loadOllamaEndpoint() {
-  try {
-    const r = await api('/api/ollama/endpoint');
-    document.getElementById('ollama-endpoint-input').value = r.custom ? r.url : '';
-    document.getElementById('ollama-endpoint-input').placeholder = r.default || 'http://localhost:11434';
-    document.getElementById('ollama-endpoint-badge').textContent =
-      r.custom ? `tùy chỉnh: ${r.url}` : `mặc định: ${r.url}`;
-  } catch (e) { /* bỏ qua */ }
-}
-
-async function saveOllamaEndpoint() {
-  const msg = document.getElementById('ollama-endpoint-msg');
-  const url = document.getElementById('ollama-endpoint-input').value.trim();
-  msg.style.color = 'var(--text2)'; msg.textContent = 'Đang kiểm tra kết nối...';
-  try {
-    const r = await api('/api/ollama/endpoint', { method: 'PUT', body: { url } });
-    msg.style.color = 'var(--low)';
-    msg.textContent = `✅ Đã lưu — ${r.url} (${(r.models || []).length} model khả dụng)`;
-    loadOllamaEndpoint(); loadOllamaStatus(); loadInstalledModels();
-  } catch (e) {
-    msg.style.color = 'var(--critical)';
-    msg.textContent = '❌ ' + e.message;
-  }
-}
-
-async function loadOllamaStatus() {
-  const bar = document.getElementById('ollama-status-bar');
-  try {
-    const r = await api('/api/ollama/health');
-    bar.style.background = 'color-mix(in srgb, var(--low) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--low) 30%, transparent)'; bar.style.color = 'var(--low)';
-    if (r.model_installed === false) {
-      bar.style.background = 'color-mix(in srgb, var(--medium, #d97706) 12%, transparent)'; bar.style.color = 'var(--medium, #d97706)';
-      bar.textContent = `⚠️ Ollama đang chạy nhưng model đã cấu hình "${r.active_model}" CHƯA được cài — hãy pull model này hoặc chọn model khác`;
-    } else {
-      bar.textContent = `✅ Ollama đang chạy — Active model: ${r.active_model || '(chưa chọn)'}`;
-    }
-  } catch(e) {
-    bar.style.background = 'color-mix(in srgb, var(--critical) 10%, transparent)'; bar.style.borderColor = 'color-mix(in srgb, var(--critical) 30%, transparent)'; bar.style.color = 'var(--critical)';
-    bar.innerHTML = `❌ <strong>Ollama chưa kết nối.</strong> Cách xử lý:<br>
-      <span style="font-size:12px;">
-        1. Cài &amp; chạy Ollama trực tiếp trên máy: <code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">ollama serve</code> (không cần Docker)<br>
-        2. Hoặc trỏ tới Ollama trên máy khác qua IP ở mục "🔗 Endpoint Ollama" bên dưới.<br>
-        3. Hoặc không dùng AI analysis: bỏ tick "Run AI Analysis" khi trigger scan.
-      </span>`;
-  }
 }
 
 // ─── SCANNER TOOLS HEALTH CHECK ──────────────────────────────
@@ -4261,189 +4074,6 @@ async function resetReportLogo() {
     img.src = '/api/settings/report-branding/logo-image?t=' + Date.now(); img.style.display = '';
     img.onload = renderReportPreview;
   } catch (e) { alert('Lỗi: ' + e.message); }
-}
-
-async function loadInstalledModels() {
-  const el = document.getElementById('installed-models-list');
-  const sel = document.getElementById('active-model-select');
-  try {
-    const data = await api('/api/ollama/models');
-    const models = data.models || [];
-    const active = data.active_model;
-
-    // Update dropdown
-    sel.innerHTML = models.length
-      ? models.map(m => `<option value="${escHtml(m.name)}" ${m.name === active ? 'selected' : ''}>${escHtml(m.name)} (${escHtml(m.size_gb)} GB)</option>`).join('')
-      : '<option value="">— Chưa có model nào —</option>';
-    if (active && !models.some(m => m.name === active)) {
-      sel.insertAdjacentHTML('afterbegin', `<option value="${escHtml(active)}" selected>${escHtml(active)} (đã cấu hình — CHƯA cài)</option>`);
-    }
-
-    if (!models.length) {
-      el.innerHTML = `<div class="empty-state" style="padding:20px;"><p>Chưa có model nào. Hãy pull model ở mục phía trên.</p></div>`;
-      return;
-    }
-
-    el.innerHTML = `<table>
-      <thead><tr><th>Model</th><th>Size</th><th>Ngày cài</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-        ${models.map(m => `
-          <tr>
-            <td class="text-mono">${escHtml(m.name)}</td>
-            <td>${m.size_gb} GB</td>
-            <td class="text-sm">${m.modified_at ? new Date(m.modified_at).toLocaleDateString('vi-VN') : '—'}</td>
-            <td>${m.is_active ? '<span class="badge badge-approved">Active</span>' : ''}</td>
-            <td>
-              ${!m.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteModel('${jsStr(m.name)}')">Xóa</button>` : ''}
-            </td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>`;
-  } catch(e) {
-    el.innerHTML = `<p class="text-sm" style="color:var(--critical)">Lỗi: ${escHtml(e.message)}</p>`;
-  }
-  loadVisionModel();
-}
-
-async function setActiveModel() {
-  const sel = document.getElementById('active-model-select');
-  const model = sel.value;
-  if (!model) return;
-  const msg = document.getElementById('active-model-msg');
-  try {
-    await api('/api/ollama/active-model', { method: 'PUT', body: { model } });
-    msg.style.color = 'var(--low)';
-    msg.textContent = `✅ Đã đổi active model thành "${model}"`;
-    loadInstalledModels();
-    loadOllamaStatus();
-  } catch(e) {
-    msg.style.color = 'var(--critical)';
-    msg.textContent = '❌ ' + e.message;
-  }
-}
-
-async function loadVisionModel() {
-  const sel = document.getElementById('vision-model-select');
-  if (!sel) return;
-  try {
-    const data = await api('/api/ollama/vision-model');
-    const installed = data.installed || [];
-    const cur = data.vision_model;
-    const opts = installed.length ? installed : (cur ? [cur] : []);
-    sel.innerHTML = opts.length
-      ? opts.map(n => `<option value="${escHtml(n)}" ${n === cur ? 'selected' : ''}>${escHtml(n)}</option>`).join('')
-      : '<option value="">— Chưa có model nào —</option>';
-    // nếu vision model cấu hình chưa được pull, vẫn hiển thị để biết
-    if (cur && !installed.includes(cur)) {
-      sel.insertAdjacentHTML('afterbegin', `<option value="${escHtml(cur)}" selected>${escHtml(cur)} (chưa pull)</option>`);
-    }
-  } catch(e) { /* bỏ qua */ }
-}
-
-async function setVisionModel() {
-  const sel = document.getElementById('vision-model-select');
-  const model = sel.value;
-  const msg = document.getElementById('vision-model-msg');
-  if (!model) return;
-  try {
-    await api('/api/ollama/vision-model', { method: 'PUT', body: { model } });
-    msg.style.color = 'var(--low)';
-    msg.textContent = `✅ Đã đổi vision model thành "${model}"`;
-  } catch(e) {
-    msg.style.color = 'var(--critical)';
-    msg.textContent = '❌ ' + e.message;
-  }
-}
-
-function setPullModel(name) {
-  document.getElementById('pull-model-input').value = name;
-}
-
-async function pullModel() {
-  const name = document.getElementById('pull-model-input').value.trim();
-  if (!name) return alert('Nhập tên model');
-
-  const progressEl = document.getElementById('pull-progress');
-  const statusText = document.getElementById('pull-status-text');
-  const progressFill = document.getElementById('pull-progress-fill');
-  const logEl = document.getElementById('pull-log');
-  progressEl.style.display = 'block';
-  logEl.textContent = '';
-  progressFill.style.width = '5%';
-  statusText.textContent = `Đang pull "${name}"...`;
-
-  pullAbortController = new AbortController();
-
-  try {
-    const response = await fetch('/api/ollama/pull', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: name }),
-      signal: pullAbortController.signal,
-    });
-    check401(response);
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const text = decoder.decode(value);
-      for (const line of text.split('\n').filter(l => l.trim())) {
-        try {
-          const data = JSON.parse(line);
-          const status = data.status || '';
-          const completed = data.completed || 0;
-          const total = data.total || 0;
-
-          if (total > 0) {
-            const pct = Math.round((completed / total) * 100);
-            progressFill.style.width = pct + '%';
-            statusText.textContent = `${status} — ${pct}% (${(completed/1e9).toFixed(2)}/${(total/1e9).toFixed(2)} GB)`;
-          } else {
-            statusText.textContent = status;
-          }
-
-          logEl.textContent = line;
-          logEl.scrollTop = logEl.scrollHeight;
-
-          if (status === 'success' || data.error) {
-            progressFill.style.width = data.error ? '0%' : '100%';
-            progressFill.style.background = data.error ? 'var(--critical)' : 'var(--low)';
-            statusText.textContent = data.error ? `❌ Lỗi: ${data.error}` : `✅ Pull "${name}" thành công!`;
-            if (!data.error) {
-              setTimeout(() => { progressEl.style.display = 'none'; loadInstalledModels(); }, 2000);
-            }
-          }
-        } catch {}
-      }
-    }
-  } catch(e) {
-    if (e.name !== 'AbortError') {
-      statusText.textContent = '❌ ' + e.message;
-      progressFill.style.background = 'var(--critical)';
-    } else {
-      statusText.textContent = 'Đã hủy';
-      progressEl.style.display = 'none';
-    }
-  } finally {
-    pullAbortController = null;
-    loadInstalledModels();
-  }
-}
-
-function cancelPull() {
-  if (pullAbortController) pullAbortController.abort();
-}
-
-async function deleteModel(name) {
-  if (!confirm(`Xóa model "${name}"? Sẽ cần pull lại nếu muốn dùng.`)) return;
-  try {
-    await api(`/api/ollama/models/${name}`, { method: 'DELETE' });
-    loadInstalledModels();
-  } catch(e) { alert('Lỗi: ' + e.message); }
 }
 
 // ─── CO-WORK ───────────────────────────────────────────────────
@@ -5170,6 +4800,7 @@ function renderUserChip() {
   roleEl.textContent = ROLE_LABEL[currentUser.role] || currentUser.role || '—';
   roleEl.className = 'role-badge ' + (currentUser.role || '');
   usersTab.style.display = currentUser.role === 'ADMIN' ? '' : 'none';
+  if (typeof aiSettingsRoleChanged === 'function') aiSettingsRoleChanged();   // trang AI hợp nhất đổi theo role
 }
 async function logout() {
   try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
@@ -5278,230 +4909,8 @@ async function submitResetPassword() {
   await updateUser(resetPwUserId, { password: p1 });
 }
 
-// ─── SETTINGS › AI PROVIDER ───────────────────────────────────
-const AI_DEFAULTS = {
-  provider: 'anthropic', mode: 'local_only',
-  anthropic: { auth_mode: 'api_key', model: 'claude-opus-5-5', api_key_set: false, api_key_hint: '',
-    wif: { federation_rule_id: '', organization_id: '', identity_token_file: '', workspace_id: '', service_account_id: '' } },
-  bedrock: { auth_mode: 'aws_chain', region: 'us-east-1', aws_profile: '', model: 'anthropic.claude-opus-5-5', api_key_set: false, api_key_hint: '' },
-  openai: { model: 'gpt-4o', base_url: '', api_key_set: false, api_key_hint: '' },
-  openrouter: { model: 'anthropic/claude-3.5-sonnet', api_key_set: false, api_key_hint: '' },
-  hybrid: { escalate_min_severity: 'MEDIUM', fp_band_low: 15, fp_band_high: 85 },
-  privacy: { send_code_context: true, context_lines: 15, redact_secrets: true },
-};
-let aiConfig = null;
-
-function mergeDeep(base, over) {
-  const out = Array.isArray(base) ? [...base] : { ...base };
-  for (const [k, v] of Object.entries(over || {})) {
-    out[k] = (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object') ? mergeDeep(base[k], v) : v;
-  }
-  return out;
-}
-const radioVal = name => document.querySelector(`input[name="${name}"]:checked`)?.value;
-const setRadio = (name, v) => { const el = document.querySelector(`input[name="${name}"][value="${v}"]`); if (el) el.checked = true; };
 const val = id => document.getElementById(id).value;
 const setVal = (id, v) => { document.getElementById(id).value = v ?? ''; };
-
-async function loadAIConfig() {
-  const st = document.getElementById('ai-config-status');
-  st.textContent = 'Đang tải cấu hình...';
-  let cfg = {};
-  try { cfg = await api('/api/ai/config'); st.textContent = ''; }
-  catch (e) { st.innerHTML = `<span style="color:var(--critical)">Không tải được cấu hình: ${escHtml(e.message)}</span>`; }
-  aiConfig = mergeDeep(AI_DEFAULTS, cfg);
-  fillAIForm(aiConfig);
-}
-function keyHint(id, section, clearId) {
-  document.getElementById(id).textContent = section.api_key_set
-    ? `Đã lưu: ${section.api_key_hint || '••••'} — để trống để giữ nguyên, nhập key mới để thay.`
-    : 'Chưa có API key nào được lưu.';
-  if (clearId) document.getElementById(clearId).style.display = (section.api_key_set && canAdmin()) ? 'inline' : 'none';
-}
-function fillAIForm(c) {
-  setRadio('ai-mode', c.mode);
-  setRadio('ai-provider', c.provider || 'anthropic');
-  setVal('ai-anth-auth', c.anthropic.auth_mode);
-  setVal('ai-anth-model', c.anthropic.model);
-  setVal('ai-anth-key', '');
-  keyHint('ai-anth-key-hint', c.anthropic, 'ai-clear-key');
-  const w = c.anthropic.wif || {};
-  setVal('ai-wif-rule', w.federation_rule_id); setVal('ai-wif-org', w.organization_id);
-  setVal('ai-wif-token', w.identity_token_file); setVal('ai-wif-ws', w.workspace_id); setVal('ai-wif-sa', w.service_account_id);
-  // Bedrock
-  setVal('ai-br-auth', c.bedrock.auth_mode || 'aws_chain');
-  setVal('ai-br-region', c.bedrock.region); setVal('ai-br-profile', c.bedrock.aws_profile); setVal('ai-br-model', c.bedrock.model);
-  setVal('ai-br-key', ''); keyHint('ai-br-key-hint', c.bedrock, 'ai-br-clear-key');
-  // OpenAI
-  setVal('ai-oai-model', c.openai.model); setVal('ai-oai-base', c.openai.base_url); setVal('ai-oai-key', '');
-  keyHint('ai-oai-key-hint', c.openai, 'ai-oai-clear-key');
-  // OpenRouter
-  setVal('ai-or-model', c.openrouter.model); setVal('ai-or-key', '');
-  keyHint('ai-or-key-hint', c.openrouter, 'ai-or-clear-key');
-  setVal('ai-escalate-sev', c.hybrid.escalate_min_severity);
-  setVal('ai-fp-low', c.hybrid.fp_band_low); setVal('ai-fp-high', c.hybrid.fp_band_high);
-  document.getElementById('ai-priv-send').checked = !!c.privacy.send_code_context;
-  setVal('ai-priv-lines', c.privacy.context_lines);
-  document.getElementById('ai-priv-redact').checked = !!c.privacy.redact_secrets;
-
-  const editable = canAdmin();
-  document.querySelectorAll('#st-ai input, #st-ai select').forEach(i => { i.disabled = !editable; });
-  document.getElementById('ai-save-btn').style.display = editable ? '' : 'none';
-  document.getElementById('ai-config-readonly').style.display = editable ? 'none' : 'block';
-  onAIModeChange(); onAIAuthModeChange(); onBedrockAuthModeChange(); renderFpBand();
-}
-function onAIModeChange() {
-  const mode = radioVal('ai-mode') || 'local_only';
-  document.getElementById('ai-hybrid-section').style.display = mode === 'hybrid' ? 'block' : 'none';
-  const local = mode === 'local_only';
-  ['ai-cloud-card', 'ai-privacy-card'].forEach(id => {
-    const el = document.getElementById(id);
-    el.style.opacity = local ? '.55' : '';
-    el.title = local ? 'Không dùng ở chế độ "Chỉ local" — vẫn có thể cấu hình sẵn' : '';
-  });
-  onAIProviderChange();
-}
-function onAIProviderChange() {
-  const p = radioVal('ai-provider') || 'anthropic';
-  document.getElementById('ai-anthropic-section').style.display = p === 'anthropic' ? 'block' : 'none';
-  document.getElementById('ai-bedrock-section').style.display = p === 'bedrock' ? 'block' : 'none';
-  document.getElementById('ai-openai-section').style.display = p === 'openai' ? 'block' : 'none';
-  document.getElementById('ai-openrouter-section').style.display = p === 'openrouter' ? 'block' : 'none';
-  renderPrivacyWarning();
-}
-function onAIAuthModeChange() {
-  const m = val('ai-anth-auth');
-  document.getElementById('ai-auth-apikey').style.display = m === 'api_key' ? 'block' : 'none';
-  document.getElementById('ai-auth-wif').style.display = m === 'wif' ? 'block' : 'none';
-  document.getElementById('ai-auth-env').style.display = m === 'environment' ? 'block' : 'none';
-}
-function onBedrockAuthModeChange() {
-  const m = val('ai-br-auth');
-  document.getElementById('ai-br-profile-wrap').style.display = m === 'profile' ? 'block' : 'none';
-  document.getElementById('ai-br-key-wrap').style.display = m === 'bedrock_api_key' ? 'block' : 'none';
-}
-function renderFpBand() {
-  let lo = Math.max(0, Math.min(100, parseInt(val('ai-fp-low'), 10) || 0));
-  let hi = Math.max(0, Math.min(100, parseInt(val('ai-fp-high'), 10) || 0));
-  if (hi < lo) [lo, hi] = [hi, lo];
-  const band = document.getElementById('ai-fp-band');
-  band.style.left = lo + '%'; band.style.width = (hi - lo) + '%';
-  document.getElementById('ai-fp-band-hint').textContent =
-    `FP% từ ${lo}% đến ${hi}% → chưa chắc chắn, gửi cloud AI xác minh. Dưới ${lo}% coi là lỗi thật, trên ${hi}% coi là false positive.`;
-}
-// Tải danh sách model provider hỗ trợ → đổ vào <datalist> cho user chọn
-const _MODEL_UI = {
-  anthropic: { input: 'ai-anth-model', list: 'dl-anth-model', note: 'ai-anth-model-note' },
-  bedrock:   { input: 'ai-br-model',   list: 'dl-br-model',   note: 'ai-br-model-note' },
-  openai:    { input: 'ai-oai-model',  list: 'dl-oai-model',  note: 'ai-oai-model-note' },
-  openrouter:{ input: 'ai-or-model',   list: 'dl-or-model',   note: 'ai-or-model-note' },
-};
-async function loadModelList(provider) {
-  const ui = _MODEL_UI[provider]; if (!ui) return;
-  const note = document.getElementById(ui.note);
-  if (note) note.textContent = 'Đang tải danh sách model…';
-  try {
-    const r = await api('/api/ai/models?provider=' + encodeURIComponent(provider));
-    const dl = document.getElementById(ui.list);
-    dl.innerHTML = (r.models || []).map(m => `<option value="${escHtml(m)}"></option>`).join('');
-    if (note) {
-      const src = r.source === 'api' ? `✅ ${r.models.length} model từ license của bạn` : `ℹ️ danh sách mặc định (${(r.models||[]).length})`;
-      note.textContent = src + (r.note ? ' — ' + r.note : '') + '. Bấm vào ô để chọn, hoặc tự gõ model khác.';
-    }
-    // mở gợi ý ngay
-    const inp = document.getElementById(ui.input); if (inp) { inp.focus(); }
-  } catch (e) {
-    if (note) note.textContent = '❌ Lỗi tải model: ' + e.message + ' (vẫn có thể tự gõ).';
-  }
-}
-function renderPrivacyWarning() {
-  const mode = radioVal('ai-mode') || 'local_only';
-  const send = document.getElementById('ai-priv-send').checked;
-  document.getElementById('ai-privacy-warning').style.display = (send && mode !== 'local_only') ? 'block' : 'none';
-  const pl = { anthropic: 'Anthropic', bedrock: 'Amazon Bedrock', openai: 'OpenAI', openrouter: 'OpenRouter' };
-  document.getElementById('ai-privacy-provider').textContent = pl[radioVal('ai-provider')] || 'cloud provider';
-}
-function buildAIPayload() {
-  const mode = radioVal('ai-mode') || 'local_only';
-  const cloud = radioVal('ai-provider') || 'anthropic';
-  let lo = parseInt(val('ai-fp-low'), 10) || 0, hi = parseInt(val('ai-fp-high'), 10) || 0;
-  if (hi < lo) [lo, hi] = [hi, lo];
-  const payload = {
-    provider: cloud,   // cloud provider dùng cho hybrid / cloud_only (local_only vẫn lưu lựa chọn)
-    mode,
-    anthropic: {
-      auth_mode: val('ai-anth-auth'),
-      model: val('ai-anth-model').trim() || AI_DEFAULTS.anthropic.model,
-      wif: {
-        federation_rule_id: val('ai-wif-rule').trim(), organization_id: val('ai-wif-org').trim(),
-        identity_token_file: val('ai-wif-token').trim(), workspace_id: val('ai-wif-ws').trim(),
-        service_account_id: val('ai-wif-sa').trim(),
-      },
-    },
-    bedrock: { auth_mode: val('ai-br-auth'), region: val('ai-br-region').trim(), aws_profile: val('ai-br-profile').trim(), model: val('ai-br-model').trim() },
-    openai: { model: val('ai-oai-model').trim() || AI_DEFAULTS.openai.model, base_url: val('ai-oai-base').trim() },
-    openrouter: { model: val('ai-or-model').trim() || AI_DEFAULTS.openrouter.model },
-    hybrid: { escalate_min_severity: val('ai-escalate-sev'), fp_band_low: Math.max(0, lo), fp_band_high: Math.min(100, hi) },
-    privacy: {
-      send_code_context: document.getElementById('ai-priv-send').checked,
-      context_lines: Math.max(0, parseInt(val('ai-priv-lines'), 10) || 0),
-      redact_secrets: document.getElementById('ai-priv-redact').checked,
-    },
-  };
-  // write-only keys: chỉ gửi khi người dùng nhập key mới
-  const ak = val('ai-anth-key').trim(); if (ak) payload.anthropic.api_key = ak;
-  const bk = val('ai-br-key').trim(); if (bk) payload.bedrock.api_key = bk;
-  const ok = val('ai-oai-key').trim(); if (ok) payload.openai.api_key = ok;
-  const rk = val('ai-or-key').trim(); if (rk) payload.openrouter.api_key = rk;
-  return payload;
-}
-async function saveAIConfig() {
-  const btn = document.getElementById('ai-save-btn');
-  const payload = buildAIPayload();
-  // Kiểm tra credential cho provider đang chọn (chỉ khi dùng cloud)
-  if (payload.mode !== 'local_only') {
-    const p = payload.provider, saved = aiConfig || {};
-    const need = (sec, has) => !payload[sec].api_key && !(saved[sec] && saved[sec].api_key_set) ? has : null;
-    let miss = null;
-    if (p === 'anthropic' && payload.anthropic.auth_mode === 'api_key') miss = need('anthropic', 'Anthropic API key');
-    else if (p === 'bedrock' && payload.bedrock.auth_mode === 'bedrock_api_key') miss = need('bedrock', 'Bedrock API key');
-    else if (p === 'openai') miss = need('openai', 'OpenAI API key');
-    else if (p === 'openrouter') miss = need('openrouter', 'OpenRouter API key');
-    if (miss) { toast(`Chưa có ${miss} — nhập key hoặc chọn phương thức xác thực khác.`, 'warn'); return; }
-  }
-  btn.disabled = true; btn.textContent = '⏳ Đang lưu...';
-  try {
-    const saved = await api('/api/ai/config', { method: 'PUT', body: payload });
-    aiConfig = mergeDeep(AI_DEFAULTS, saved || payload);
-    fillAIForm(aiConfig);
-    toast('Đã lưu cấu hình AI Provider', 'success');
-  } catch (e) { toast('Lỗi khi lưu: ' + e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = '💾 Lưu cấu hình'; }
-}
-async function clearAIKey(section = 'anthropic') {
-  const label = { anthropic: 'Anthropic', bedrock: 'Bedrock', openai: 'OpenAI', openrouter: 'OpenRouter' }[section] || section;
-  if (!confirm(`Xóa API key ${label} đã lưu trên máy chủ?`)) return;
-  try {
-    const saved = await api('/api/ai/config', { method: 'PUT', body: { [section]: { clear_api_key: true } } });
-    aiConfig = mergeDeep(AI_DEFAULTS, saved || {});
-    fillAIForm(aiConfig);
-    toast('Đã xóa API key', 'success');
-  } catch (e) { toast('Lỗi: ' + e.message, 'error'); }
-}
-async function testAIConfig() {
-  const btn = document.getElementById('ai-test-btn');
-  const out = document.getElementById('ai-test-result');
-  btn.disabled = true; btn.textContent = '⏳ Đang kiểm tra...';
-  out.innerHTML = '<div class="progress-bar" style="max-width:320px;"><div class="progress-fill indeterminate"></div></div>';
-  try {
-    const r = await api('/api/ai/test', { method: 'POST' });
-    out.innerHTML = r.ok
-      ? `<div class="approve-ok">✅ Kết nối thành công — <strong>${escHtml(r.provider || '')}</strong> · <span class="text-mono">${escHtml(r.model || '')}</span> · ${r.latency_ms != null ? escHtml(r.latency_ms) + ' ms' : ''}</div>`
-      : `<div class="approve-blocked">❌ Kết nối thất bại (${escHtml(r.provider || '')}${r.model ? ' · ' + escHtml(r.model) : ''}): ${escHtml(r.error || 'không rõ lỗi')}</div>`;
-  } catch (e) {
-    out.innerHTML = `<div class="approve-blocked">❌ ${escHtml(e.message)}</div>`;
-  } finally { btn.disabled = false; btn.textContent = '🔌 Kiểm tra kết nối'; }
-}
 
 // ─── VULN › PHÂN TÍCH LẠI BẰNG CLAUDE ─────────────────────────
 const AI_PROVIDER_LABEL = { ollama: '🏠 Ollama (local)', anthropic: '✳️ Claude · Anthropic', bedrock: '🟧 Claude · Bedrock', openai: '🟢 OpenAI', openrouter: '🧩 OpenRouter', 'claude-api': '✳️ Claude · Anthropic' };
@@ -7590,5 +6999,6 @@ applyFeatureFlags();
 document.getElementById('page-dashboard').classList.add('vg-enter');
 loadDashboard();
 </script>
+<script src="/static/ai-settings.js"></script>
 </body>
 </html>
