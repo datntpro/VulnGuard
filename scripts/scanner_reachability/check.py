@@ -89,7 +89,8 @@ def run_probed(argv, watch, forbidden, label, control_run, require_import=None, 
     out.close()
     home = tempfile.mkdtemp(prefix="vghome-")  # read-only rootfs + root-owned tmpfs HOME crashed policy_sentry
     env = dict(os.environ, PYTHONPATH=PROBE_DIR + os.pathsep + os.environ.get("PYTHONPATH", ""),
-               VG_PROBE_WATCH=",".join(watch), VG_PROBE_OUT=out.name, HOME=home)
+               VG_PROBE_WATCH=",".join(watch), VG_PROBE_OUT=out.name, HOME=home,
+               XDG_CACHE_HOME=home + "/.cache", XDG_CONFIG_HOME=home + "/.config", XDG_DATA_HOME=home + "/.local", SEMGREP_HOME=home + "/.semgrep")
     p = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout)
     lines = open(out.name, encoding="utf-8").read().splitlines()
     os.unlink(out.name)
