@@ -89,8 +89,14 @@
   .conv.active { background: var(--brand-soft); border-color: color-mix(in srgb, var(--brand-500) 35%, transparent); }
   @media (max-width: 700px) { #sidebar { display: none; } header { gap: 8px; } }
   #routeLine { flex-basis: 100%; order: 10; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; margin: 0; }
-  #routeLine[data-tone="cloud"] #routeText { color: var(--yellow); }
-  #routeLine[data-tone="refused"] #routeText { color: var(--red); }
+  /* Chữ cảnh báo phải đạt WCAG AA (>=4.5:1) ở cả light và dark: dark dùng token gốc, light pha đen cho tối hơn */
+  #routeLine { --route-warn: var(--yellow); --route-bad: var(--red); }
+  :root[data-theme="light"] #routeLine { --route-warn: color-mix(in srgb, var(--yellow) 40%, #000); --route-bad: color-mix(in srgb, var(--critical) 70%, #000); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) #routeLine { --route-warn: color-mix(in srgb, var(--yellow) 40%, #000); --route-bad: color-mix(in srgb, var(--critical) 70%, #000); }
+  }
+  #routeLine[data-tone="cloud"] #routeText { color: var(--route-warn); }
+  #routeLine[data-tone="refused"] #routeText { color: var(--route-bad); }
   .confirm.risky { border-color: var(--red); }
   .confirm.risky h3 { color: var(--red); }
   .confirm .risk { font-size: 13px; margin: 0 0 8px; }

@@ -25,6 +25,7 @@
       AI_RATE_LIMIT: 'Vượt giới hạn số yêu cầu AI — thử lại sau ít phút',
       AI_NOT_ALLOWED: 'Chính sách AI không cho phép model này — xem Settings › AI',
       AI_CLOUD_NO_TOOLS: 'Model cloud chưa qua kiểm tra tool-calling — xem Settings › AI',
+      pinnedCloud: 'Hội thoại này đã chạy trên cloud — nội dung đã gửi đã rời máy này',
       refused: 'Co-work không chạy được với cài đặt AI hiện tại — xem Settings › AI',
       riskTitle: 'Hành động rủi ro — tự duyệt đã bị tắt cho hành động này',
       riskSensitive: 'Gửi nội dung file nhạy cảm này lên cloud?',
@@ -51,6 +52,7 @@
       AI_RATE_LIMIT: 'AI request rate limit reached — try again in a few minutes',
       AI_NOT_ALLOWED: 'AI policy does not allow this model — see Settings › AI',
       AI_CLOUD_NO_TOOLS: 'The cloud model has not passed the tool-calling check — see Settings › AI',
+      pinnedCloud: 'This conversation ran in the cloud — content already sent left this machine',
       refused: 'Co-work cannot run with the current AI settings — see Settings › AI',
       riskTitle: 'Risky action — auto-approve is disabled for this action',
       riskSensitive: 'Send the contents of this sensitive file to the cloud?',
@@ -78,7 +80,9 @@
     if (!info || typeof info !== 'object') return { text: t('unknown', null, l), tone: 'unknown' };
     if (info.state === 'refused') {
       var known = ['AI_ROUTE_CHANGED', 'AI_NO_CREDENTIAL', 'AI_CRED_REVOKED', 'AI_CRED_FORBIDDEN', 'AI_QUOTA', 'AI_RATE_LIMIT', 'AI_NOT_ALLOWED', 'AI_CLOUD_NO_TOOLS'];
-      return { text: t(known.indexOf(info.code) >= 0 ? info.code : 'refused', null, l), tone: 'refused', code: info.code || null };
+      var rt = t(known.indexOf(info.code) >= 0 ? info.code : 'refused', null, l);
+      if (info.route_kind === 'cloud') rt += ' · ' + t('pinnedCloud', null, l);   // hội thoại đã ghim cloud: vẫn nói rõ dữ liệu đã rời máy
+      return { text: rt, tone: 'refused', code: info.code || null };
     }
     if (info.state !== 'ok') return { text: t('unknown', null, l), tone: 'unknown' };
     if (info.route_kind === 'cloud') {

@@ -260,7 +260,9 @@ def test_each_refusal_text(browser, base_url, admin, env, code, lang):
     body = {"state": "refused", "code": code, "message_key": "x", "route_kind": "cloud", "provider": "anthropic",
             "model": "claude-opus-5-5", "data_leaves_machine": True, "pinned": True, "settings_route": "local", "mode": "local_only"}
     ctx, page, _ = open_page(browser, base_url, admin, lang=lang, route=lambda p: fulfill(p, "**/api/coworker/agent/route-preview", body))
-    assert line(page) == REFUSALS[code][0 if lang == "en" else 1]
+    suffix = {"en": " · This conversation ran in the cloud — content already sent left this machine",
+              "vi": " · Hội thoại này đã chạy trên cloud — nội dung đã gửi đã rời máy này"}[lang]
+    assert line(page) == REFUSALS[code][0 if lang == "en" else 1] + suffix       # đã ghim cloud → vẫn nói dữ liệu đã rời máy
     assert page.locator("#routeLine").get_attribute("data-tone") == "refused"
     if code == "AI_ROUTE_CHANGED":
         shot(page, f"refused-light-{lang}")
@@ -435,4 +437,43 @@ def test_mobile_width_status_line_fits(browser, base_url, admin, env):
     assert page.evaluate("document.querySelector('#routeLine').getBoundingClientRect().right <= window.innerWidth")
     assert page.evaluate("document.querySelector('#routeLine').scrollWidth <= document.querySelector('#routeLine').clientWidth + 1")
     shot(page, "cloud-390-vi")
+    ctx.close()
+
+
+def test_refusal_without_cloud_pin_has_no_leave_text(browser, base_url, admin, env):
+    body = {"state": "refused", "code": "AI_NO_CREDENTIAL", "route_kind": None, "data_leaves_machine": False}
+    ctx, page, _ = open_page(browser, base_url, admin, lang="en", route=lambda p: fulfill(p, "**/api/coworker/agent/route-preview", body))
+    assert line(page) == REFUSALS["AI_NO_CREDENTIAL"][0]
+    ctx.close()
+
+
+def _lum(rgb):
+    def ch(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (ch(x) for x in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(page):
+    """Tỉ lệ tương phản (WCAG) giữa màu chữ thật và màu nền thật của #routeText (qua canvas để quy đổi mọi cú pháp màu)."""
+    rgbs = page.evaluate("""() => {
+        const toRgb = (c) => { const x = document.createElement('canvas').getContext('2d'); x.fillStyle = '#000'; x.fillStyle = c; x.fillRect(0,0,1,1);
+          const d = x.getImageData(0,0,1,1).data; return [d[0], d[1], d[2]]; };
+        let bg = null; for (let e = document.querySelector('#routeText'); e && !bg; e = e.parentElement) {
+          const c = getComputedStyle(e).backgroundColor; if (c && !/rgba\(.*, 0\)|transparent/.test(c)) bg = c; }
+        return [toRgb(getComputedStyle(document.querySelector('#routeText')).color), toRgb(bg || getComputedStyle(document.body).backgroundColor)];
+    }""")
+    a, b = _lum(rgbs[0]), _lum(rgbs[1])
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("tone", ["cloud", "refused"])
+def test_warning_text_meets_wcag_aa(browser, base_url, admin, env, theme, tone):
+    body = ({"state": "ok", "route_kind": "cloud", "provider": "anthropic", "model": "claude-opus-5-5", "key_scope": "org", "key_hint": None}
+            if tone == "cloud" else {"state": "refused", "code": "AI_QUOTA", "route_kind": "cloud"})
+    ctx, page, _ = open_page(browser, base_url, admin, lang="en", theme=theme, route=lambda p: fulfill(p, "**/api/coworker/agent/route-preview", body))
+    assert page.locator("#routeLine").get_attribute("data-tone") == tone
+    assert _contrast(page) >= 4.5, _contrast(page)
     ctx.close()
