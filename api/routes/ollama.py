@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from api.config import settings
-from api.services import runtime_settings
+from api.services import runtime_settings, url_guard
 
 router = APIRouter(prefix="/api/ollama", tags=["ollama"])
 
@@ -53,11 +53,15 @@ def get_endpoint():
 async def set_endpoint(payload: EndpointRequest):
     """Đặt endpoint Ollama. Rỗng = về mặc định. Kiểm tra kết nối trước khi lưu."""
     url = (payload.url or "").strip().rstrip("/")
-    if url and not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="URL phải bắt đầu bằng http:// hoặc https:// (ví dụ http://192.168.1.50:11434)")
+    if url:
+        # [PR-4] SSRF guard: link-local/metadata bị chặn; http chỉ tới local/LAN; cổng 11434/80/443 (+ AI_URL_EXTRA_PORTS)
+        try:
+            url = url_guard.check_url(url, "ollama", explicit_ollama=True)
+        except url_guard.UrlRejected as e:
+            raise HTTPException(status_code=400, detail=f"URL Ollama không hợp lệ: {e.reason} (ví dụ http://192.168.1.50:11434)")
     test_url = url or settings.ollama_url
     try:
-        async with httpx.AsyncClient(timeout=6, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=6) as client:
             r = await client.get(f"{test_url}/api/tags")
             r.raise_for_status()
             models = [m["name"] for m in r.json().get("models", [])]
@@ -75,7 +79,7 @@ class SetModelRequest(BaseModel):
 async def ollama_health():
     """Kiểm tra Ollama service có đang chạy không."""
     try:
-        async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=5) as client:
             r = await client.get(f"{_url()}/api/tags")
             r.raise_for_status()
             active = get_active_model()
@@ -92,7 +96,7 @@ async def ollama_health():
 async def list_models():
     """Danh sách models đã cài trong Ollama."""
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=10) as client:
             r = await client.get(f"{_url()}/api/tags")
             r.raise_for_status()
             data = r.json()
@@ -124,7 +128,7 @@ async def pull_model(payload: PullRequest):
 
     async def stream_pull():
         try:
-            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:  # No timeout khi pull
+            async with url_guard.guarded_async_client("ollama", timeout=None) as client:  # No timeout khi pull
                 async with client.stream(
                     "POST",
                     f"{_url()}/api/pull",
@@ -145,7 +149,7 @@ async def delete_model(model_name: str):
     if model_name == get_active_model():
         raise HTTPException(status_code=400, detail="Không thể xóa model đang active. Đổi model khác trước.")
     try:
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=30) as client:
             r = await client.request(
                 "DELETE",
                 f"{_url()}/api/delete",
@@ -168,7 +172,7 @@ async def set_active_model(payload: SetModelRequest):
 
     # Kiểm tra model có tồn tại không
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=10) as client:
             r = await client.get(f"{_url()}/api/tags")
             data = r.json()
             installed = [m["name"] for m in data.get("models", [])]
@@ -188,7 +192,7 @@ async def get_vision_model():
     """Vision model hiện tại + danh sách model đã cài (để UI chọn)."""
     installed = []
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=10) as client:
             r = await client.get(f"{_url()}/api/tags")
             installed = [m["name"] for m in r.json().get("models", [])]
     except Exception:
@@ -201,7 +205,7 @@ async def set_vision_model(payload: SetModelRequest):
     """Đổi vision model dùng để đọc ảnh/sơ đồ trong tài liệu."""
     model = payload.model.strip()
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+        async with url_guard.guarded_async_client("ollama", timeout=10) as client:
             r = await client.get(f"{_url()}/api/tags")
             installed = [m["name"] for m in r.json().get("models", [])]
             if model not in installed:

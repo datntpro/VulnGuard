@@ -2,15 +2,15 @@
 Cloud AI provider API.
   GET  /api/ai/config            — cấu hình hiện tại (không lộ secret)
   PUT  /api/ai/config            — cập nhật (ADMIN; api_key là write-only)
-  POST /api/ai/test              — gọi thử provider cloud
+  POST /api/ai/test              — probe provider cloud (nhận giá trị chưa lưu)
+  POST /api/ai/ollama/check      — capability check Ollama (tools / JSON)
   GET  /api/ai/models            — model provider hỗ trợ (cho dropdown)
   POST /api/vulns/{id}/reanalyze — phân tích lại 1 vuln bằng cloud AI
 """
-import time
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from api.database import get_db
@@ -28,38 +28,103 @@ def get_ai_config():
 
 @router.put("/api/ai/config")
 def put_ai_config(payload: Dict[str, Any], _=Depends(require_admin)):
+    from api.services import url_guard
     try:
+        # [PR-4] base_url do ADMIN đặt: kiểm SSRF khi LƯU (và lưu bản đã chuẩn hoá); kiểm lại ở mỗi lần gọi
+        oa = payload.get("openai") if isinstance(payload, dict) else None
+        if isinstance(oa, dict) and (oa.get("base_url") or "").strip():
+            oa["base_url"] = url_guard.check_url(oa["base_url"], "cloud")
+        br = payload.get("bedrock") if isinstance(payload, dict) else None
+        if isinstance(br, dict) and br.get("region"):
+            from api.services.llm_resolver import valid_region
+            if not valid_region(br["region"]):
+                raise url_guard.UrlRejected("region AWS không hợp lệ")
         return public_config(validate_and_save(payload))
+    except url_guard.UrlRejected as e:
+        raise HTTPException(status_code=422, detail=f"BAD_BASE_URL: {e.reason}")
     except (ValueError, TypeError, KeyError) as e:
         raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.get("/api/ai/models")
-def list_ai_models(provider: str, _=Depends(require_admin)):
+async def list_ai_models(provider: str, _=Depends(require_admin)):
     """Danh sách model provider hỗ trợ (để UI chọn dropdown thay vì gõ tay).
 
-    provider ∈ anthropic | bedrock | openai | openrouter. Dùng key đã lưu; offline
+    provider ∈ anthropic | bedrock | openai | openrouter. Credential do llm_resolver chọn; offline
     hoặc chưa có key → trả danh sách mặc định (source=static)."""
     from api.services.ai_models import STATIC_MODELS, list_models
+    from api.services.llm_resolver import resolve_provider
     if provider not in STATIC_MODELS:
         raise HTTPException(status_code=422, detail="provider không hợp lệ")
-    return {"provider": provider, **list_models(provider, load_config())}
+    return {"provider": provider, **await list_models(provider, resolve_provider(provider))}
+
+
+# Trường được phép ghi đè khi test giá trị CHƯA LƯU (không có secret nào ngoài api_key — chỉ nằm trong RAM)
+_TEST_FIELDS = ("model", "base_url", "auth_mode", "region", "aws_profile")
+
+
+def _user_id(request: Request):
+    return getattr(getattr(request.state, "user", None), "id", None)
+
+
+def _throttled(request: Request):
+    from api.services.ai_probe import ThrottleError, throttle
+    try:
+        throttle(_user_id(request))
+    except ThrottleError as e:
+        raise HTTPException(status_code=429, detail=str(e))
 
 
 @router.post("/api/ai/test")
-async def test_ai():
-    from scanner.cloud_ai import CloudAnalyzer, sanitize_error
-    from api.services.llm_resolver import LLMContext, resolve
-    cfg = load_config()
-    t0 = time.monotonic()
-    try:
-        analyzer = CloudAnalyzer(resolve(LLMContext(feature="test")), cfg)
-        await analyzer.ping()
-        return {"ok": True, "provider": cfg["provider"], "model": analyzer.model,
-                "latency_ms": int((time.monotonic() - t0) * 1000), "error": None}
-    except Exception as e:
-        return {"ok": False, "provider": cfg["provider"], "model": None,
-                "latency_ms": int((time.monotonic() - t0) * 1000), "error": sanitize_error(e)}
+async def test_ai(request: Request, payload: Optional[Dict[str, Any]] = Body(None)):
+    """Probe nhỏ nhất (0-1 token) → {ok, code, provider, model, latency_ms, tools, json, error}.
+    Body tuỳ chọn = giá trị CHƯA LƯU của form (provider, model, api_key, base_url, auth_mode, region,
+    aws_profile); trường vắng lấy từ cấu hình đã lưu. Không bao giờ trả văn bản của provider."""
+    import copy
+    from api.security import encrypt_secret
+    from api.services.ai_config import PROVIDERS
+    from api.services.ai_probe import probe_cloud
+    from api.services.llm_resolver import cloud_route_for
+    _throttled(request)
+    cfg = copy.deepcopy(load_config())
+    body = payload if isinstance(payload, dict) else {}
+    provider = body.get("provider") or cfg.get("provider")
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=422, detail="provider không hợp lệ")
+    cfg["provider"] = provider
+    sec = cfg[provider]
+    # Khoá đã LƯU là write-only: chỉ dùng lại khi request KHÔNG đổi nơi gửi khoá (provider/base_url/region/auth_mode/profile).
+    # Nếu đổi bất kỳ trường nào trong số đó thì phải gửi kèm api_key trong chính request này.
+    saved = load_config()
+    moved = provider != saved.get("provider")
+    for k in _TEST_FIELDS:
+        v = body.get(k)
+        if isinstance(v, str):
+            if k != "model" and v.strip() != str(saved.get(provider, {}).get(k) or "").strip():
+                moved = True
+            sec[k] = v
+    for k in body:                       # trường lạ (deployment/project/endpoint/…) cũng được coi là đổi nơi gửi
+        if k not in _TEST_FIELDS and k not in ("provider", "api_key"):
+            moved = True
+    key = body.get("api_key")
+    if isinstance(key, str) and key.strip():
+        sec["api_key_enc"] = encrypt_secret(key.strip())
+    elif moved:
+        sec["api_key_enc"] = None
+    res = await probe_cloud(cloud_route_for(cfg))
+    return {"provider": provider, **res.to_dict()}
+
+
+@router.post("/api/ai/ollama/check")
+async def ollama_capability_check(request: Request, payload: Optional[Dict[str, Any]] = Body(None),
+                                  _=Depends(require_admin)):
+    """Kiểm tra Ollama: /api/version, /api/tags, tool-calling, JSON mode. Cache 1 giờ theo (url, model)."""
+    from api.services.ai_probe import ollama_check
+    _throttled(request)
+    body = payload if isinstance(payload, dict) else {}
+    url = body.get("url") if isinstance(body.get("url"), str) else ""
+    model = body.get("model") if isinstance(body.get("model"), str) else ""
+    return await ollama_check(url, model, force=bool(body.get("force")))
 
 
 @router.post("/api/vulns/{vuln_id}/reanalyze")

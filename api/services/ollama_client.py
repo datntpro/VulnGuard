@@ -10,6 +10,8 @@ import logging
 from typing import AsyncGenerator, Optional, List, Dict, Callable
 from datetime import datetime
 
+from api.services import url_guard  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +31,7 @@ class OllamaClient:
     async def health_check(self) -> bool:
         """Check if Ollama is running and responsive"""
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with url_guard.guarded_async_client("ollama", timeout=5) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
                 return response.status_code == 200
         except Exception as e:
@@ -39,7 +41,7 @@ class OllamaClient:
     async def get_available_models(self) -> List[str]:
         """Get list of available models"""
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with url_guard.guarded_async_client("ollama", timeout=10) as client:
                 response = await client.get(f"{self.base_url}/api/tags")
                 if response.status_code == 200:
                     data = response.json()
@@ -88,7 +90,7 @@ class OllamaClient:
 
         while retry_count <= self.max_retries:
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with url_guard.guarded_async_client("ollama", timeout=self.timeout) as client:
                     async with client.stream(
                         "POST",
                         f"{self.base_url}/api/generate",
@@ -159,7 +161,7 @@ class OllamaClient:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with url_guard.guarded_async_client("ollama", timeout=self.timeout) as client:
                 async with client.stream(
                     "POST",
                     f"{self.base_url}/api/generate",
@@ -203,7 +205,7 @@ class OllamaClient:
         Useful for semantic search
         """
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with url_guard.guarded_async_client("ollama", timeout=30) as client:
                 response = await client.post(
                     f"{self.base_url}/api/embed",
                     json={"model": model, "input": text}

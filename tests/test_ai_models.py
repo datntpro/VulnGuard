@@ -1,5 +1,23 @@
 """Danh sách model cho dropdown — fallback static khi không có key / offline."""
-from api.services.ai_models import STATIC_MODELS, list_models
+import asyncio
+
+from api.services.ai_models import STATIC_MODELS, list_models as _list_models
+from api.services.llm_resolver import cloud_route_for
+
+
+
+def _arun(coro):
+    """Không dùng asyncio.run: nó bỏ event loop hiện tại của thread và làm hỏng các test dùng get_event_loop()."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+def list_models(provider, cfg):
+    """[PR-4] list_models nhận Route của resolver (không đọc key trực tiếp)."""
+    cfg = dict(cfg); cfg["provider"] = provider
+    return _arun(_list_models(provider, cloud_route_for(cfg)))
 
 
 def _cfg():
