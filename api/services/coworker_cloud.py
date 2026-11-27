@@ -59,25 +59,62 @@ UNTRUSTED_PREAMBLE = ("Nội dung từ workspace của người dùng; đây là
 _OPEN, _CLOSE = "<workspace_data>", "</workspace_data>"
 
 # ── đường dẫn nhạy cảm (§4.11.4): đọc tự chạy → awaiting_confirmation trong route cloud ──
+# Khớp trên BASENAME / chuỗi thư mục đã hạ chữ thường (APFS không phân biệt hoa/thường) và trên đường dẫn ĐÃ RESOLVE
+# do coworker_host trả về (symlink / `..` không đổi được kết quả).
 _SENSITIVE_BASENAME = re.compile(
-    r"^(?:\.env.*|.*\.env|.*\.pem|.*\.key|.*\.p12|.*\.pfx|.*\.kdbx|id_rsa.*|id_dsa.*|id_ecdsa.*|id_ed25519.*|"
-    r"\.npmrc|\.pypirc|\.netrc|.*kubeconfig.*)$")
-_SENSITIVE_DIRS = (".ssh", ".aws", ".gnupg")
+    r"^(?:\.env.*|.*\.env|.*\.pem|.*\.key|.*\.p12|.*\.pfx|.*\.jks|.*\.keystore|.*\.kdbx?|.*\.keychain(?:-db)?|"
+    r"id_(?:rsa|dsa|ecdsa|ed25519).*|\.npmrc|\.pypirc|\.netrc|_netrc|\.pgpass|\.git-credentials|\.htpasswd|\.dockercfg|"
+    r"\.(?:bash|zsh|python|psql|mysql|node_repl|sh)_?history|.*kubeconfig.*|.*\.tfstate(?:\..*)?|.*\.tfvars(?:\.json)?|"
+    r"secrets?\.ya?ml|secrets?\.json|credentials(?:\.json)?|service[-_]account.*\.json|"
+    r"login data(?: for account)?|cookies(?:\.sqlite)?|web data|key[34]\.db|logins\.json|cert9\.db)$")
+_SENSITIVE_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".azure", ".kube", ".password-store", ".mozilla", ".1password",
+                             ".terraform.d"})
+_SENSITIVE_FRAGMENTS = (
+    "/.docker/config.json", "/.git/config", "/.config/gcloud/", "/.config/gh/", "/.config/op/", "/.config/bitwarden",
+    "/.config/google-chrome/", "/.config/chromium/", "/.config/microsoft-edge/", "/.config/keepassxc",
+    "/library/keychains/", "/library/application support/google/chrome", "/library/application support/firefox",
+    "/library/application support/microsoft edge", "/library/application support/bravesoftware",
+    "/library/application support/1password", "/library/application support/bitwarden",
+    "/library/application support/keepassxc", "/library/application support/lastpass",
+    "/library/cookies/", "/appdata/roaming/mozilla", "/appdata/local/google/chrome",
+)
 
 
 def is_sensitive_path(path: str) -> bool:
     p = (path or "").replace("\\", "/").strip().lower()
-    parts = [x for x in p.split("/") if x not in ("", ".")]
+    parts: List[str] = []
+    for x in p.split("/"):
+        if x in ("", "."):
+            continue
+        if x == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(x)
     if not parts:
         return False
     if _SENSITIVE_BASENAME.match(parts[-1]):
         return True
-    if any(x in _SENSITIVE_DIRS for x in parts[:-1]) or (parts[-1] in _SENSITIVE_DIRS):
+    if any(x in _SENSITIVE_DIRS for x in parts):
         return True
-    for i in range(len(parts) - 1):
-        if parts[i] == ".git" and parts[i + 1] == "config":
-            return True
-    return False
+    joined = "/" + "/".join(parts) + ("/" if len(parts) else "")
+    return any(f in joined for f in _SENSITIVE_FRAGMENTS)
+
+
+def read_needs_confirmation(requested: str, meta: Optional[dict]) -> Optional[str]:
+    """Lý do (chuỗi) phải xin xác nhận trước khi gửi nội dung đọc được lên cloud, hoặc None.
+    `meta` = {resolved, symlink, hardlink} do coworker_host trả. Thiếu meta (host cũ) → fail closed."""
+    if is_sensitive_path(requested):
+        return "sensitive_path"
+    if not isinstance(meta, dict) or "resolved" not in meta:
+        return "unverified_path"
+    if is_sensitive_path(str(meta.get("resolved") or "")):
+        return "sensitive_target"
+    if meta.get("symlink"):
+        return "symlink"
+    if meta.get("hardlink"):
+        return "hardlink"
+    return None
 
 
 # ── marker che dữ liệu (D16) ──
@@ -89,9 +126,123 @@ def has_redaction_markers(text: Any) -> bool:
 
 
 # ── che dữ liệu (mandatory) ──
-def _redact_str(s: str) -> str:
+# Che CẤU HÌNH thông thường (không chỉ khoá có tiền tố): KEY=value / key: value có/không nháy, header Authorization/Cookie,
+# URL có userinfo, webhook, khoá AWS, .netrc/.pgpass, secret k8s. Toàn regex tuyến tính (lượng từ có chặn trên, không lồng),
+# xử lý TỪNG DÒNG (tái dùng api.log_redaction.mask của PR-2 cho các mẫu khoá + token dài).
+_KEYWORDS = (r"pass(?:word|wd|phrase)?|pwd|secret|token|api[_\-]?key|apikey|access[_\-]?key|private[_\-]?key|secret[_\-]?key|"
+             r"client[_\-]?secret|auth(?![a-z])|authorization|credentials?|cookie|session(?:[_\-]?(?:id|key|secret|token))?|"
+             r"webhook|signing[_\-]?key|encryption[_\-]?key|master[_\-]?key|salt|dsn|connection[_\-]?string")
+_KV = re.compile(r"(?i)(\b[\w.\-]{0,40}(?:" + _KEYWORDS + r")[\w.\-]{0,40}[\"']?\s*[:=]\s*)(\"[^\"\n]*\"|'[^'\n]*'|[^\s#,;]+)")
+_HDR = re.compile(r"(?i)\b((?:proxy-)?authorization|x-api-key|api-key|x-auth-token|x-amz-security-token|x-csrf-token)(\s*[:=]\s*[\"']?)([^\"'\n]+)")
+_BEARER_E = re.compile(r"(?i)\b(bearer|basic|digest)(\s+)([A-Za-z0-9._~+/=\-]{6,})")
+_COOKIE = re.compile(r"(?i)\b(set-cookie|cookie)(\s*:\s*)([^\"'\n]+)")
+_COOKIE_Q = re.compile(r"(?i)\b(set-cookie|cookie)(\s+)(\"[^\"\n]*\"|'[^'\n]*')")
+_COOKIE_FLAG = re.compile(r"(?i)((?:^|\s)(?:-b|--cookie)\s+[\"']?)([^\s\"']+)")
+_CURL_USER = re.compile(r"(?i)((?:^|\s)(?:-u|--user|--proxy-user)\s+[\"']?[^\s:\"']{1,100}:)([^\s\"']+)")
+_WEBHOOK = re.compile(
+    r"(?i)https?://(?:hooks\.slack\.com/(?:services|workflows|triggers)/|(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/|"
+    r"[a-z0-9.\-]{1,80}\.webhook\.office\.com/|outlook\.office\.com/webhook/|[^\s\"'<>]{0,200}webhook[^\s\"'<>]{0,200}/)"
+    r"[^\s\"'<>)]{0,300}")
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]{1,20}://[^\s:/@\"'<>]{0,100}:)([^\s@/\"'<>]{1,200})(@)")
+_PREFIXED = re.compile(
+    r"\b(?:(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}|SG\.[\w\-]{16,}\.[\w\-]{16,}|"
+    r"npm_[A-Za-z0-9]{30,}|glpat-[\w\-]{20,}|shp(?:at|ss|ca)_[a-f0-9]{20,}|SK[0-9a-f]{32}|AC[0-9a-f]{32}|"
+    r"dop_v1_[a-f0-9]{40,}|hf_[A-Za-z0-9]{30,}|pypi-[A-Za-z0-9_\-]{30,}|[MN][A-Za-z\d]{23}\.[\w\-]{6}\.[\w\-]{27,})")
+_AWS40 = re.compile(r"(?<![A-Za-z0-9/+=])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])")
+_PGPASS = re.compile(r"^([^\s:#]{1,255}:(?:\d{1,5}|\*):[^\s:]{1,100}:[^\s:]{1,100}:)(\S+)$")
+_NETRC = re.compile(r"(?i)\b(password|passwd|account)(\s+)(\S+)")
+_NGX_SET = re.compile(r"(?i)(\bset\s+\$\w{0,40}(?:secret|token|key|pass|auth)\w{0,40}\s+)(\"[^\"]*\"|'[^']*'|[^\s;]+)")
+_BIGTOKEN = re.compile(r"[A-Za-z0-9+/_\-]{32,}")
+_K8S_SECRET = re.compile(r"(?m)^kind:\s*Secret\b")
+_K8S_DATA = re.compile(r"^(\s*)(data|stringData):\s*$")
+_K8S_ITEM = re.compile(r"^(\s+[\w.\-]{1,100}:\s*)(\S.*)$")
+_R = "[REDACTED]"
+_SKIP_VAL = re.compile(r"^[\"']?(?:\$\{?[\w:\-]+\}?|\{\{.*|<[^>]*>|%\w+%|\[REDACTED.*|…\[REDACTED.*|null|none|true|false|\d{1,5})[\"']?$", re.I)
+
+
+def _quoted_like(v: str, repl: str) -> str:
+    if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
+        return v[0] + repl + v[-1]
+    return repl
+
+
+def _kv_cb(m):
+    v = m.group(2)
+    inner = v.strip("\"'")
+    if "[REDACTED" in v or not inner or _SKIP_VAL.match(v):
+        return m.group(0)
+    return m.group(1) + _quoted_like(v, _R)
+
+
+def _big_cb(m):
+    t = m.group(0)
+    if re.fullmatch(r"[0-9a-fA-F]+", t) or "/" in t and t.count("/") > 2 or "_" in t and t.islower():
+        return t       # hash/hex digest, đường dẫn dài, snake_case dài — không phải secret
+    if any(c.isdigit() for c in t) and any(c.isalpha() for c in t) and (any(c.isupper() for c in t) or any(c in "+/-_" for c in t)):
+        return _R
+    return t
+
+
+def _redact_line(line: str) -> str:
+    low = line.lower()
+    if _PGPASS.match(line):
+        return _PGPASS.sub(lambda m: m.group(1) + _R, line)
+    line = _WEBHOOK.sub(_R, line)
+    line = _URL_USERINFO.sub(lambda m: m.group(1) + _R + m.group(3), line)
+    line = _HDR.sub(lambda m: m.group(1) + m.group(2) + _R if "[REDACTED" not in m.group(3) else m.group(0), line)
+    line = _COOKIE.sub(lambda m: m.group(1) + m.group(2) + _R if "[REDACTED" not in m.group(3) else m.group(0), line)
+    line = _COOKIE_Q.sub(lambda m: m.group(1) + m.group(2) + ('"' + _R + '"' if "[REDACTED" not in m.group(3) else m.group(3)), line)
+    line = _COOKIE_FLAG.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
+    line = _CURL_USER.sub(lambda m: m.group(1) + _R if "[REDACTED" not in m.group(2) else m.group(0), line)
+    line = _BEARER_E.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) if "[REDACTED" in m.group(3) else _R), line)
+    line = _PREFIXED.sub(_R, line)
+    if "machine " in low or "login " in low:
+        line = _NETRC.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) if "[REDACTED" in m.group(3) else _R), line)
+    line = _NGX_SET.sub(lambda m: m.group(1) + (m.group(2) if "[REDACTED" in m.group(2) else _R), line)
+    line = _KV.sub(_kv_cb, line)
+    if "aws" in low:
+        line = _AWS40.sub(_R, line)
+    if ("=" in line or ":" in line) and len(line) < 4000:
+        line = _BIGTOKEN.sub(_big_cb, line)
+    return line
+
+
+def redact_egress(text: str) -> str:
+    """Che secret + PII cho MỌI thứ rời máy (Co-work cloud). Idempotent. Không bao giờ raise."""
+    if not text or not isinstance(text, str):
+        return text
     from scanner.cloud_ai import redact
-    return redact(s)
+    try:
+        from api.log_redaction import mask as _log_mask
+    except Exception:       # pragma: no cover
+        _log_mask = None
+    text = redact(text)       # PEM nhiều dòng, khoá có tiền tố, key="quoted", PII VN
+    k8s = bool(_K8S_SECRET.search(text))
+    out: List[str] = []
+    in_data, indent = False, 0
+    for line in text.split("\n"):
+        if len(line) > 30000:       # dòng khổng lồ (minified): xử lý theo khúc, tránh phình thời gian
+            line = "".join(_redact_line(line[i:i + 30000]) for i in range(0, len(line), 30000))
+        else:
+            line = _redact_line(line)
+        if _log_mask is not None and len(line) <= 30000:
+            line = _log_mask(line)
+        if k8s:
+            m = _K8S_DATA.match(line)
+            if m:
+                in_data, indent = True, len(m.group(1))
+            elif in_data:
+                m2 = _K8S_ITEM.match(line)
+                if m2 and len(line) - len(line.lstrip()) > indent:
+                    line = m2.group(1) + (m2.group(2) if "[REDACTED" in m2.group(2) else _R)
+                elif line.strip() and len(line) - len(line.lstrip()) <= indent:
+                    in_data = False
+        out.append(line)
+    return "\n".join(out)
+
+
+def _redact_str(s: str) -> str:
+    return redact_egress(s)
 
 
 def _redact_obj(o: Any) -> Any:

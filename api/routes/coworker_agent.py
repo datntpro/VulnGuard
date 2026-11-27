@@ -75,6 +75,9 @@ class ConversationStepRequest(BaseModel):
     Mọi trường khác (messages, assistant/tool turn, approved.args, provider, route…) bị BỎ QUA."""
     message: Optional[str] = None
     approve: Optional[str] = None            # pending_id
+    ack: Optional[str] = None                # confirm_token của đúng pending đó (cloud: bắt buộc khi approve)
+    explicit: bool = False                   # người dùng đã xác nhận RÕ (bắt buộc với pending rủi ro)
+    auto: bool = False                       # client khai báo đây là tự-duyệt: bị từ chối với pending rủi ro
     reject: Optional[str] = None             # pending_id
     folder_id: Optional[str] = None          # chỉ có hiệu lực ở bước đầu tiên
     skill_id: Optional[str] = None           # chỉ có hiệu lực ở bước đầu tiên
@@ -295,7 +298,23 @@ def _extract_balanced_object(text: str) -> Optional[str]:
 # ─────────────────────────────────────────────────────────────
 # Thực thi tool READ-ONLY (tự chạy)
 # ─────────────────────────────────────────────────────────────
-async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any]) -> str:
+class SensitiveRead(Exception):
+    """[AI PR-3b] Route cloud: file đọc được thực ra nhạy cảm (đường dẫn THẬT, symlink, hard link) → cần xác nhận."""
+    def __init__(self, reason: str, resolved: str = ""):
+        super().__init__(reason)
+        self.reason, self.resolved = reason, resolved
+
+
+def _gate_read(gate: bool, path: str, data: dict) -> None:
+    if not gate:
+        return
+    from api.services.coworker_cloud import read_needs_confirmation
+    why = read_needs_confirmation(path, data)
+    if why:
+        raise SensitiveRead(why, str((data or {}).get("resolved") or ""))
+
+
+async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any], *, gate: bool = False) -> str:
     path = str(args.get("path", "") or "")
     if action == "list_dir":
         data = await _host_request("GET", "/fs/tree", params={"folder_id": folder_id, "path": path})
@@ -317,8 +336,9 @@ async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any]) -> st
             return "LỖI: thiếu 'path' cho read_file."
         ext = os.path.splitext(path)[1].lower()
         if ext in DOC_EXTS:
-            return await _read_document(folder_id, path, ext)
+            return await _read_document(folder_id, path, ext, gate=gate)
         data = await _host_request("GET", "/fs/file", params={"folder_id": folder_id, "path": path})
+        _gate_read(gate, path, data)
         if data.get("binary"):
             return (f"LỖI: '{path}' là file binary, không đọc được dạng text. "
                     f"(Chỉ hỗ trợ trích xuất các định dạng tài liệu: {', '.join(sorted(DOC_EXTS))})")
@@ -329,7 +349,7 @@ async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any]) -> st
     return f"LỖI: tool read-only không hỗ trợ: {action}"
 
 
-async def _read_document(folder_id: str, path: str, ext: str) -> str:
+async def _read_document(folder_id: str, path: str, ext: str, gate: bool = False) -> str:
     """Lấy bytes tài liệu từ host (base64), trích text + mô tả ảnh nhúng (vision)."""
     from api.services.file_processor import extract_text_from_file, extract_images_from_file
     try:
@@ -339,6 +359,7 @@ async def _read_document(folder_id: str, path: str, ext: str) -> str:
             return (f"LỖI: coworker_host chưa hỗ trợ đọc tài liệu (endpoint /fs/file_b64). "
                     f"Hãy khởi động lại Coworker Host: bash coworker_host/run.sh")
         raise
+    _gate_read(gate, path, data)
     raw = base64.b64decode(data.get("b64", ""))
     tmp_path = None
     images: List[bytes] = []
@@ -562,7 +583,7 @@ def _new_pending(db, *, owner, conv_id, folder_id, kind, action, args, tool_use_
     return row
 
 
-def _take_pending(db, pending_id: Optional[str], *, owner, conv_id, to_status: str):
+def _take_pending(db, pending_id: Optional[str], *, owner, conv_id, to_status: str, ignore_ttl: bool = False):
     """Lấy + KHOÁ (open → done|rejected, nguyên tử) một pending action. id lạ / của người khác / của hội thoại khác /
     đã dùng → 409 (không lộ sự tồn tại). Args luôn là args do SERVER lưu."""
     from api.agent_conversation_models import AgentPendingAction as P
@@ -572,6 +593,10 @@ def _take_pending(db, pending_id: Optional[str], *, owner, conv_id, to_status: s
     row = db.query(P).filter(P.id == pending_id).first()
     if row is None or row.owner_user_id != owner or row.conversation_id != conv_id or row.status != "open":
         raise bad
+    if not ignore_ttl and _pending_expired(row):
+        db.query(P).filter(P.id == pending_id, P.status == "open").update({"status": "expired"}, synchronize_session=False)
+        db.commit()
+        raise HTTPException(status_code=409, detail={"code": "AI_PENDING_EXPIRED", "message_key": "ai.error.pending_expired"})
     n = db.query(P).filter(P.id == pending_id, P.status == "open").update({"status": to_status}, synchronize_session=False)
     db.commit()
     if n != 1:
@@ -580,9 +605,35 @@ def _take_pending(db, pending_id: Optional[str], *, owner, conv_id, to_status: s
     return row
 
 
+PENDING_TTL_SECONDS = 15 * 60       # pending quá hạn → 409 AI_PENDING_EXPIRED (không duyệt được "vài ngày sau")
+
+
+def _pending_expired(row) -> bool:
+    from datetime import datetime, timedelta
+    c = row.created_at
+    return bool(c) and datetime.utcnow() - c > timedelta(seconds=PENDING_TTL_SECONDS)
+
+
+def _confirm_token(row) -> str:
+    """Gắn với ĐÚNG hành động: id + loại + action + args (đổi bất kỳ thứ nào → token khác). Không phải bí mật:
+    tác dụng là buộc client phải trả lời đúng pending mà người dùng đã thấy, kèm `explicit` cho pending rủi ro."""
+    import hashlib
+    blob = json.dumps([row.id, row.kind, row.action, row.args], sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
+
+
+def _risky(row) -> bool:
+    w = row.warning or {}
+    return row.kind == "sensitive_read" or bool(w.get("suspicious"))
+
+
 def _pending_view(row, preview: Dict[str, Any]) -> Dict[str, Any]:
-    return {"id": row.id, "action": row.action, "args": row.args, "preview": preview, "kind": row.kind,
-            "warning": row.warning}
+    v = {"id": row.id, "action": row.action, "args": row.args, "preview": preview, "kind": row.kind,
+         "warning": row.warning}
+    if row.conversation_id is not None:
+        v.update({"confirm_token": _confirm_token(row), "requires_explicit": _risky(row),
+                  "expires_in": PENDING_TTL_SECONDS})
+    return v
 
 
 @router.post("/step")
@@ -796,6 +847,10 @@ async def delete_conversation(conv_id: str, request: Request, db: Session = Depe
 # ─────────────────────────────────────────────────────────────
 # [AI PR-3b] Hội thoại có transcript phía server (local + cloud) — §4.11.3
 # ─────────────────────────────────────────────────────────────
+# LƯU Ý (S4): khoá này chỉ có hiệu lực TRONG MỘT process. Với nhiều worker, hai step song song trên cùng hội thoại có thể
+# ghi đè transcript/cloud_state của nhau (mất bước, đếm thiếu ngân sách). Pending-take là nguyên tử (UPDATE có điều kiện)
+# nên không bao giờ chạy một hành động hai lần. Launcher ghim `--workers 1`; trước khi chạy đa worker cần cột `version`
+# (optimistic lock) hoặc advisory lock DB. Dict không dọn: mỗi hội thoại ~100 byte.
 _CONV_LOCKS: Dict[str, Any] = {}
 
 
@@ -1016,7 +1071,7 @@ async def _local_conv_step(db, conv, uid, req, backend, skill_body):
         tx.append({"role": "user", "content": "[Người dùng từ chối hành động vừa rồi] Hãy thử cách khác hoặc giải thích thay vì thực hiện."})
     elif req.message:
         if open_p is not None:
-            _take_pending(db, open_p.id, owner=uid, conv_id=conv.id, to_status="rejected")
+            _take_pending(db, open_p.id, owner=uid, conv_id=conv.id, to_status="rejected", ignore_ttl=True)
         tx.append({"role": "user", "content": req.message})
     else:
         if open_p is not None:
@@ -1041,6 +1096,20 @@ async def _local_conv_step(db, conv, uid, req, backend, skill_body):
     return res
 
 
+def _check_confirm(db, req, *, owner, conv_id) -> None:
+    """Cloud: approve cần `ack` = confirm_token của ĐÚNG pending; pending rủi ro (đọc file nhạy cảm / sau nội dung
+    đáng ngờ) còn cần `explicit=true` và KHÔNG được tự-duyệt. Kiểm TRƯỚC khi khoá pending (từ chối không đốt pending)."""
+    from api.agent_conversation_models import AgentPendingAction as P
+    row = db.query(P).filter(P.id == req.approve).first()
+    if row is None or row.owner_user_id != owner or row.conversation_id != conv_id or row.status != "open":
+        return                                      # _take_pending sẽ trả 409 AI_PENDING_INVALID/EXPIRED
+    if not req.ack or req.ack != _confirm_token(row):
+        raise HTTPException(status_code=409, detail={"code": "AI_CONFIRM_REQUIRED", "message_key": "ai.error.confirm_required"})
+    if _risky(row) and (req.auto or not req.explicit):
+        raise HTTPException(status_code=409, detail={"code": "AI_EXPLICIT_CONFIRM_REQUIRED",
+                                                     "message_key": "ai.error.explicit_confirm_required"})
+
+
 async def _cloud_step(db, conv, uid, req, backend, skill_body):
     from api.services import coworker_cloud as cc
     driver = backend.driver
@@ -1048,6 +1117,19 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
     state = dict(conv.cloud_state or {})
     state.setdefault("steps", 0)
     state.setdefault("sent_bytes", 0)
+    stale = _open_pending(db, conv)
+    expired_id = None
+    if stale is not None and _pending_expired(stale):
+        from api.agent_conversation_models import AgentPendingAction as P
+        db.query(P).filter(P.id == stale.id, P.status == "open").update({"status": "expired"}, synchronize_session=False)
+        entries = _tool_results_entries(driver, stale.tool_use_id, "Hành động đề xuất đã hết hạn (không được duyệt kịp thời).",
+                                        True, stale.extra_ids or [])
+        tx += entries
+        conv.transcript = tx
+        db.commit()
+        expired_id = stale.id
+        if req.approve == expired_id:
+            raise HTTPException(status_code=409, detail={"code": "AI_PENDING_EXPIRED", "message_key": "ai.error.pending_expired"})
     open_p = _open_pending(db, conv)
     sent = 0
 
@@ -1055,6 +1137,8 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
         return len(json.dumps(entries, ensure_ascii=False).encode("utf-8"))
 
     if req.approve or req.reject:
+        if req.approve:
+            _check_confirm(db, req, owner=uid, conv_id=conv.id)
         row = _take_pending(db, req.approve or req.reject, owner=uid, conv_id=conv.id,
                             to_status="done" if req.approve else "rejected")
         if req.approve:
@@ -1128,15 +1212,22 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
                                   True, f"LỖI: tool '{name}' không tồn tại")
 
     if name in READ_ONLY_ACTIONS:
-        if name == "read_file" and cc.is_sensitive_path(str(args.get("path", ""))):
+        def _sens(reason: str, resolved: str = ""):
             row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind="sensitive_read",
                                action="read_file", args={"path": str(args.get("path", ""))},
-                               tool_use_id=first.id, extra_ids=extras)
+                               tool_use_id=first.id, extra_ids=extras,
+                               warning={"reason": reason, "resolved": resolved,
+                                        "suspicious": bool((_warning_for(state) or {}).get("suspicious"))})
             return {"status": "awaiting_confirmation", "thought": thought, **meta,
-                    "pending": _pending_view(row, {"kind": "sensitive_read", "path": row.args["path"],
+                    "pending": _pending_view(row, {"kind": "sensitive_read", "path": row.args["path"], "reason": reason,
+                                                   "resolved": resolved,
                                                    "prompt": "Gửi nội dung file nhạy cảm này lên cloud? / Send this sensitive file to the cloud?"})}
+        if name == "read_file" and cc.is_sensitive_path(str(args.get("path", ""))):
+            return _sens("sensitive_path")
         try:
-            obs = await _run_readonly(conv.folder_id, name, args)
+            obs = await _run_readonly(conv.folder_id, name, args, gate=(name == "read_file"))
+        except SensitiveRead as e:                 # đường dẫn THẬT / symlink / hard link / host cũ không báo meta
+            return _sens(e.reason, e.resolved)
         except HTTPException as e:
             obs = f"LỖI: {e.detail}"
         except Exception as e:
@@ -1148,10 +1239,11 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
                                   {"suspicious": bool(kinds)})
 
     # write_file / exec — KHÔNG tự chạy
-    if name == "write_file" and (cc.has_redaction_markers(args.get("content")) or cc.has_redaction_markers(args.get("path"))):
-        msg = ("write_file bị TỪ CHỐI: nội dung chứa marker che dữ liệu ([REDACTED…], [EMAIL], [CCCD]…). Ghi nội dung này sẽ "
+    if (name == "write_file" and (cc.has_redaction_markers(args.get("content")) or cc.has_redaction_markers(args.get("path")))) \
+            or (name == "exec" and (cc.has_redaction_markers(args.get("command")) or cc.has_redaction_markers(args.get("cwd")))):
+        msg = (f"{name} bị TỪ CHỐI: nội dung chứa marker che dữ liệu ([REDACTED…], [EMAIL], [CCCD]…). Ghi nội dung này sẽ "
                "đè giá trị thật bằng giá trị đã che. Hãy nhờ người dùng tự sửa các giá trị đó hoặc bỏ phần che khỏi đề xuất.")
-        _audit_action(conv, uid, "write_file", "refused_markers")
+        _audit_action(conv, uid, name, "refused_markers")
         return await _finish_step(msg, True, msg, {"refused": True})
     preview = await _build_preview(conv.folder_id, name, args)
     row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind="side_effect", action=name,
@@ -1160,5 +1252,5 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
 
 
 def _redact_user_text(text: str) -> str:
-    from scanner.cloud_ai import redact
-    return redact(text)
+    from api.services.coworker_cloud import redact_egress
+    return redact_egress(text)
