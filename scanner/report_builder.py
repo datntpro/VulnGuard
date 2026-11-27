@@ -33,6 +33,14 @@ _BRANDING_DEFAULT = {
 }
 
 
+def _c1(x) -> str:
+    """CVSS to one decimal (7.3, not 7.300000000000001)."""
+    try:
+        return f"{float(x):.1f}"
+    except (TypeError, ValueError):
+        return str(x)
+
+
 def load_branding() -> Dict[str, str]:
     """Đọc branding từ file (nếu có), trộn với mặc định."""
     b = dict(_BRANDING_DEFAULT)
@@ -128,7 +136,7 @@ def build_markdown(scan, vulns: List[Any], project_name: str) -> str:
             loc = f"`{v.file_path}`" + (f":{v.line_start}" if v.line_start else "") if v.file_path else "—"
             ids = " · ".join(filter(None, [
                 f"CVE {v.cve}" if v.cve else "", f"CWE {v.cwe}" if v.cwe else "",
-                f"CVSS {v.cvss_score}" if v.cvss_score else "", f"rule {v.rule_id}" if v.rule_id else ""]))
+                f"CVSS {_c1(v.cvss_score)}" if v.cvss_score else "", f"rule {v.rule_id}" if v.rule_id else ""]))
             out.append(f"#### [{s}] {v.title}")
             out.append(f"- **Tool:** {v.tool} ({_stype(v)})  ·  **Vị trí:** {loc}")
             if ids:
@@ -398,7 +406,7 @@ def build_pdf(scan, vulns, project_name, scope_note=None):
             pdf.set_font("DejaVu", "", 8.5)
             loc = ((v.file_path or "") + (f":{v.line_start}" if v.line_start else "")) or "—"
             ids = " · ".join(filter(None, [f"CVE {v.cve}" if v.cve else "", f"CWE {v.cwe}" if v.cwe else "",
-                                           f"CVSS {v.cvss_score}" if v.cvss_score else ""]))
+                                           f"CVSS {_c1(v.cvss_score)}" if v.cvss_score else ""]))
             tagline = "  ·  ".join(compliance.owasp_tags(v))
             pdf.multi_cell(0, 5, f"{v.tool} ({_stype(v)})  |  {loc}" + (f"  |  {ids}" if ids else "")
                            + (f"\n{tagline}" if tagline else ""),

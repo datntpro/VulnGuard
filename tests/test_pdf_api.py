@@ -234,7 +234,8 @@ def test_post_job_takes_ids_only_and_checks_access():
     assert c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": "nope"}, headers=h).status_code == 404
     assert c.post("/api/reports/pdf-jobs", json={"kind": "bogus", "id": sid}, headers=h).status_code == 422
     assert new_client().post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid}).status_code in (401, 403)
-    r = c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid, "options": {"html": "<b>x</b>"}}, headers=h)
+    assert c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid, "options": {"html": "<b>x</b>"}}, headers=h).status_code == 422
+    r = c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid}, headers=h)
     assert r.status_code == 202
     assert _wait(c, h, r.json()["job_id"])["status"] == "done"
 
@@ -381,3 +382,142 @@ def test_pdf_does_not_use_removed_renderers():
     out = _git_grep(r"build_pdf\(|to_pdf\(", "api")
     # old fpdf2 PDF builders are no longer reachable from the PDF export routes
     assert "report.py" not in out.stdout and "webscans.py" not in out.stdout
+
+
+# ───────────── review round 1 (R1-R3 + follow-ups) ─────────────
+def test_r1_audit_emitted_under_real_app_startup_without_caplog(tmp_path):
+    """Run the real app startup in a fresh process (no pytest logging, no root config) and check stderr."""
+    import os
+    import sys
+    code = (
+        "import logging\n"
+        "from fastapi.testclient import TestClient\n"
+        "from api.main import app\n"
+        "assert not logging.getLogger().handlers, 'root must stay unconfigured (like uvicorn)'\n"
+        "with TestClient(app):\n"
+        "    from api.services import pdf_export as px\n"
+        "    class U: id='u1'; email='a@b.c'\n"
+        "    px.audit(U(), 'scan', 'abc', 'ok', bytes=1)\n"
+    )
+    env = {**os.environ, "DATABASE_URL": f"sqlite:///{tmp_path}/db/t.db", "AUTH_ENABLED": "true", "APP_ENV": "development",
+           "VULNGUARD_SETUP_TOKEN": "t", "DEPLOY_MODE": "native"}
+    (tmp_path / "db").mkdir()
+    r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert "vulnguard.audit" in r.stderr and "pdf_export user=a@b.c kind=scan id=abc outcome=ok" in r.stderr, r.stderr[-800:]
+
+
+def test_r2_startup_sweep_deletes_orphans_and_expired(monkeypatch):
+    d = px.jobs_dir()
+    orphan = d / ("a" * 32 + ".pdf")
+    orphan.write_bytes(b"%PDF-1.7 old")
+    keep_other = d / "notes.txt"          # not matching the job-file pattern -> never touched
+    keep_other.write_text("x")
+    px.start_maintenance()                 # what app startup runs (simulates restart: _JOBS is empty)
+    assert not orphan.exists() and keep_other.exists()
+    keep_other.unlink()
+    # expired-but-known file is removed by the periodic sweep too
+    c, h, _ = _client()
+    sid, _ = _seed_scan()
+    jid = c.get(f"/api/scans/{sid}/report?format=pdf&async=1", headers=h).json()["job_id"]
+    _wait(c, h, jid)
+    p = px._JOBS[jid].path
+    old = time.time() - px.JOB_TTL_S - 5
+    import os
+    os.utime(p, (old, old))
+    px._JOBS[jid].finished = old
+    px._sweep()
+    assert not p.exists() and jid not in px._JOBS
+
+
+def test_r2_periodic_timer_runs(monkeypatch):
+    monkeypatch.setattr(px, "SWEEP_INTERVAL_S", 0.01)
+    monkeypatch.setattr(px, "_SWEEPER", None)
+    orphan = px.jobs_dir() / ("b" * 32 + ".pdf")
+    px.start_maintenance()
+    orphan.write_bytes(b"x")               # appears after startup: only the timer can catch it
+    end = time.time() + 5
+    while orphan.exists() and time.time() < end:
+        time.sleep(0.1)
+    assert not orphan.exists()
+
+
+@pytest.mark.parametrize("opts", [{"limit": "abc"}, {"limit": 1.5}, {"limit": -1}, {"limit": 0}, {"offset": "x"},
+                                  {"offset": -3}, {"include": "everything"}, {"limit": True}, {"bogus": 1}, {"_role": "ADMIN"}])
+def test_r3_bad_options_are_422(opts):
+    c, h, _ = _client()
+    sid, _ = _seed_scan()
+    r = c.post("/api/reports/pdf-jobs", json={"kind": "pentest", "id": sid, "options": opts}, headers=h)
+    assert r.status_code == 422, r.text
+    assert c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid, "options": "x"}, headers=h).status_code == 422
+    assert c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid, "extra": 1}, headers=h).status_code == 422
+
+
+def test_r3_valid_options_accepted():
+    c, h, _ = _client()
+    sid, _ = _seed_scan()
+    r = c.post("/api/reports/pdf-jobs", json={"kind": "scan", "id": sid, "options": {"include": "all", "limit": 5, "offset": 0}}, headers=h)
+    assert r.status_code == 202
+
+
+def test_html_report_pdf_link_uses_async_aware_flow():
+    c, h, _ = _client()
+    sid, _ = _seed_scan()
+    html = c.get(f"/api/scans/{sid}/report", headers=h).text
+    assert 'id="vg-pdf"' in html and "/api/reports/pdf-jobs/" in html and "r.status===202" in html
+    assert "window.print" not in html
+
+
+def test_disk_caps_evict_oldest_first(monkeypatch):
+    monkeypatch.setattr(px, "MAX_BYTES_PER_USER", 3000)
+    monkeypatch.setattr(px, "MAX_BYTES_TOTAL", 10**9)
+    d = px.jobs_dir()
+    jobs = []
+    for i in range(4):
+        j = px.Job(id=uuid4().hex, user="capuser", kind="scan", rid="x", options={}, status="done", finished=1000.0 + i)
+        j.path = d / f"{j.id}.pdf"
+        j.path.write_bytes(b"x" * 1000)
+        px._JOBS[j.id] = j
+        jobs.append(j)
+    px.enforce_disk_caps(jobs[-1])
+    alive = [j.path.exists() for j in jobs]
+    assert alive == [False, True, True, True], alive           # oldest evicted until <= 3000 bytes
+    # global cap
+    monkeypatch.setattr(px, "MAX_BYTES_PER_USER", 10**9)
+    monkeypatch.setattr(px, "MAX_BYTES_TOTAL", 1500)
+    px.enforce_disk_caps(jobs[-1])
+    assert [j.path.exists() for j in jobs] == [False, False, False, True]
+    for j in jobs:
+        px._JOBS.pop(j.id, None)
+        px._unlink(j.path)
+
+
+def test_cvss_one_decimal():
+    from scanner.pdf.adapters import fmt_score
+    assert fmt_score(7.300000000000001) == "7.3" and fmt_score("7.300000000000001") == "7.3"
+    assert fmt_score(9) == "9.0" and fmt_score(None) == "" and fmt_score("n/a") == "n/a"
+    from scanner.report_pro import _fmt_cvss
+    assert _fmt_cvss("7.300000000000001") == "7.3"
+
+
+def test_pentest_cvss_rounded_everywhere():
+    from api.pentest_models import PentestFinding
+    from scanner.pentest import report as rp
+    from tests.pentest_fakes import make_engagement, make_run
+    scope = [{"type": "domain", "value": "example.com", "mode": "allow", "include_subdomains": True}]
+    db = SessionLocal()
+    eng = make_engagement(db, scope, name="cv")
+    run = make_run(db, eng, scope_snapshot=scope)
+    db.add(PentestFinding(run_id=run.id, title="t", severity="high", target="https://a.example.com/p", confidence="confirmed",
+                          description="d", evidence="e", remediation="f", cvss_v4_score=7.300000000000001,
+                          cvss_v4_severity="high", cvss_v4_vector="CVSS:4.0/AV:N", wstg_id="WSTG-INPV-05", cwe="CWE-89",
+                          vuln_class="sqli"))
+    db.commit()
+    model = rp.build_report_model(db, run.id, include="all")
+    rid = run.id
+    db.close()
+    assert "7.300000000000001" not in rp.to_markdown(model) and "7.3" in rp.to_markdown(model)
+    assert "7.300000000000001" not in rp.to_json(model)
+    from scanner.pdf import adapters
+    doc = adapters.pentest_doc(model)
+    assert "7.300000000000001" not in str(doc) and "7.3" in str(doc)

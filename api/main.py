@@ -277,6 +277,16 @@ async def _start_scheduler():
         logging.getLogger(__name__).warning(f"[scheduler] không khởi động được: {e}")
 
 
+@app.on_event("startup")
+async def _start_pdf_maintenance():
+    try:
+        from api.services import pdf_export
+        pdf_export.start_maintenance()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[pdf] maintenance không khởi động được: {e}")
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "VulnGuard", "deploy_mode": app_settings.deploy_mode}

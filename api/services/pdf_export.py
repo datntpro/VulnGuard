@@ -35,6 +35,10 @@ _audit = logging.getLogger("vulnguard.audit")
 KINDS = ("scan", "pentest", "webscan", "docreview")
 ASYNC_THRESHOLD = int(os.environ.get("VG_PDF_ASYNC_THRESHOLD", "300"))
 JOB_TTL_S = int(os.environ.get("VG_PDF_JOB_TTL_S", "3600"))
+SWEEP_INTERVAL_S = float(os.environ.get("VG_PDF_SWEEP_INTERVAL_S", "300"))
+MAX_BYTES_PER_USER = int(os.environ.get("VG_PDF_JOBS_MAX_BYTES_PER_USER", str(200 * 1024 * 1024)))
+MAX_BYTES_TOTAL = int(os.environ.get("VG_PDF_JOBS_MAX_BYTES", str(1024 * 1024 * 1024)))
+_JOBFILE = re.compile(r"[0-9a-f]{32}\.pdf")
 MAX_JOBS_PER_USER = 3
 RATE_PER_MIN = int(os.environ.get("VG_PDF_RATE_PER_MIN", "10"))
 RETRY_AFTER_S = "10"
@@ -140,6 +144,26 @@ def rate_limit(user_key: str, per_min: Optional[int] = None) -> None:
                 _HITS.pop(k, None)
 
 
+def configure_audit_logging() -> logging.Logger:
+    """Make ``vulnguard.audit`` emit INFO regardless of root/uvicorn logging config (idempotent).
+
+    Uvicorn only configures its own loggers, so without this the INFO lines are dropped by the
+    root WARNING default. Lines go to stderr (same stream uvicorn/app logs use).
+    """
+    lg = logging.getLogger("vulnguard.audit")
+    lg.setLevel(logging.INFO)
+    if not any(getattr(h, "_vg_audit", False) for h in lg.handlers):
+        h = logging.StreamHandler()
+        h.setLevel(logging.INFO)
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        h._vg_audit = True  # type: ignore[attr-defined]
+        lg.addHandler(h)
+    return lg
+
+
+configure_audit_logging()
+
+
 def audit(user: Any, kind: str, rid: str, outcome: str, **extra: Any) -> None:
     """One structured line per export attempt (who, what, result). No report content."""
     who = getattr(user, "email", None) or getattr(user, "id", None) or "anon"
@@ -209,9 +233,12 @@ def prepare(kind: str, rid: str, db, user: Any, options: Dict[str, Any]) -> Prep
         if include not in ("confirmed", "likely", "all"):
             raise HTTPException(status_code=422, detail="include không hợp lệ")
         cap = rp.MAX_FINDINGS["json"]
-        lim = options.get("limit")
-        lim = cap if lim is None else max(1, min(int(lim), cap))
-        off = max(0, int(options.get("offset") or 0))
+        try:
+            lim = options.get("limit")
+            lim = cap if lim is None else max(1, min(int(lim), cap))
+            off = max(0, int(options.get("offset") or 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail={"code": "pdf_invalid_options", "message": "limit/offset phải là số nguyên"})
         n = db.query(PentestFinding).filter(PentestFinding.run_id == rid).count()
 
         def build_pentest():
@@ -297,18 +324,98 @@ def jobs_dir() -> Path:
     return d
 
 
+def _unlink(p: Path) -> None:
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
 def _sweep(now: Optional[float] = None) -> None:
+    """Drop expired jobs (memory + file) and delete expired/orphaned ``<32hex>.pdf`` files on disk."""
     now = now or time.time()
     with _JOBS_LOCK:
         old = [j for j in _JOBS.values() if j.status in ("done", "failed") and now - (j.finished or j.created) > JOB_TTL_S]
         for j in old:
             _JOBS.pop(j.id, None)
+        known = set(_JOBS)
     for j in old:
         if j.path:
+            _unlink(j.path)
+    try:
+        d = jobs_dir()
+        for p in d.iterdir():
+            if not _JOBFILE.fullmatch(p.name) or p.is_symlink():
+                continue
             try:
-                j.path.unlink()
+                age = now - p.stat().st_mtime
             except OSError:
-                pass
+                continue
+            if p.stem not in known or age > JOB_TTL_S:   # orphan (e.g. left by a restart) or expired
+                _unlink(p)
+    except OSError:
+        pass
+
+
+def _evict(job: Job) -> None:
+    with _JOBS_LOCK:
+        _JOBS.pop(job.id, None)
+    if job.path:
+        _unlink(job.path)
+
+
+def enforce_disk_caps(new_job: Optional[Job] = None) -> None:
+    """Oldest-first eviction of finished jobs: per-user byte cap, then global byte cap."""
+    def size(j: Job) -> int:
+        try:
+            return j.path.stat().st_size if j.path else 0
+        except OSError:
+            return 0
+
+    with _JOBS_LOCK:
+        done = sorted((j for j in _JOBS.values() if j.status == "done" and j.path), key=lambda j: j.finished or j.created)
+    keep = {j.id for j in done}
+    by_user: Dict[str, int] = {}
+    for j in done:
+        by_user[j.user] = by_user.get(j.user, 0) + size(j)
+    for j in done:        # oldest first; never evict the job that was just produced
+        if by_user[j.user] > MAX_BYTES_PER_USER and j is not new_job:
+            by_user[j.user] -= size(j)
+            keep.discard(j.id)
+            _evict(j)
+    rest = [j for j in done if j.id in keep]
+    total = sum(size(j) for j in rest)
+    for j in rest:
+        if total <= MAX_BYTES_TOTAL:
+            break
+        if j is new_job:
+            continue
+        total -= size(j)
+        _evict(j)
+
+
+def start_maintenance() -> None:
+    """Startup: configure audit logging, purge orphaned job files, start the periodic sweeper."""
+    global _SWEEPER
+    configure_audit_logging()
+    _sweep()
+    with _JOBS_LOCK:
+        if _SWEEPER is not None and _SWEEPER.is_alive():
+            return
+
+        def loop() -> None:
+            while True:
+                time.sleep(max(1.0, SWEEP_INTERVAL_S))
+                try:
+                    _sweep()
+                except Exception:  # noqa: BLE001
+                    _log.warning("pdf job sweep failed")
+
+        _SWEEPER = threading.Thread(target=loop, name="pdf-job-sweeper", daemon=True)
+        _SWEEPER.start()
+
+
+_SWEEPER: Optional[threading.Thread] = None
 
 
 def _ensure_worker() -> None:
@@ -348,6 +455,8 @@ def _run_job(job: Job) -> None:
         job.path = jobs_dir() / f"{job.id}.pdf"
         _write_private(job.path, data)
         job.status = "done"
+        job.finished = time.time()
+        enforce_disk_caps(job)
         audit(_JobUser(job), job.kind, job.rid, "ok", job=job.id, pages=job.pages, bytes=len(data), mode="async")
     except HTTPException as e:
         d = e.detail
