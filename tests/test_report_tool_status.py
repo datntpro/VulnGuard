@@ -94,7 +94,7 @@ def test_pdf_without_logs_unchanged():
 
 
 def test_pdf_hostile_error_text_is_literal():
-    evil = '#import "x"] $ @ ‮ ' + "A" * 10000
+    evil = '#import "x"] $ @ \u202e ' + "A" * 10000
     p, s, g, c = _scan_with({"scanner_logs": {"t": {"status": "error", "error": evil, "label": evil}}})
     base = adapters.scan_doc(*make_scan(3), now=NOW)
     doc = adapters.scan_doc(p, s, g, c, now=NOW)

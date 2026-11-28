@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Mapping, Optional
 STATUSES = ("ok", "error", "skipped", "partial")
 GAP_STATUSES = frozenset({"error", "skipped", "partial"})
 MAX_ERROR = 160
-_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]+")
+_CTRL = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]+")
 
 _GENERATED = {
     "vi": "Kết quả KHÔNG đầy đủ — có công cụ bị bỏ qua, lỗi hoặc chỉ chạy một phần; \"0 lỗi\" không có nghĩa là sạch.",
