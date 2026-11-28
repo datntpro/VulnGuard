@@ -101,7 +101,7 @@ def test_helm_tls_key_and_bare_base64_line(kind):
     assert _no_fragment(_wrap("tls:\n  crt: abc\n  tls.key: " + b + "\n"), b)
     # một dòng base64 dài, không có khoá/dấu `=`/`:`
     assert _no_fragment(_wrap("noise\n" + b + "\nmore"), b)
-    big = _b64(pem + pem[:2000] * 2)
+    big = base64.b64encode(os.urandom(6000)).decode()
     assert len(big) > 5000 and _no_fragment(_wrap(big, cap=20000), big)
 
 
@@ -138,6 +138,14 @@ def test_normal_files_not_sensitive():
         assert not cc.is_sensitive_path(p)
 
 
+def _run(coro):
+    loop = asyncio.new_event_loop()       # không dùng asyncio.run: nó xoá event loop hiện tại của các test khác
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 def test_local_route_cut_is_unchanged(monkeypatch):
     content = "".join(f"line {i} of a long file\n" for i in range(2000))
     assert len(content) > 20_000
@@ -145,10 +153,10 @@ def test_local_route_cut_is_unchanged(monkeypatch):
     async def fake_host(method, path, **kw):
         return {"content": content, "binary": False}
     monkeypatch.setattr(ca, "_host_request", fake_host)
-    local = asyncio.run(ca._run_readonly("f", "read_file", {"path": "a.txt"}))
+    local = _run(ca._run_readonly("f", "read_file", {"path": "a.txt"}))
     expect = "Nội dung 'a.txt':\n" + content[:ca.MAX_FILE_CHARS] + "\n…[đã cắt bớt do file dài]…"
     assert local == expect
-    raw = asyncio.run(ca._run_readonly("f", "read_file", {"path": "a.txt"}, raw=True))
+    raw = _run(ca._run_readonly("f", "read_file", {"path": "a.txt"}, raw=True))
     assert len(raw) > len(local) and content[:ca.MAX_FILE_CHARS + 5000] in raw
 
 
