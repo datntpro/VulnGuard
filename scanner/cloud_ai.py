@@ -67,8 +67,110 @@ VERDICT_LABEL = {
 # ─────────────────────────────────────────────
 # Redaction — che secret trước khi gửi ra cloud
 # ─────────────────────────────────────────────
+# ── Khối khoá riêng tư nhiều dòng: quét TUYẾN TÍNH bằng str/regex neo ở header (không dùng `[\s\S]*?` lồng nhau) ──
+# Mỗi header chỉ tìm END một lần; không có END nào phía sau → nhớ lại (không quét lại cho các header kế tiếp).
+_PEM_HDR = re.compile(r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----")
+_PEM_END = re.compile(r"-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----")
+# thân khối không có END: (header armor Proc-Type/DEK-Info/Version…, có thể thụt lề) rồi ≥20 ký tự base64
+_PEM_BODY_RAW = re.compile(r"[ \t]*\r?\n(?:[ \t]*[A-Za-z][A-Za-z0-9-]{0,39}:[^\n]{0,200}\n)*[ \t\r\n]{0,200}[A-Za-z0-9+/=]{20}")
+# cùng cấu trúc nhưng xuống dòng bằng chuỗi `\n` (JSON/YAML nháy kép)
+_PEM_BODY_ESC = re.compile(r"[ \t]*(?:\\r)?\\n(?:(?:\\r)?\\n|[ \t]*[A-Za-z][A-Za-z0-9-]{0,39}:[^\n\"'\\]{0,200}\\n)*[A-Za-z0-9+/=]{20}")
+_QUOTE_OR_NL = re.compile(r"[\"'\n]")
+_PUTTY_HDR = re.compile(r"PuTTY-User-Key-File-\d{1,3}:")
+_STOP_AFTER_MAC = re.compile(r"[\n\"'\\]")
+# base64 của "-----BEGIN" (LS0tLS1CRUdJT) hoặc "PuTTY-User-Key-File" (UHVUVFktVXNlci1LZXktRmlsZ), kể cả bị ngắt dòng (76/64 cột, `\n`)
+_B64_KEYS = re.compile(
+    r"(?:LS0tLS1CRUdJT|UHVUVFktVXNlci1LZXktRmlsZ)[A-Za-z0-9+/=]*"
+    r"(?:(?:\r?\n[ \t]*|\\n)[A-Za-z0-9+/=]{1,4000}(?=[ \t]*(?:\r?\n|\\n|[\"']|\Z)))*")
+
+
+class _M:
+    """Giả lập re.Match tối thiểu (chỉ group(0)) cho callback `repl` của các bộ quét tuyến tính."""
+    __slots__ = ("_s",)
+
+    def __init__(self, s: str):
+        self._s = s
+
+    def group(self, i: int = 0) -> str:
+        return self._s
+
+
+class _LinearScan:
+    """Giao diện `.sub(repl, text)` + `.pattern` như re.Pattern để dùng chung với danh sách _SECRET_PATTERNS."""
+
+    def __init__(self, pattern: str, spans):
+        self.pattern, self._spans = pattern, spans
+
+    def sub(self, repl, text, count=0):
+        if not text:
+            return text
+        out, pos = [], 0
+        for a, b in self._spans(text):
+            if a < pos:
+                continue
+            seg = text[a:b]
+            out.append(text[pos:a])
+            out.append(repl(_M(seg)) if callable(repl) else repl)
+            pos = b
+        if not out:
+            return text
+        out.append(text[pos:])
+        return "".join(out)
+
+
+def _pem_spans(text: str):
+    pos, no_end = 0, False
+    for h in _PEM_HDR.finditer(text):
+        if h.start() < pos:
+            continue
+        e = None if no_end else _PEM_END.search(text, h.end())
+        if e is not None:
+            pos = e.end()
+            yield h.start(), pos
+            continue
+        no_end = True                      # không còn END nào phía sau
+        if _PEM_BODY_RAW.match(text, h.end()):
+            pos = len(text)                # cụt: che tới hết văn bản
+        elif _PEM_BODY_ESC.match(text, h.end()):
+            q = _QUOTE_OR_NL.search(text, h.end())
+            pos = q.start() if q else len(text)     # dạng `\n`: che tới hết chuỗi nháy / dòng
+        else:
+            continue                       # chỉ nhắc tới header trong code/tài liệu
+        yield h.start(), pos
+
+
+def _putty_spans(text: str):
+    pos, no_mac = 0, False
+    for h in _PUTTY_HDR.finditer(text):
+        if h.start() < pos:
+            continue
+        j = -1 if no_mac else text.find("Private-MAC:", h.end())
+        if j >= 0:
+            m = _STOP_AFTER_MAC.search(text, j + 12)
+            pos = m.start() if m else len(text)
+        else:
+            no_mac = True
+            nl = text.find("\n", h.end())
+            seg = text[h.end(): nl if nl >= 0 else len(text)]
+            if "\\n" in seg:             # dạng `\n` trong chuỗi nháy
+                q = _QUOTE_OR_NL.search(text, h.end())
+                pos = q.start() if q else len(text)
+            else:
+                pos = len(text)
+        yield h.start(), pos
+
+
+def _b64_spans(text: str):
+    for m in _B64_KEYS.finditer(text):
+        yield m.start(), m.end()
+
+
+_PEM_SCAN = _LinearScan("-----BEGIN … PRIVATE KEY … END (linear scan)", _pem_spans)
+_PUTTY_SCAN = _LinearScan("PuTTY-User-Key-File (linear scan)", _putty_spans)
+_B64KEY_SCAN = _LinearScan("base64 of BEGIN/PuTTY armor (linear scan)", _b64_spans)
+
 _SECRET_PATTERNS = [
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+    _PEM_SCAN, _PUTTY_SCAN, _B64KEY_SCAN,
     re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{10,}"),
     re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"),   # gồm sk-proj-… / sk-svcacct-…
