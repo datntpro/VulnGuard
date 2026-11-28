@@ -259,3 +259,109 @@ def test_ollama_call_sites_use_guarded_client():
         src = (root / rel).read_text(encoding="utf-8")
         assert "httpx.AsyncClient(" not in src, rel
         assert "guarded_async_client(\"ollama\"" in src, rel
+
+
+# ── [W3-10] policy.base_url_allowlist được url_guard dùng + validate chặt ─────────
+from api.services import ai_policy  # noqa: E402
+
+_W3_DNS = {"api.corp.test": ["10.9.9.9"], "other.corp.test": ["10.9.9.8"], "x.corp.test": ["169.254.169.254"],
+           "loop.corp.test": ["127.0.0.1"], "other": ["10.9.9.7"]}
+
+
+def _w3_resolver(host, port):
+    if host not in _W3_DNS:
+        raise UrlRejected("không phân giải được host")
+    return list(_W3_DNS[host])
+
+
+def _cfg(monkeypatch, policy_list=(), top=()):
+    from api.services import ai_config
+    monkeypatch.setattr(ai_config, "load_config",
+                        lambda: {"policy": {"base_url_allowlist": list(policy_list)}, "base_url_allowlist": list(top)})
+    monkeypatch.delenv("AI_BASE_URL_ALLOWLIST", raising=False)
+    monkeypatch.delenv("AI_URL_EXTRA_PORTS", raising=False)
+
+
+def _wpol():
+    return url_guard.policy_for("cloud", _w3_resolver)
+
+
+@pytest.mark.parametrize("entry", ["h.example.com:8443", "*.example.com", "10-0-0-5.internal", "*.corp.example.com",
+                                   "host", "*.corp.test", "api.corp.test:8443"])
+def test_valid_allow_entry_accepts(entry):
+    assert ai_policy.valid_allow_entry(entry)
+
+
+@pytest.mark.parametrize("entry", ["host\n", "h:١٢٣", "*.com", "*.co.uk", "*.com.vn", "*.", "**.x.com", "h:0", "h:65536",
+                                   "h:", "", " h", "h/p", "a@b", "http://h", "*.net", "h:99999", "*", ".h"])
+def test_valid_allow_entry_rejects(entry):
+    assert not ai_policy.valid_allow_entry(entry)
+
+
+def test_policy_save_rejects_wildcard_tld():
+    with pytest.raises(ValueError):
+        ai_policy.normalize({"base_url_allowlist": ["*.com"]})
+    assert ai_policy.normalize({"base_url_allowlist": ["*.Example.com"]})["base_url_allowlist"] == ["*.example.com"]
+
+
+def test_policy_allowlist_opens_private_host(monkeypatch):
+    _cfg(monkeypatch)
+    with pytest.raises(UrlRejected):
+        check_url("https://api.corp.test/v1", "cloud", policy=_wpol())
+    _cfg(monkeypatch, policy_list=["api.corp.test"])
+    assert check_url("https://api.corp.test/v1", "cloud", policy=_wpol()) == "https://api.corp.test/v1"
+    with pytest.raises(UrlRejected):
+        check_url("https://other.corp.test/v1", "cloud", policy=_wpol())
+
+
+def test_host_port_entry_opens_only_exact_pair(monkeypatch):
+    _cfg(monkeypatch, policy_list=["api.corp.test:8443"])
+    p = _wpol()
+    assert check_url("https://api.corp.test:8443/v1", "cloud", policy=p) == "https://api.corp.test:8443/v1"
+    for bad in ("https://api.corp.test:9443/v1", "https://other.corp.test:8443/v1", "https://api.corp.test/v1"):
+        with pytest.raises(UrlRejected):
+            check_url(bad, "cloud", policy=p)
+
+
+def test_bare_entry_does_not_open_non_default_port(monkeypatch):
+    _cfg(monkeypatch, policy_list=["api.corp.test"])
+    with pytest.raises(UrlRejected):
+        check_url("https://api.corp.test:8443/", "cloud", policy=_wpol())
+
+
+def test_invalid_entries_ignored_and_logged_without_entry_text(monkeypatch, caplog):
+    _cfg(monkeypatch, policy_list=["*.net"], top=["*.co.uk"])
+    monkeypatch.setenv("AI_BASE_URL_ALLOWLIST", "*.com, ok.corp.test")
+    with caplog.at_level("WARNING"):
+        p = _wpol()
+    assert p.allowlist == ("ok.corp.test",)
+    text = caplog.text
+    assert "env" in text and "*.com" not in text and "*.net" not in text and "co.uk" not in text
+
+
+def test_allowlisted_name_never_opens_metadata_or_loopback(monkeypatch):
+    _cfg(monkeypatch, policy_list=["*.corp.test", "x.corp.test:8443"])
+    p = _wpol()
+    for u in ("https://x.corp.test/", "https://loop.corp.test/", "https://x.corp.test:8443/"):
+        with pytest.raises(UrlRejected):
+            check_url(u, "cloud", policy=p)
+
+
+def test_call_time_pin_uses_same_port_rules(monkeypatch):
+    _cfg(monkeypatch, policy_list=["api.corp.test:8443"])
+    c = url_guard.guarded_async_client("cloud", policy=_wpol(), inner=httpx.MockTransport(lambda r: httpx.Response(200)))
+    assert _arun(c.get("https://api.corp.test:8443/v1")).status_code == 200
+    for bad in ("https://api.corp.test:9443/v1", "https://other.corp.test:8443/v1", "https://api.corp.test/v1"):
+        with pytest.raises(Exception):
+            _arun(c.get(bad))
+
+
+@pytest.mark.parametrize("url", [
+    "https://2130706433/", "https://0177.0.0.1/", "https://[::ffff:127.0.0.1]/", "https://api.corp.test@127.0.0.1/",
+    "https://127.0.0.1:8443/", "https://169.254.169.254:8443/", "https://api.corp.test.:9443/", "https://API.CORP.TEST:9443/",
+    "https://api。corp。test:9443/",
+])
+def test_probe_set_with_policy_entries_has_no_bypass(monkeypatch, url):
+    _cfg(monkeypatch, policy_list=["*.corp.test", "api.corp.test:8443"])
+    with pytest.raises(UrlRejected):
+        check_url(url, "cloud", policy=_wpol())
