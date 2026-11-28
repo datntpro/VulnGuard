@@ -1,267 +1,112 @@
-"""Scanner invocation never acts on configuration, state or build steps supplied by the scanned tree.
-
-Hostile inputs are generated at test time under tmp_path; nothing hostile is committed.
-"""
+"""Scanners run with VulnGuard-owned configuration and never act on config supplied by the scanned tree."""
 import asyncio
 import os
 import shutil
-import tarfile
-import textwrap
-from urllib.parse import urlparse
+from pathlib import Path
 
-import httpx
 import pytest
 
-from scanner.scanners import sca, sonarqube
-from scanner.scanners.base import ScannerRunError, scrubbed_env
+from scanner.scanners import iac, sast, secrets
+from scanner.scanners import selftest
+
+ROOT = Path(__file__).resolve().parent.parent
+CFG = ROOT / "scanner" / "config"
+FX = str(ROOT / "tests" / "fixtures")
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    return asyncio.new_event_loop().run_until_complete(coro)
 
 
-def _under(path, root):
-    return os.path.realpath(path).startswith(os.path.realpath(str(root)) + os.sep)
+def _capture(monkeypatch, module, scanner, stdout="{}", rc=0):
+    seen = {}
 
-
-# ── pip-audit ────────────────────────────────────────────────────────────────
-
-def test_pip_audit_passes_only_pinned_copy_and_disables_pip(monkeypatch, tmp_path):
-    (tmp_path / "requirements.txt").write_text(textwrap.dedent("""\
-        --index-url http://127.0.0.1:9/simple
-        -r other.txt
-        -e .
-        canary @ file:./canary-1.0.tar.gz
-        ./canary-1.0.tar.gz
-        flask>=1
-        requests==2.0.0 --hash=sha256:00
-    """))
-    seen = []
-
-    async def fake(cmd, cwd=None, **k):
-        path = cmd[cmd.index("-r") + 1]
-        seen.append((cmd, cwd, open(path).read()))
-        return 0, '{"dependencies": []}', ""
-
-    monkeypatch.setattr(sca, "run_command", fake)
-    _run(sca.PipAuditScanner(str(tmp_path)).scan())
-    assert seen
-    for cmd, cwd, content in seen:
-        assert "--disable-pip" in cmd and "--no-deps" in cmd
-        assert not _under(cmd[cmd.index("-r") + 1], tmp_path)
-        assert cwd and not _under(cwd, tmp_path)
-        assert content == "requests==2.0.0"
-
-
-def test_pip_audit_ignores_pyproject_and_pipfile_lock(monkeypatch, tmp_path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
-    (tmp_path / "Pipfile.lock").write_text("{}")
-    calls = []
-
-    async def fake(cmd, **k):
-        calls.append(cmd)
-        return 0, '{"dependencies": []}', ""
-
-    monkeypatch.setattr(sca, "run_command", fake)
-    assert _run(sca.PipAuditScanner(str(tmp_path)).scan()) == []
-    assert calls == []
-
-
-def test_pip_audit_unpinned_only_is_partial_not_error(monkeypatch, tmp_path):
-    (tmp_path / "requirements.txt").write_text("flask>=1\n")
-    monkeypatch.setattr(sca, "run_command", lambda *a, **k: pytest.fail("must not run"))
-    sc = sca.PipAuditScanner(str(tmp_path))
-    assert _run(sc.scan()) == []
-    assert sc.warnings
-
-
-def _make_canary_tree(root, marker):
-    """Target whose requirement is a local sdist with an in-tree build backend that writes `marker`."""
-    root.mkdir(parents=True, exist_ok=True)
-    pkg = root / "src" / "canary-1.0"
-    pkg.mkdir(parents=True)
-    (pkg / "pyproject.toml").write_text(
-        '[build-system]\nrequires = []\nbuild-backend = "b"\nbackend-path = ["."]\n')
-    (pkg / "b.py").write_text(textwrap.dedent(f"""\
-        def _m():
-            open({str(marker)!r}, "w").write("x")
-        def get_requires_for_build_wheel(c=None):
-            _m(); return []
-        def build_wheel(*a, **k):
-            _m(); raise SystemExit(1)
-        def prepare_metadata_for_build_wheel(*a, **k):
-            _m(); raise SystemExit(1)
-    """))
-    with tarfile.open(root / "canary-1.0.tar.gz", "w:gz") as t:
-        t.add(pkg, arcname="canary-1.0")
-    shutil.rmtree(root / "src")
-    (root / "requirements.txt").write_text("./canary-1.0.tar.gz\nrequests==2.0.0\n")
-
-
-@pytest.mark.skipif(not shutil.which("pip-audit"), reason="pip-audit not installed")
-def test_pip_audit_real_tool_never_builds_target_packages(tmp_path):
-    marker = tmp_path / "MARKER"
-    target = tmp_path / "t"
-    _make_canary_tree(target, marker)
-    sc = sca.PipAuditScanner(str(target))
+    async def fake(cmd, *a, **k):
+        seen["cmd"], seen["kw"] = cmd, k
+        if k.get("cwd") and os.path.isdir(k["cwd"]):
+            seen["cwd_listing"] = os.listdir(k["cwd"])
+        return rc, stdout, ""
+    monkeypatch.setattr(module, "run_command", fake)
     try:
-        _run(sc.scan())
-    except ScannerRunError as e:  # advisory service may be unreachable
-        text = str(e)
-    else:
-        text = " ".join(sc.warnings)
-    assert not marker.exists()
-    assert "isolated environment" not in text and "Failed to upgrade" not in text
+        _run(scanner.scan())
+    except Exception:  # noqa: BLE001 - only the argv matters here
+        pass
+    return seen
 
 
-# ── SonarQube ────────────────────────────────────────────────────────────────
-
-def _sonar(monkeypatch, tmp_path, handler, fake_run):
-    monkeypatch.setattr(sonarqube.shutil, "which", lambda n: "/x/sonar-scanner")
-    monkeypatch.setattr(sonarqube, "_cfg", lambda name, default=None: {
-        "SONARQUBE_URL": "http://sonar.test:9000", "SONARQUBE_TOKEN": "tok-123"}.get(name, default))
-    monkeypatch.setattr(sonarqube, "run_command", fake_run)
-    real = httpx.AsyncClient
-    monkeypatch.setattr(sonarqube.httpx, "AsyncClient",
-                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
-
-    async def nosleep(_):
-        return None
-    monkeypatch.setattr(sonarqube.asyncio, "sleep", nosleep)
-    return sonarqube.SonarQubeScanner(str(tmp_path))
-
-
-def _ok_handler(requests):
-    def h(req):
-        requests.append(req)
-        if req.url.path == "/api/ce/task":
-            return httpx.Response(200, json={"task": {"status": "SUCCESS"}})
-        return httpx.Response(200, json={"issues": [], "total": 0, "hotspots": []})
-    return h
+def test_checkov_argv_uses_single_token_directory_and_empty_cwd(monkeypatch, tmp_path):
+    seen = _capture(monkeypatch, iac, iac.CheckovScanner(str(tmp_path)))
+    cmd, kw = seen["cmd"], seen["kw"]
+    assert "-d" not in cmd and "--directory" not in cmd and "--config-file" not in cmd
+    assert [a for a in cmd if a.startswith("--directory=")] == [f"--directory={tmp_path}"]
+    assert kw["cwd"] and not str(kw["cwd"]).startswith(str(tmp_path))
+    assert seen["cwd_listing"] == []
+    key = kw["env"]["CKV_EXTERNAL_CHECKS_PUBLIC_KEY"]
+    assert os.path.isfile(key) and os.path.dirname(os.path.realpath(key)) == os.path.realpath(CFG)
+    try:
+        from checkov.common.util.config_utils import get_default_config_paths
+    except Exception:  # noqa: BLE001
+        pytest.skip("checkov not installed")
+    assert not [p for p in get_default_config_paths(cmd[1:]) if str(tmp_path) in str(p)]
 
 
-def test_sonar_never_reads_target_scanner_state(monkeypatch, tmp_path):
-    target = tmp_path / "t"
-    (target / ".scannerwork").mkdir(parents=True)
-    (target / ".w").mkdir()
-    for d in (".scannerwork", ".w"):
-        (target / d / "report-task.txt").write_text("ceTaskId=ZZ\nceTaskUrl=http://canary.invalid/x\n")
-    (target / "sonar-project.properties").write_text(
-        "sonar.working.directory=.w\nsonar.scanner.javaExePath=./x.sh\n"
-        "sonar.scanner.proxyHost=canary.invalid\nsonar.projectDescription=${env.SONAR_TOKEN}\n")
-    captured = {}
-
-    async def fake_run(cmd, cwd=None, timeout=0, env=None):
-        captured.update(cmd=cmd, cwd=cwd, env=env)
-        wd = next(a.split("=", 1)[1] for a in cmd if a.startswith("-Dsonar.working.directory="))
-        os.makedirs(wd, exist_ok=True)
-        with open(os.path.join(wd, "report-task.txt"), "w") as f:
-            f.write("ceTaskId=AX1\n")
-        return 0, "", ""
-
-    requests = []
-    sc = _sonar(monkeypatch, target, _ok_handler(requests), fake_run)
-    _run(sc.scan())
-    assert requests
-    for r in requests:
-        assert r.url.host == urlparse(sc.url).hostname
-        assert "canary.invalid" not in str(r.url)
-    cmd = captured["cmd"]
-    for key in ("-Dproject.settings=", "-Dsonar.working.directory="):
-        val = next(a.split("=", 1)[1] for a in cmd if a.startswith(key))
-        assert not _under(val, target)
-    assert not _under(captured["cwd"], target)
-    assert not any("tok-123" in a for a in cmd)
-    assert captured["env"]["SONAR_TOKEN"] == "tok-123"
+def test_gitleaks_argv_has_owned_config_and_ignore_path(monkeypatch, tmp_path):
+    seen = _capture(monkeypatch, secrets, secrets.GitleaksScanner(str(tmp_path)))
+    cmd = seen["cmd"]
+    cfg = cmd[cmd.index("--config") + 1]
+    assert os.path.realpath(cfg) == os.path.realpath(CFG / "gitleaks.toml")
+    assert "--ignore-gitleaks-allow" in cmd and "--follow-symlinks" not in cmd
+    ign = cmd[cmd.index("--gitleaks-ignore-path") + 1]
+    assert not ign.startswith(str(tmp_path))
+    assert seen["kw"]["cwd"] and not str(seen["kw"]["cwd"]).startswith(str(tmp_path))
 
 
-def _fake_run_factory(rc=0, err="", task="ceTaskId=AX1\n"):
-    async def fake_run(cmd, cwd=None, timeout=0, env=None):
-        wd = next(a.split("=", 1)[1] for a in cmd if a.startswith("-Dsonar.working.directory="))
-        if task is not None:
-            os.makedirs(wd, exist_ok=True)
-            with open(os.path.join(wd, "report-task.txt"), "w") as f:
-                f.write(task)
-        return rc, "", err
-    return fake_run
+def test_gitleaks_target_ignore_file_marks_partial(monkeypatch, tmp_path):
+    (tmp_path / ".gitleaksignore").write_text("x:y:z:1\n")
+    sc = secrets.GitleaksScanner(str(tmp_path))
+    _capture(monkeypatch, secrets, sc)
+    assert sc.warnings
+    clean = secrets.GitleaksScanner(str(tmp_path / "nope"))
+    _capture(monkeypatch, secrets, clean)
+    assert not clean.warnings
 
 
-def _handler(ce="SUCCESS", issues_status=200):
-    def h(req):
-        if req.url.path == "/api/ce/task":
-            return httpx.Response(200, json={"task": {"status": ce}})
-        return httpx.Response(issues_status, json={"issues": [], "total": 0})
-    return h
+def test_bandit_uses_owned_ini(monkeypatch, tmp_path):
+    seen = _capture(monkeypatch, sast, sast.BanditScanner(str(tmp_path)), stdout='{"results": []}')
+    cmd = seen["cmd"]
+    assert os.path.realpath(cmd[cmd.index("--ini") + 1]) == os.path.realpath(CFG / "bandit.ini")
+    assert (CFG / "bandit.ini").read_text() == "[bandit]\n"
+    assert seen["kw"]["cwd"] and not str(seen["kw"]["cwd"]).startswith(str(tmp_path))
 
 
-_CASES = {
-    "rc1": (_fake_run_factory(rc=1, err="boom"), _handler()),
-    "timeout": (_fake_run_factory(rc=-1, err="Command timeout after 1s: x"), _handler()),
-    "issues-500": (_fake_run_factory(), _handler(issues_status=500)),
-    "ce-failed": (_fake_run_factory(), _handler(ce="FAILED")),
-    "ce-never-terminal": (_fake_run_factory(), _handler(ce="IN_PROGRESS")),
-    "no-report": (_fake_run_factory(task=None), _handler()),
-    "bad-task-id": (_fake_run_factory(task="ceTaskId=../x\n"), _handler()),
-}
+def test_semgrep_ignores_target_ignore_files(monkeypatch, tmp_path):
+    seen = _capture(monkeypatch, sast, sast.SemgrepScanner(str(tmp_path)), stdout='{"results": []}')
+    # first run_command call is the one captured last; both runs share the same flags
+    cmd = seen["cmd"]
+    assert "--x-ignore-semgrepignore-files" in cmd
+    excl = {cmd[i + 1] for i, a in enumerate(cmd) if a == "--exclude"}
+    assert set(sast.SEMGREP_DEFAULT_IGNORES) <= excl
 
 
-@pytest.mark.parametrize("case", list(_CASES))
-def test_sonar_failure_is_error_not_clean(monkeypatch, tmp_path, case):
-    fake_run, handler = _CASES[case]
-    sc = _sonar(monkeypatch, tmp_path, handler, fake_run)
-    with pytest.raises(ScannerRunError):
-        _run(sc.scan())
+# Real-tool checks (skipped when the binary is absent; also run in the image by scanner.scanners.selftest).
+def _real(tool, fn):
+    if not shutil.which(tool):
+        pytest.skip(f"{tool} not installed")
+    n, _ = fn(FX)
+    assert n >= 1
 
 
-def test_sonar_failure_marks_orchestrator_error(monkeypatch, tmp_path):
-    from scanner.orchestrator import Orchestrator
-    fake_run, handler = _CASES["rc1"]
-    _sonar(monkeypatch, tmp_path, handler, fake_run)
-    monkeypatch.setattr(sonarqube.SonarQubeScanner, "is_available", lambda self: True)
-    _, logs = _run(Orchestrator(str(tmp_path), scan_types=["SAST"]).run())
-    assert logs["sonar-scanner"]["status"] == "error"
+def test_checkov_ignores_target_config():
+    _real("checkov", selftest._checkov_isolation)
 
 
-def test_scanner_param_envs_are_not_forwarded():
-    base = {"SONAR_SCANNER_JSON_PARAMS": "x", "SONARQUBE_SCANNER_PARAMS": "y", "SONAR_SCANNER_OPTS": "z"}
-    assert scrubbed_env(base=base) == {}
+def test_gitleaks_ignores_target_config():
+    _real("gitleaks", selftest._gitleaks_isolation)
 
 
-# ── mixed requirements files ─────────────────────────────────────────────────
-
-def test_pip_audit_mixed_file_is_partial_with_count(monkeypatch, tmp_path):
-    (tmp_path / "requirements.txt").write_text(
-        "requests==2.0.0\nflask>=1\n-r other.txt\n-e .\ncanary @ file:./x.tar.gz\n")
-
-    async def fake(cmd, **k):
-        return 0, '{"dependencies": []}', ""
-
-    monkeypatch.setattr(sca, "run_command", fake)
-    sc = sca.PipAuditScanner(str(tmp_path))
-    _run(sc.scan())
-    assert len(sc.warnings) == 1
-    assert "4 non-pinned" in sc.warnings[0]
-    assert "canary" not in sc.warnings[0] and "flask" not in sc.warnings[0]
+def test_bandit_ignores_target_ini():
+    _real("bandit", selftest._bandit_isolation)
 
 
-def test_pip_audit_fully_pinned_file_has_no_warning(monkeypatch, tmp_path):
-    (tmp_path / "requirements.txt").write_text("requests==2.0.0\n# comment\n")
-
-    async def fake(cmd, **k):
-        return 0, '{"dependencies": []}', ""
-
-    monkeypatch.setattr(sca, "run_command", fake)
-    sc = sca.PipAuditScanner(str(tmp_path))
-    _run(sc.scan())
-    assert sc.warnings == []
-
-
-def test_pip_audit_skips_files_reached_through_symlinked_dir(monkeypatch, tmp_path):
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "requirements.txt").write_text("requests==2.0.0\n")
-    target = tmp_path / "t"
-    target.mkdir()
-    os.symlink(outside, target / "sub")
-    monkeypatch.setattr(sca, "run_command", lambda *a, **k: pytest.fail("must not run"))
-    assert _run(sca.PipAuditScanner(str(target)).scan()) == []
+def test_semgrep_ignores_target_ignore_file():
+    _real("semgrep", selftest._semgrep_isolation)

@@ -40,13 +40,24 @@ CHECKOV_CONTROL_RUN = "checkov/common/runners/runner_registry.py"
 TF = 'resource "aws_s3_bucket" "b" {\n  bucket = "probe-bucket"\n  acl    = "public-read"\n}\n'
 
 
+class Captured(list):
+    """argv plus the cwd/env the scanner passes to run_command (the probe must run the same way)."""
+
+    def __new__(cls, argv, cwd=None, env=None):
+        return super().__new__(cls, argv)
+
+    def __init__(self, argv, cwd=None, env=None):
+        super().__init__(argv)
+        self.cwd, self.env = cwd, env
+
+
 def capture_semgrep_argv(scan_path, config_args):
     """The exact argv SemgrepScanner would run (PYTHONPATH is scrubbed by run_command, so we exec it ourselves)."""
     from scanner.scanners import sast
     captured = []
 
     async def fake(cmd, **kw):
-        captured.append(cmd)
+        captured.append(Captured(cmd, kw.get("cwd"), kw.get("env")))
         return 0, '{"results": []}', ""
 
     orig = sast.run_command
@@ -63,7 +74,7 @@ def capture_checkov_argv(scan_path):
     captured = []
 
     async def fake(cmd, **kw):
-        captured.append(cmd)
+        captured.append(Captured(cmd, kw.get("cwd"), kw.get("env")))
         return 0, "{}", ""
 
     orig = iac.run_command
@@ -82,7 +93,8 @@ def parse_probe(lines):
     return loaded, imports, runs
 
 
-def run_probed(argv, watch, forbidden, label, control_run, require_import=None, timeout=600):
+def run_probed(argv, watch, forbidden, label, control_run, require_import=None, timeout=600,
+               cwd=None, extra_env=None):
     """Run argv under the probe. Returns (ok, CompletedProcess). Fails when a forbidden call RUNs,
     or when a positive control is missing (the probe/scan would be vacuous)."""
     out = tempfile.NamedTemporaryFile(prefix="vgprobe-", suffix=".txt", delete=False)
@@ -91,7 +103,20 @@ def run_probed(argv, watch, forbidden, label, control_run, require_import=None, 
     env = dict(os.environ, PYTHONPATH=PROBE_DIR + os.pathsep + os.environ.get("PYTHONPATH", ""),
                VG_PROBE_WATCH=",".join(watch), VG_PROBE_OUT=out.name, HOME=home,
                XDG_CACHE_HOME=home + "/.cache", XDG_CONFIG_HOME=home + "/.config", XDG_DATA_HOME=home + "/.local", SEMGREP_HOME=home + "/.semgrep")
-    p = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout)
+    env.update(extra_env or {})
+    cwd = getattr(argv, "cwd", None) if cwd is None else cwd
+    extra = getattr(argv, "env", None)
+    if extra:
+        env.update(extra)
+    own_cwd = None
+    if cwd and not os.path.isdir(cwd):  # the scanner's private temp cwd is gone after scan(); keep it empty
+        os.makedirs(cwd)
+        own_cwd = cwd
+    try:
+        p = subprocess.run(list(argv), env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    finally:
+        if own_cwd:
+            shutil.rmtree(own_cwd, ignore_errors=True)
     lines = open(out.name, encoding="utf-8").read().splitlines()
     os.unlink(out.name)
     shutil.rmtree(home, ignore_errors=True)

@@ -7,12 +7,16 @@ import json
 import logging
 import os
 import re
+import shutil
+import tempfile
 from typing import List, Dict, Any
 
 from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, make_fingerprint,
                                    classify_failed_run)
 
 logger = logging.getLogger(__name__)
+
+_CFG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config")
 
 # 1.3: giảm false positive cho secret
 _TEST_PATH_RE = re.compile(
@@ -50,7 +54,6 @@ class GitleaksScanner(BaseScanner):
     tool_name = "gitleaks"
 
     async def scan(self) -> List[Dict[str, Any]]:
-        import tempfile
         findings = []
 
         # F3: report file RIÊNG cho mỗi lần quét — tránh các scan song song/liên tiếp
@@ -58,10 +61,20 @@ class GitleaksScanner(BaseScanner):
         fd, report_path = tempfile.mkstemp(prefix="gitleaks-", suffix=".json")
         os.close(fd)
         results = []
+        # Invariant: target files never configure the tool (owned config, empty ignore dir/cwd,
+        # inline allow comments disabled). The tool always reads <source>/.gitleaksignore; that
+        # case cannot be switched off, so it is reported as partial below.
+        if os.path.lexists(os.path.join(self.scan_path, ".gitleaksignore")):
+            self.warnings.append("target .gitleaksignore present; gitleaks 8.18.4 always applies it, "
+                                 "so some findings may be hidden")
+        td = tempfile.mkdtemp(prefix="vg-gitleaks-")
         cmd = [
             "gitleaks",
             "detect",
-            "--source", self.scan_path,
+            "--source", os.path.abspath(self.scan_path),
+            "--config", os.path.abspath(os.path.join(_CFG_DIR, "gitleaks.toml")),
+            "--gitleaks-ignore-path", td,
+            "--ignore-gitleaks-allow",
             "--report-format", "json",
             "--report-path", report_path,
             "--no-git",
@@ -71,7 +84,7 @@ class GitleaksScanner(BaseScanner):
         ]
 
         try:
-            rc, stdout, stderr = await run_command(cmd, timeout=120)
+            rc, stdout, stderr = await run_command(cmd, cwd=td, timeout=120)
 
             kind = classify_failed_run(rc, stderr)
             if kind == "missing":
@@ -97,6 +110,7 @@ class GitleaksScanner(BaseScanner):
                     if not isinstance(results, list):
                         raise ScannerRunError("gitleaks report không phải list JSON")
         finally:
+            shutil.rmtree(td, ignore_errors=True)
             try:
                 os.unlink(report_path)
             except OSError:

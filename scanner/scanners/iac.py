@@ -6,7 +6,9 @@ IaC Scanners:
 """
 import json
 import logging
+import os
 import shutil
+import tempfile
 from typing import List, Dict, Any
 
 from scanner.scanners.sca import _trivy_err, trivy_env
@@ -14,6 +16,8 @@ from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, no
                                    make_fingerprint, classify_failed_run)
 
 logger = logging.getLogger(__name__)
+
+_CFG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config")
 
 
 class CheckovScanner(BaseScanner):
@@ -23,16 +27,25 @@ class CheckovScanner(BaseScanner):
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
-        cmd = [
-            "checkov",
-            "-d", self.scan_path,
-            "--output", "json",
-            "--quiet",
-            "--compact",
-            "--skip-check", "CKV_DOCKER_2,CKV_DOCKER_3",  # Skip quá nhiều false positive
-        ]
-
-        rc, stdout, stderr = await run_command(cmd, timeout=300)
+        # Invariant: target files never configure the tool. The tool reads default config files
+        # relative to the scanned directory (matched on the exact `--directory=` token) and cwd, so
+        # pass the directory as ONE token and run from an empty private cwd.
+        # keep: see test_checkov_ignores_target_config
+        if any(os.path.lexists(os.path.join(self.scan_path, n)) for n in (".checkov.yaml", ".checkov.yml")):
+            logger.info("checkov: target config file present and ignored")
+        with tempfile.TemporaryDirectory(prefix="vg-checkov-") as td:
+            cmd = [
+                "checkov",
+                f"--directory={os.path.abspath(self.scan_path)}",
+                "--output", "json",
+                "--quiet",
+                "--compact",
+                "--skip-check", "CKV_DOCKER_2,CKV_DOCKER_3",  # Skip quá nhiều false positive
+            ]
+            rc, stdout, stderr = await run_command(cmd, cwd=td, timeout=300, env={
+                "CKV_EXTERNAL_CHECKS_PUBLIC_KEY": os.path.abspath(
+                    os.path.join(_CFG_DIR, "checkov-external-checks.pub")),
+            })
 
         kind = classify_failed_run(rc, stderr)
         if kind == "missing":
