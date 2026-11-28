@@ -4,6 +4,7 @@ IaC Scanners:
 - TFSec: Terraform deep-dive
 - Trivy IaC: Terraform, K8s manifests
 """
+import asyncio
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ import tempfile
 from typing import List, Dict, Any
 
 from scanner.scanners.sca import _trivy_err, trivy_env
-from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, normalize_severity,
+from scanner.scanners.base import (find_files, ScannerRunError, BaseScanner, run_command, normalize_severity,
                                    make_fingerprint, classify_failed_run)
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,8 @@ class CheckovScanner(BaseScanner):
         if kind == "missing":
             logger.info("checkov chưa cài — bỏ qua")
             return []
-        if kind == "timeout":
-            raise ScannerRunError(f"checkov timeout: {stderr[-300:]}")
+        if kind in ("timeout", "limit"):
+            raise ScannerRunError(f"checkov {kind}: {stderr[-300:]}")
         # checkov: exit 0 = sạch, 1 = có failed checks; mọi mã khác = tool hỏng.
         if rc not in (0, 1):
             raise ScannerRunError(f"checkov thất bại (exit {rc}): {stderr[-500:]}")
@@ -144,8 +145,8 @@ class TrivyIaCScanner(BaseScanner):
         if kind == "missing":
             logger.info("trivy chưa cài — bỏ qua IaC")
             return []
-        if kind == "timeout":
-            raise ScannerRunError(f"trivy-iac timeout: {stderr[-300:]}")
+        if kind in ("timeout", "limit"):
+            raise ScannerRunError(f"trivy-iac {kind}: {stderr[-300:]}")
         if rc != 0:
             raise ScannerRunError(_trivy_err(stderr, rc))
         if not stdout.strip():
@@ -192,9 +193,10 @@ class HadolintScanner(BaseScanner):
 
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
-        import glob
-        dockerfiles = glob.glob(f"{self.scan_path}/**/Dockerfile*", recursive=True)
-        dockerfiles += glob.glob(f"{self.scan_path}/**/dockerfile*", recursive=True)
+        dockerfiles, truncated = await asyncio.to_thread(
+            find_files, self.scan_path, ("Dockerfile*", "dockerfile*"), 200)
+        if truncated:
+            self.warnings.append("hadolint: more than 200 Dockerfiles; only the first 200 were checked")
 
         errors: list = []
         for dockerfile in dockerfiles:
@@ -205,8 +207,8 @@ class HadolintScanner(BaseScanner):
             if kind == "missing":
                 logger.info("hadolint chưa cài — bỏ qua")
                 return []
-            if kind == "timeout":
-                errors.append(f"{dockerfile}: timeout")
+            if kind in ("timeout", "limit"):
+                errors.append(f"{dockerfile}: {kind}")
                 continue
             # hadolint: exit 0 = sạch, 1 = có findings; khác = hỏng.
             if rc not in (0, 1):

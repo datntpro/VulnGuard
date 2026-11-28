@@ -78,13 +78,54 @@ async def _kill_process_group(proc, grace: float = None) -> None:
         pass
 
 
+_READ_CHUNK = 64 * 1024
+_LIMIT_PREFIX = "Command output limit exceeded"
+
+
+def _setting(name: str, default):
+    """Giới hạn vận hành đọc từ api.config nếu có; scanner chạy độc lập vẫn dùng default."""
+    try:
+        from api.config import settings
+        return getattr(settings, name, default)
+    except Exception:
+        return default
+
+
+async def _drain(stream, limit: int, keep_tail: bool, overflow: asyncio.Event) -> bytes:
+    """Đọc stream theo chunk 64 KiB vào buffer có chặn trên.
+    keep_tail=True: giữ `limit` byte cuối (stderr). Ngược lại vượt `limit` → báo overflow và dừng."""
+    buf = bytearray()
+    while True:
+        chunk = await stream.read(_READ_CHUNK)
+        if not chunk:
+            return bytes(buf)
+        buf += chunk
+        if len(buf) > limit:
+            if keep_tail:
+                del buf[:len(buf) - limit]
+            else:
+                overflow.set()
+                return bytes(buf)
+
+
+async def _cancel_all(*tasks) -> None:
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
-                      env: dict = None) -> tuple[int, str, str]:
+                      env: dict = None, max_stdout: int = None,
+                      max_stderr: int = 1 << 20) -> tuple[int, str, str]:
     """Chạy command async và trả về (returncode, stdout, stderr).
 
     env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế).
     Hết `timeout`: giết CẢ process group (SIGTERM → SIGKILL sau grace) rồi trả (-1, "", "Command timeout …"),
-    để caller báo lỗi timeout (không phải 'sạch') và tool không tiếp tục đốt CPU sau khi bị bỏ."""
+    để caller báo lỗi timeout (không phải 'sạch') và tool không tiếp tục đốt CPU sau khi bị bỏ.
+    Output bị chặn: stdout tối đa `max_stdout` byte (mặc định settings.scanner_max_output_mb), stderr giữ
+    `max_stderr` byte cuối. Vượt stdout → giết group và trả (-1, "", "Command output limit exceeded …")."""
+    if max_stdout is None:
+        max_stdout = int(_setting("scanner_max_output_mb", 128)) * 1024 * 1024
     run_env = scrubbed_env(extra=env)
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -97,15 +138,35 @@ async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
         )
     except FileNotFoundError:
         return -1, "", f"Tool not found: {cmd[0]}"
+    overflow = asyncio.Event()
+    out_t = asyncio.ensure_future(_drain(proc.stdout, max_stdout, False, overflow))
+    err_t = asyncio.ensure_future(_drain(proc.stderr, max_stderr, True, overflow))
+
+    async def _finish():
+        await asyncio.gather(out_t, err_t)
+        await proc.wait()
+
+    fin_t = asyncio.ensure_future(_finish())
+    ovf_t = asyncio.ensure_future(overflow.wait())
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return proc.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
-    except asyncio.TimeoutError:
-        await _kill_process_group(proc)
-        return -1, "", f"Command timeout after {timeout}s: {' '.join(cmd)}"
+        done, _ = await asyncio.wait({fin_t, ovf_t}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        if ovf_t in done:
+            await _cancel_all(fin_t, out_t, err_t)
+            await _kill_process_group(proc)
+            return -1, "", f"{_LIMIT_PREFIX}: stdout over {max_stdout} bytes ({cmd[0]})"
+        if fin_t not in done:
+            await _cancel_all(fin_t, out_t, err_t)
+            await _kill_process_group(proc)
+            return -1, "", f"Command timeout after {timeout}s: {' '.join(cmd)}"
+        return (proc.returncode,
+                out_t.result().decode("utf-8", errors="replace"),
+                err_t.result().decode("utf-8", errors="replace"))
     except asyncio.CancelledError:
+        await _cancel_all(fin_t, out_t, err_t)
         await _kill_process_group(proc)
         raise
+    finally:
+        ovf_t.cancel()
 
 
 # Thư mục rác KHÔNG phải mã nguồn của người dùng — loại khỏi mọi scan để báo cáo
@@ -119,6 +180,40 @@ EXCLUDE_DIR_NAMES = [
 ]
 # Glob cho các tool nhận --exclude dạng path glob (bandit, semgrep)
 EXCLUDE_GLOBS = [f"*/{d}/*" for d in EXCLUDE_DIR_NAMES] + ["*venv*/*"]
+
+
+def find_files(root: str, patterns, max_files: int = 200, max_entries: int = 200_000,
+               skipped_links: list = None) -> tuple:
+    """Bounded, symlink-free file discovery. Returns (files, truncated).
+
+    Never follows directory symlinks, skips symlinked files (collected in `skipped_links` if given),
+    prunes EXCLUDE_DIR_NAMES, and stops after `max_files` matches or `max_entries` visited entries.
+    Blocking: call via asyncio.to_thread from async code."""
+    import fnmatch
+    import os as _os
+    if isinstance(patterns, str):
+        patterns = (patterns,)
+    excluded = set(EXCLUDE_DIR_NAMES)
+    files: list = []
+    visited = 0
+    for dirpath, dirnames, filenames in _os.walk(root, followlinks=False):
+        dirnames[:] = sorted(d for d in dirnames if d not in excluded and "venv" not in d)
+        for name in sorted(filenames):
+            visited += 1
+            if visited > max_entries:
+                return files, True
+            if not any(fnmatch.fnmatchcase(name, p) for p in patterns):
+                continue
+            full = _os.path.join(dirpath, name)
+            if _os.path.islink(full):
+                if skipped_links is not None:
+                    skipped_links.append(full)
+                continue
+            if len(files) >= max_files:
+                return files, True
+            files.append(full)
+        visited += len(dirnames)
+    return files, False
 
 
 def normalize_severity(raw: str) -> str:
@@ -174,6 +269,8 @@ def classify_failed_run(rc: int, stderr: str) -> str:
     """"missing" = tool absent (not applicable → caller returns []); "timeout"; else ""."""
     if rc == -1 and (stderr or "").startswith("Tool not found"):
         return "missing"
+    if rc == -1 and (stderr or "").startswith(_LIMIT_PREFIX):
+        return "limit"
     if rc == -1 and "timeout" in (stderr or ""):
         return "timeout"
     return ""

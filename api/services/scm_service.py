@@ -28,6 +28,25 @@ logger = logging.getLogger(__name__)
 DEFAULT_SCAN_TYPES = ["SAST", "SCA", "SECRETS", "IAC"]
 
 
+def _check_repo_size(dest: str) -> None:
+    """Bounded walk (no symlink following): reject a clone over the configured size or file count."""
+    max_bytes = int(settings.scm_max_repo_mb) * 1024 * 1024
+    max_files = int(settings.scm_max_repo_files)
+    total = count = 0
+    for dirpath, dirnames, filenames in os.walk(dest, followlinks=False):
+        for name in filenames:
+            count += 1
+            if count > max_files:
+                raise RuntimeError("Repository exceeds size limit")
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                continue
+            if total > max_bytes:
+                raise RuntimeError("Repository exceeds size limit")
+        count += len(dirnames)
+
+
 def _clone(conn: ScmConnection, repo: ScmRepo, dest: str) -> None:
     """git clone shallow nhánh mặc định. Token được redact trong mọi log/lỗi."""
     providers.check_base_url(conn.base_url)   # L-1: kiểm tra lại lúc dùng (thu hẹp DNS rebinding)
@@ -51,6 +70,11 @@ def _clone(conn: ScmConnection, repo: ScmRepo, dest: str) -> None:
             subprocess.run(cmd2, check=True, capture_output=True, text=True, timeout=600, env=scrubbed_env())  # nosec B603
         except subprocess.CalledProcessError as e2:
             raise RuntimeError("Clone thất bại: " + providers.redact((e2.stderr or e2.stdout or "")[-300:], token))
+    try:
+        _check_repo_size(dest)
+    except RuntimeError:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
 
 
 def _ensure_project(db: Session, repo: ScmRepo) -> Project:
@@ -90,7 +114,7 @@ async def run_repo_scan(repo_id: str, email_report: bool = False,
         os.makedirs(base_ws, exist_ok=True)
         workdir = tempfile.mkdtemp(prefix="vgscm_", dir=base_ws)
         clone_dest = os.path.join(workdir, "repo")
-        _clone(conn, repo, clone_dest)
+        await asyncio.to_thread(_clone, conn, repo, clone_dest)
 
         scan_types = list(repo.scan_types or []) or DEFAULT_SCAN_TYPES
 

@@ -208,6 +208,22 @@ class Orchestrator:
         logger.info(f"✔ Total findings after dedup: {len(all_findings)}")
         return all_findings, scanner_logs
 
+    @staticmethod
+    def _tool_budget(scanner) -> int:
+        """Wall-clock budget (seconds) for one scanner, independent of its per-command timeouts."""
+        try:
+            from api.config import settings
+            budget = int(settings.scanner_tool_budget_s)
+        except Exception:
+            budget = 1200
+        if getattr(scanner, "tool_name", "") == "sonar-scanner":
+            try:
+                from scanner.scanners.sonarqube import _cfg
+                budget = max(budget, int(_cfg("SONARQUBE_TIMEOUT", 900)) + 180)
+            except Exception:
+                budget = max(budget, 900 + 180)
+        return budget
+
     async def _run_scanner_timed(self, scanner) -> tuple[List[Dict[str, Any]], float, str]:
         start = time.monotonic()
         error = ""
@@ -221,8 +237,13 @@ class Orchestrator:
         if not available:
             tool = getattr(scanner, "tool_name", scanner.__class__.__name__)
             return None, 0.0, f"Tool '{tool}' chưa cài hoặc không có trong PATH"
+        budget = self._tool_budget(scanner)
         try:
-            findings = await scanner.scan()
+            findings = await asyncio.wait_for(scanner.scan(), timeout=budget)
+        except asyncio.TimeoutError:
+            # Cancellation propagates into run_command, which kills the tool's process group.
+            error = f"scanner exceeded {budget}s"
+            logger.error(f"{scanner.__class__.__name__}: {error}")
         except Exception as e:
             error = str(e)
             logger.error(f"Exception in {scanner.__class__.__name__}: {e}", exc_info=True)

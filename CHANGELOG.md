@@ -4,6 +4,7 @@
 
 ### Security
 - Hardened scanner isolation from scanned content.
+- Bounded scanner resources and file discovery: capped scanner output, per-tool wall-clock budget, symlink-free bounded file discovery, clone size limit, report recipient restricted to the caller unless ADMIN.
 
 ### Added — AI PR-7: tài liệu, runbook, deprecation (Refs #109)
 - **Tài liệu (VI+EN)**: `docs/wiki/AI-Per-User-Keys.md` (vai trò, thêm/xoay/thu hồi khoá, thứ tự chọn khoá, policy, mã lỗi, giới hạn đã biết), `AI-Kiro-Bedrock-IAM-Identity-Center.md` (permission set `BedrockInvoke`, tạo Bedrock API key short/long-term, quota + cross-region; mục chưa có nguồn AWS chính thức ghi rõ **chưa xác minh**), `AI-Key-Rotation-Runbook.md` (xoay khoá AI, xoay secret key bằng `VULNGUARD_SECRET_KEY_PREVIOUS` + `reencrypt_all`, backup và secret key cất riêng, phạm vi: secret hộp chung KHÔNG được xoay tự động). Con trỏ ở README, Home, Sidebar, Configuration, Features, API-Reference, Troubleshooting.
