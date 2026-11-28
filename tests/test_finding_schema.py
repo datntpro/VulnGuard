@@ -286,14 +286,14 @@ def test_non_string_values_do_not_crash():
     ("x" * 50, "info", True), ("", "info", True),
 ])
 def test_enrich_normalises_severity(raw, exp, review):
-    out = finding_schema.enrich({"severity": raw})
+    out = fs.enrich({"severity": raw})
     assert out["severity"] == exp and out["needs_review"] is review
 
 
 def test_valid_cvss_overrides_bogus_severity():
     good = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
-    out = finding_schema.enrich({"severity": "<script>", "cvss_v4_vector": good})
-    assert out["severity"] in finding_schema.SEVERITIES and out["severity"] != "info"
+    out = fs.enrich({"severity": "<script>", "cvss_v4_vector": good})
+    assert out["severity"] in fs.SEVERITIES and out["severity"] != "info"
     assert out["needs_review"] is False
 
 
