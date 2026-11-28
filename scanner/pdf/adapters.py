@@ -115,7 +115,7 @@ def _counts(sevs: Iterable[str]) -> Dict[str, int]:
     return c
 
 
-def _verdict(L: Mapping[str, Any], c: Mapping[str, int]) -> tuple[str, str]:
+def _verdict(L: Mapping[str, Any], c: Mapping[str, int], incomplete: bool = False) -> tuple[str, str]:
     if c.get("CRITICAL"):
         k = "critical"
     elif c.get("HIGH"):
@@ -125,7 +125,15 @@ def _verdict(L: Mapping[str, Any], c: Mapping[str, int]) -> tuple[str, str]:
     else:
         k = "clean"
     nar = str(L["narrative"][k]).format(c=c.get("CRITICAL", 0), h=c.get("HIGH", 0), m=c.get("MEDIUM", 0), l=c.get("LOW", 0))
-    return str(L["verdict"][k]), nar
+    verdict = str(L["verdict"][k])
+    if incomplete:
+        if k == "clean":
+            k = "incomplete"
+            verdict, nar = str(L["verdict"][k]), str(L["narrative"][k])
+        else:
+            verdict = f"{verdict} {L['incomplete_note']}"
+            nar = f"{nar} {L['narrative']['incomplete']}"
+    return verdict, nar
 
 
 def _appendix(L: Mapping[str, Any], tools: str = "", extra: Optional[List[dict]] = None) -> List[dict]:
@@ -182,6 +190,35 @@ def _owasp(g: Mapping[str, Any]) -> str:
         return str(cat).split(" ")[0] if cat else ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _tool_status_rows(L: Mapping[str, Any], summary: Any, lang: str):
+    """Per-tool run status → ([row...], warning). Empty for scans with no scanner_logs (doc unchanged)."""
+    from scanner.report_tools import tool_status
+
+    ts = tool_status(summary if isinstance(summary, Mapping) else None, lang)
+    rows = []
+    for r in ts["rows"]:
+        st = r["status"]
+        err = _cap(_scrub(r["error"]), 160)
+        if st == "ok":
+            detail = str(L["tool_detail_ok"]).format(n=r["count"])
+        elif st == "partial":
+            detail = str(L["tool_detail_partial"]).format(n=r["count"]) + (f" — {err}" if err else "")
+        else:
+            detail = err
+        rows.append({"tool": _cap(r["label"], 60), "status": st, "status_label": L["tool_status"][st],
+                     "detail": detail})
+    return rows, (_cap(_scrub(ts["warning"]), 400) if ts["has_gap"] else "")
+
+
+def _tool_status_line(L: Mapping[str, Any], rows: List[Mapping[str, Any]]) -> str:
+    parts = []
+    for st in ("ok", "error", "skipped", "partial"):
+        n = sum(1 for r in rows if r["status"] == st)
+        if n:
+            parts.append(f"{n} {L['tool_status_count'][st]}")
+    return " · ".join(parts)
 
 
 def scan_doc(
@@ -250,7 +287,8 @@ def scan_doc(
         })
     counts = {s: int(severity_counts.get(s, 0)) for s in SEV_ORDER}
     score = risk_score(counts)
-    verdict, narrative = _verdict(L, counts)
+    tool_rows, tool_warning = _tool_status_rows(L, _g(scan, "summary"), lang)
+    verdict, narrative = _verdict(L, counts, incomplete=bool(tool_warning))
     total = sum(counts.values())
     top = [f"{f['id']} — {f['title']}" for f in findings if f["severity"] in ("CRITICAL", "HIGH")][:3]
     scan_types = ", ".join(L["scan_type"].get(t, t) for t in (_g(scan, "scan_types") or [])) or "—"
@@ -270,11 +308,14 @@ def scan_doc(
             [L["kv_total"], str(total)],
         ],
     }
+    if tool_rows:
+        meta["kv"].insert(5, [L["kv_tool_status"], _tool_status_line(L, tool_rows)])
     return {
         "lang": lang, "labels": L, "meta": meta,
         "summary": {"verdict": verdict, "score": score, "score_text": f"{score}/100", "counts": counts,
                     "narrative": narrative, "priorities": top,
-                    "by_type": [{**r, "tools": ", ".join(r["tools"])} for r in by_type.values()]},
+                    "by_type": [{**r, "tools": ", ".join(r["tools"])} for r in by_type.values()],
+                    "tool_status": tool_rows, "warning": tool_warning},
         "findings": findings, "appendix": _appendix(L, ", ".join(tools_all)),
     }
 
