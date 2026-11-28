@@ -34,6 +34,40 @@ def _esc(t) -> str:
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+_TOOL_ST = {  # status → (icon, colour, text)
+    "ok": ("✅", "#0ca30c", "OK"), "skipped": ("⊘", "#d03b3b", "BỎ QUA"),
+    "error": ("❌", "#d03b3b", "LỖI"), "partial": ("◐", "#b45309", "MỘT PHẦN"),
+}
+
+
+def _tools_html(ts: dict) -> str:
+    """Section listing every tool with its run status (only when the scan recorded scanner_logs)."""
+    rows = ""
+    for r in ts["rows"]:
+        icon, color, text = _TOOL_ST.get(r["status"], _TOOL_ST["error"])
+        if r["status"] == "ok":
+            detail = f'{r["count"]} phát hiện'
+        elif r["status"] == "partial":
+            detail = f'{text} — {r["count"]} phát hiện' + (f' ({r["error"]})' if r["error"] else "")
+        elif r["status"] == "skipped":
+            detail = f'{text}' + (f': {r["error"]}' if r["error"] else " (chưa cài / thiếu PATH)")
+        else:
+            detail = f'{text}: {r["error"]}' if r["error"] else text
+        rows += (f'<tr><td>{icon} {_esc(r["label"])}</td>'
+                 f'<td style="color:{color};font-weight:600;">{_esc(detail)}</td></tr>')
+    return ('<h3 style="margin-top:22px;">Công cụ đã dùng / Tools</h3>'
+            '<table class="data-table"><thead><tr><th>Công cụ</th><th>Trạng thái</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table>')
+
+
+def _tools_banner(ts: dict) -> str:
+    if not ts["has_gap"]:
+        return ""
+    return ('<div class="tool-gap" style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;'
+            'padding:10px 14px;margin:12px 0;color:#856404;">⚠️ '
+            f'{_esc(ts["warning"])}</div>')
+
+
 def _fmt(dt) -> str:
     try:
         return dt.strftime("%d/%m/%Y %H:%M")
@@ -138,6 +172,11 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
     rpt_title = (branding.get("report_title") or "BÁO CÁO ĐÁNH GIÁ BẢO MẬT\nMÃ NGUỒN & THÀNH PHẦN")
     footer_text = branding.get("footer_text") or "VulnGuard · Báo cáo quét bảo mật"
     confidential = branding.get("confidential_label") or "BẢO MẬT / CONFIDENTIAL"
+
+    from scanner.report_tools import tool_status
+    ts = tool_status(getattr(scan, "summary", None))
+    tools_banner = _tools_banner(ts)
+    tools_html = _tools_html(ts) if ts["rows"] else ""
 
     total = len(vulns)
     score = _risk_score(severity_counts)
@@ -301,10 +340,12 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
   <h2>1. Tóm tắt điều hành</h2>
   <p class="lead">Phát hiện <strong>{total}</strong> vấn đề: {crit} nghiêm trọng, {high} cao, {med} trung bình,
   {low} thấp, {info} thông tin. Điểm rủi ro tổng hợp <strong>{score}/100</strong>. {_esc(conclusion)}.</p>
+  {tools_banner}
   <table class="sev-table"><tr>{sev_cells}</tr></table>
   <h3>Phân bố theo loại quét</h3>
   <table class="data-table"><thead><tr><th>Loại quét</th><th>Số phát hiện</th><th>Mức nặng nhất</th></tr></thead>
   <tbody>{dist_rows or '<tr><td colspan=3>Không có phát hiện</td></tr>'}</tbody></table>
+  {tools_html}
 
   <h3 style="margin-top:22px;">Danh sách phát hiện (theo mức độ)</h3>
   <table class="data-table"><thead><tr><th>Mức</th><th>Mã</th><th>Phát hiện</th><th>Loại</th><th>OWASP</th></tr></thead>

@@ -64,6 +64,8 @@ def normalize_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
         summary.setdefault(k, "")
     summary.setdefault("priorities", [])
     summary.setdefault("by_type", [])
+    summary.setdefault("tool_status", [])
+    summary.setdefault("warning", "")
     d["summary"] = summary
     d.setdefault("appendix", [])
     if d.get("findings_truncated_from"):

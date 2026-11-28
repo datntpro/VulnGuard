@@ -43,7 +43,7 @@ Secrets: finding có giá trị công khai/placeholder (Google OAuth client ID `
 
 ## Tính trung thực của kết quả
 
-Trước khi chạy, orchestrator kiểm tra tool có trong `PATH` (`which <tool>`). Tool thiếu được ghi `status: "skipped"` thay vì "0 lỗi". Summary của scan có `tools_skipped`, `tools_errored` và `scan_warning`. Báo cáo HTML có mục **"Công cụ đã dùng"** liệt kê mọi tool kèm trạng thái ✅ / ⊘ BỎ QUA / ❌ LỖI. Chỉ tin "0 lỗi" khi mọi tool đều `ok`.
+Trước khi chạy, orchestrator kiểm tra tool có trong `PATH` (`which <tool>`). Tool thiếu được ghi `status: "skipped"` thay vì "0 lỗi". Summary của scan có `tools_skipped`, `tools_errored` và `scan_warning`. Báo cáo HTML và PDF có mục **"Công cụ đã dùng"** liệt kê mọi tool kèm trạng thái ✅ OK / ⊘ BỎ QUA / ❌ LỖI / ◐ MỘT PHẦN, và banner cảnh báo ở phần tóm tắt khi có tool không chạy đủ (scan cũ chưa lưu `scanner_logs` thì không có mục này). Chỉ tin "0 lỗi" khi mọi tool đều `ok`.
 
 Bật/tắt từng tool: Settings → Scanner Tools (`PUT /api/settings/scanners`).
 
