@@ -152,4 +152,5 @@ def test_clone_disables_redirects(monkeypatch):
     scm_service._clone(conn, repo, "/tmp/never")
     cmd = seen[0]
     assert "http.followRedirects=false" in cmd and "protocol.allow=never" in cmd and "protocol.https.allow=always" in cmd
+    assert "core.symlinks=false" in cmd
     assert cmd.index("clone") > cmd.index("http.followRedirects=false")
