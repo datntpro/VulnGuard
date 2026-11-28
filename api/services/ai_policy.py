@@ -130,20 +130,37 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return p
 
 
+def _sanitize_allowlist(v: Any, limit: int = 100) -> list:
+    """Hàm toàn phần (không raise): không phải list → []; bỏ từng mục không phải str / rỗng / >200 ký tự / không hợp lệ;
+    cắt còn `limit` mục. Chỉ log số lượng."""
+    if v in (None, ""):
+        return []
+    if not isinstance(v, list):
+        _log.warning("ai_policy: base_url_allowlist đã lưu không phải danh sách, bỏ qua")
+        return []
+    kept = []
+    for e in v:
+        if isinstance(e, str):
+            e = e.strip().lower()
+            if 0 < len(e) <= 200 and valid_allow_entry(e):
+                kept.append(e)
+    if len(kept) != len(v):
+        _log.warning("ai_policy: bỏ %d mục base_url_allowlist không hợp lệ đã lưu", len(v) - len(kept))
+    if len(kept) > limit:
+        _log.warning("ai_policy: base_url_allowlist vượt %d mục, cắt bớt", limit)
+        kept = kept[:limit]
+    return kept
+
+
 def get_policy(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Policy hiệu lực từ cấu hình (không raise: giá trị hỏng → mặc định an toàn)."""
     if cfg is None:
         from api.services.ai_config import load_config
         cfg = load_config()
     raw = cfg.get("policy")
-    if isinstance(raw, dict) and isinstance(raw.get("base_url_allowlist"), list):
-        # Dữ liệu cũ có thể chứa mục mà bộ kiểm tra mới từ chối: bỏ RIÊNG các mục đó, giữ phần còn lại của policy
-        # (không rơi về mặc định vì một mục allowlist hỏng).
-        kept = [e for e in raw["base_url_allowlist"] if valid_allow_entry(e.lower() if isinstance(e, str) else e)]
-        if len(kept) != len(raw["base_url_allowlist"]):
-            _log.warning("ai_policy: bỏ %d mục base_url_allowlist không hợp lệ đã lưu",
-                         len(raw["base_url_allowlist"]) - len(kept))
-            raw = {**raw, "base_url_allowlist": kept}
+    if isinstance(raw, dict) and "base_url_allowlist" in raw:
+        # Dữ liệu cũ/hỏng trong allowlist không được làm policy rơi về mặc định: làm sạch RIÊNG trường này.
+        raw = {**raw, "base_url_allowlist": _sanitize_allowlist(raw["base_url_allowlist"])}
     try:
         return normalize(raw)
     except ValueError:

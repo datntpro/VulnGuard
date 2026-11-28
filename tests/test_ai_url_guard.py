@@ -392,3 +392,16 @@ def test_wildcard_never_matches_ip_literal():
     assert not p.host_allowlisted("10.9.9.9", 443)
     with pytest.raises(UrlRejected):
         check_url("https://10.9.9.9/", "cloud", policy=p)
+
+
+@pytest.mark.parametrize("bad, expected", [
+    ("ok.corp.test", []), ({"a": "b"}, []), (5, []), (" ", []), (["  ", "\n"], []),
+    (["a" * 201 + ".test", "ok.corp.test"], ["ok.corp.test"]),
+    ([None, 5, ["x"], "ok.corp.test"], ["ok.corp.test"]),
+    (["ok%d.corp.test" % i for i in range(101)], ["ok%d.corp.test" % i for i in range(100)]),
+])
+def test_malformed_stored_allowlist_never_resets_other_fields(bad, expected):
+    cfg = {"policy": {"byok": "off", "custom_base_url": "off", "allowed": ["openai:gpt-4o"], "base_url_allowlist": bad}}
+    p = ai_policy.get_policy(cfg)
+    assert p["byok"] == "off" and p["custom_base_url"] == "off" and p["allowed"] == ["openai:gpt-4o"]
+    assert p["base_url_allowlist"] == expected
