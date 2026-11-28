@@ -296,6 +296,15 @@ async function refreshRoute() {
   } catch (_) { info = null; }
   if (seq !== routeSeq) return;     // có yêu cầu mới hơn
   window.VGRoute.mount($("#routeText"), $("#routeLink"), info);
+  routeKind = (info && info.route_kind) || "";
+  applyAutoPolicy();
+}
+// [W3-12] Cloud: mọi hành động cần duyệt tay → tắt ⚡ (server cũng từ chối auto:true).
+let routeKind = "";
+function applyAutoPolicy() {
+  const aa = document.getElementById("autoApprove");
+  if (routeKind === "cloud") { aa.checked = false; aa.disabled = true; aa.title = window.VGRoute.t("autoOffCloud"); }
+  else { aa.disabled = false; aa.removeAttribute("title"); }
 }
 
 // ── Skills ───────────────────────────────────────────────
@@ -342,7 +351,7 @@ function updateSkillBanner() {
 async function maybeRoute() {
   if (skillSel.value !== "auto" || routedSkillId) return;
   try {
-    const r = await api("/api/coworker/agent/route", { method: "POST", body: { messages } });
+    const r = await api("/api/coworker/agent/route", { method: "POST", body: { message: (messages.find(m => m.role === "user") || {}).content || "" } });
     if (r.skill_id) {
       routedSkillId = r.skill_id;
       updateSkillBanner();
@@ -400,7 +409,11 @@ function renderConfirm(pending) {
   const risky = !!pending.requires_explicit;
   const T = window.VGRoute.t;
   const card = el("confirm" + (risky ? " risky" : ""));
-  if (p.kind === "write_file") {
+  if (pending.kind === "sensitive_exec") {
+    const wp = ((pending.warning || {}).paths || []).join(", ");
+    card.innerHTML = `<h3>🔐 ${esc(T("riskSensitiveExec"))}</h3>
+      <div class="meta">$ ${esc(p.command)}${p.cwd ? "   (cwd: " + esc(p.cwd) + ")" : ""}</div>${wp ? `<div class="meta">${esc(wp)}</div>` : ""}`;
+  } else if (p.kind === "write_file") {
     card.innerHTML = `<h3>✍️ Đề xuất ghi file ${p.is_new ? "(tạo mới)" : ""}</h3>
       <div class="meta">${esc(p.path)}</div>
       <pre>${p.diff ? renderDiff(p.diff) : esc(p.new_content || "")}</pre>`;
@@ -442,7 +455,7 @@ let stepCount = 0;
 
 function setBusy(b) {
   busy = b; sendBtn.disabled = b; inputEl.disabled = b;
-  if (b) { const aa = document.getElementById("autoApprove"); aa.disabled = false; aa.removeAttribute("title"); }
+  if (b) applyAutoPolicy();
   sendBtn.innerHTML = b ? '<span class="spin"></span>' : "Gửi";
 }
 

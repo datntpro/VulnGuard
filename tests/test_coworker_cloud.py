@@ -824,11 +824,81 @@ def test_suspicious_exec_needs_explicit_but_plain_exec_only_ack(env, monkeypatch
     assert p["requires_explicit"] is True
     r = w.step(cid, approve=p["id"], ack=p["confirm_token"], auto=True)
     assert r.status_code == 409 and not [c for c in w.host.calls if c[1] == "/fs/exec"]
+    # W3-12 (Option A, #134): trên cloud MỌI pending đều cần explicit, kể cả exec thường; auto:true → 409 và pending còn mở.
     plain = W(monkeypatch, [{"tools": [("exec", {"command": "ls"})]}, {"text": "x"}])
     pc = plain.new_conv()
     pp = plain.step(pc, message="ls", folder_id="f1").json()["pending"]
-    assert pp["requires_explicit"] is False
-    assert plain.step(pc, approve=pp["id"], ack=pp["confirm_token"], auto=True).status_code == 200
+    assert pp["requires_explicit"] is True
+    r = plain.step(pc, approve=pp["id"], ack=pp["confirm_token"], auto=True)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "AI_EXPLICIT_CONFIRM_REQUIRED"
+    r = plain.step(pc, approve=pp["id"], ack=pp["confirm_token"])                                    # thiếu explicit
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "AI_EXPLICIT_CONFIRM_REQUIRED"
+    assert plain.step(pc, approve=pp["id"], ack=pp["confirm_token"], explicit=True).status_code == 200   # chưa bị đốt
+
+
+def test_cloud_write_file_auto_is_409_and_explicit_runs(env, monkeypatch):
+    w = W(monkeypatch, [{"tools": [("write_file", {"path": "a.txt", "content": "new"})]}, {"text": "ok"}], files={"a.txt": "old"})
+    cid = w.new_conv()
+    p = w.step(cid, message="sửa", folder_id="f1").json()["pending"]
+    assert p["requires_explicit"] is True and p["kind"] == "side_effect"
+    r = w.step(cid, approve=p["id"], ack=p["confirm_token"], auto=True)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "AI_EXPLICIT_CONFIRM_REQUIRED"
+    assert w.host.files["a.txt"] == "old"
+    assert w.step(cid, approve=p["id"], ack=p["confirm_token"], explicit=True).status_code == 200
+    assert w.host.files["a.txt"] == "new"
+
+
+RISKY_EXEC = ["cat .env", "tail -n +2 deploy/id_ed25519", "cut -d= -f2 .env", "grep -o x secrets.yaml", "git show HEAD~5:.env",
+              "git log -p", "git diff HEAD~1", "git cat-file -p abc123", "git stash show -p", "head ~/.ssh/config", "cat 'unbalanced"]
+SAFE_EXEC = ["ls", "cat README.md", "pytest -q", "git status"]
+
+
+@pytest.mark.parametrize("cmd", RISKY_EXEC)
+def test_sensitive_exec_is_explicit_only(env, monkeypatch, cmd):
+    w = W(monkeypatch, [{"tools": [("exec", {"command": cmd})]}, {"text": "x"}])
+    cid = w.new_conv()
+    p = w.step(cid, message="chạy", folder_id="f1").json()["pending"]
+    assert p["kind"] == "sensitive_exec" and p["requires_explicit"] is True
+    assert p["warning"]["reason"] in ("sensitive_path", "git_history")
+    assert all("/" not in x for x in p["warning"]["paths"])
+    r = w.step(cid, approve=p["id"], ack=p["confirm_token"], auto=True)
+    assert r.status_code == 409 and not [c for c in w.host.calls if c[1] == "/fs/exec"]
+
+
+@pytest.mark.parametrize("cmd", SAFE_EXEC)
+def test_plain_exec_is_not_sensitive_kind(env, monkeypatch, cmd):
+    w = W(monkeypatch, [{"tools": [("exec", {"command": cmd})]}, {"text": "x"}])
+    cid = w.new_conv()
+    p = w.step(cid, message="chạy", folder_id="f1").json()["pending"]
+    assert p["kind"] == "side_effect"
+
+
+def test_local_pending_view_unchanged_by_cloud_policy():
+    from api.routes.coworker_agent import _pending_view
+
+    class Row:
+        id, action, args, kind, warning, conversation_id = "p", "exec", {"command": "ls"}, "side_effect", None, "c"
+    assert _pending_view(Row, {})["requires_explicit"] is False
+    assert _pending_view(Row, {}, route_kind="cloud")["requires_explicit"] is True
+
+
+def test_route_message_and_legacy_messages(env, monkeypatch):
+    from api.routes import coworker_agent as ca
+    seen = []
+
+    async def fake_chat(msgs, *a, **k):
+        seen.append(msgs[0]["content"])
+        return "{}", None
+    monkeypatch.setattr(ca, "_chat_ollama", fake_chat)
+    import api.services.agent_skills as sk
+    monkeypatch.setattr(sk, "list_skills", lambda include_body=False: [{"id": "s", "name": "S", "description": "d"}])
+    w = W(monkeypatch, [])
+    url = "/api/coworker/agent/route"
+    assert w.c.post(url, headers=w.h, json={"message": "xin chào"}).status_code == 200
+    assert w.c.post(url, headers=w.h, json={"messages": [{"role": "user", "content": "FIRST"}, {"role": "assistant", "content": "a"},
+                                                         {"role": "user", "content": "LAST"}]}).status_code == 200
+    assert "xin chào" in seen[0] and "FIRST" in seen[1] and "LAST" not in seen[1]
+    assert w.c.post(url, headers=w.h, json={"message": "x" * 5000}).status_code == 422
 
 
 def test_ack_is_bound_to_that_action(env, monkeypatch):

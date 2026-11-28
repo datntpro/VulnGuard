@@ -477,3 +477,12 @@ def test_warning_text_meets_wcag_aa(browser, base_url, admin, env, theme, tone):
     assert page.locator("#routeLine").get_attribute("data-tone") == tone
     assert _contrast(page) >= 4.5, _contrast(page)
     ctx.close()
+
+
+def test_auto_approve_disabled_on_cloud_route(browser, base_url, admin, env):
+    body = {"state": "ok", "route_kind": "cloud", "provider": "anthropic", "model": "claude-opus-5-5",
+            "data_leaves_machine": True, "pinned": False, "mode": "cloud_only"}
+    ctx, page, _ = open_page(browser, base_url, admin, lang="en", route=lambda p: fulfill(p, "**/api/coworker/agent/route-preview", body))
+    page.wait_for_function("() => document.querySelector('#autoApprove').disabled === true", timeout=15000)
+    assert "cloud" in page.locator("#autoApprove").get_attribute("title").lower()
+    ctx.close()
