@@ -7,6 +7,7 @@ import json
 import logging
 import glob
 import os
+import re
 import tempfile
 from typing import List, Dict, Any
 
@@ -127,6 +128,39 @@ class TrivySCAScanner(BaseScanner):
         return findings
 
 
+# Invariant: files from the scanned tree are never handed to pip-audit directly.
+# Only exactly-pinned "name==version" lines are copied into a private temp dir and
+# audited with pip disabled, so no option, URL, path, include or build step in the
+# target can influence the tool.
+_PINNED_REQ = re.compile(
+    r"^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[A-Za-z0-9._,\s-]*\])?\s*===?\s*"
+    r"([A-Za-z0-9](?:[A-Za-z0-9.+!_-]*[A-Za-z0-9])?)\s*(?:;.*)?$")
+_MAX_REQ_BYTES = 1 << 20  # 1 MiB per requirements file
+
+
+def pinned_requirements(path: str) -> tuple:
+    """(['name==ver', ...], dropped_count). Reads at most 1 MiB; never follows includes/options."""
+    if os.path.islink(path):
+        return [], 1
+    with open(path, "rb") as f:
+        raw = f.read(_MAX_REQ_BYTES + 1)
+    if len(raw) > _MAX_REQ_BYTES:
+        raise ValueError("requirements file too large")
+    text = re.sub(r"\\\r?\n", " ", raw.decode("utf-8", "replace"))
+    kept, dropped = [], 0
+    for line in text.splitlines():
+        line = re.split(r"(^|\s)#", line, maxsplit=1)[0].strip()
+        if not line:
+            continue
+        line = re.split(r"\s+-", line, maxsplit=1)[0]   # drop per-line options
+        m = _PINNED_REQ.match(line)
+        if m:
+            kept.append(f"{m.group(1)}=={m.group(2)}")
+        else:
+            dropped += 1
+    return kept, dropped
+
+
 class PipAuditScanner(BaseScanner):
     """pip-audit — Python package vulnerability scanner.
 
@@ -141,44 +175,51 @@ class PipAuditScanner(BaseScanner):
     async def scan(self) -> List[Dict[str, Any]]:
         findings = []
 
-        # Tìm requirements files
-        req_files = glob.glob(f"{self.scan_path}/**/requirements*.txt", recursive=True)
-        req_files += glob.glob(f"{self.scan_path}/**/Pipfile.lock", recursive=True)
-        req_files += glob.glob(f"{self.scan_path}/**/pyproject.toml", recursive=True)
-
-        # Dedup
-        req_files = list(set(req_files))
+        # Only requirements*.txt (pip-audit cannot parse the other manifests offline; Trivy covers them)
+        req_files = sorted(set(
+            f for f in glob.glob(f"{self.scan_path}/**/requirements*.txt", recursive=True)
+            if not os.path.islink(f)))
 
         errors: list = []
+        attempted = 0
         for req_file in req_files:
-            cmd = [
-                "pip-audit",
-                "-r", req_file,
-                "--format", "json",
-                "--progress-spinner", "off",
-                "--no-deps",          # Không resolve transitive deps (chỉ direct)
-            ]
-
-            rc, stdout, stderr = await run_command(cmd, timeout=120)
+            rel = req_file.replace(self.scan_path, "").lstrip("/")
+            attempted += 1
+            try:
+                kept, _dropped = pinned_requirements(req_file)
+            except (ValueError, OSError) as e:
+                errors.append(f"{rel}: {e}")
+                continue
+            if not kept:
+                attempted -= 1
+                self.warnings.append(f"{rel}: no exactly-pinned requirements; not audited by pip-audit")
+                continue
+            with tempfile.TemporaryDirectory(prefix="vg-pip-audit-") as td:
+                clean = os.path.join(td, os.path.basename(req_file))
+                with open(clean, "w", encoding="utf-8") as fh:
+                    fh.write("\n".join(kept))
+                cmd = ["pip-audit", "-r", clean, "--disable-pip", "--no-deps",
+                       "--format", "json", "--progress-spinner", "off"]
+                rc, stdout, stderr = await run_command(cmd, cwd=td, timeout=120)
 
             kind = classify_failed_run(rc, stderr)
             if kind == "missing":
                 logger.info("pip-audit chưa cài — bỏ qua")
                 return []
             if kind == "timeout":
-                errors.append(f"{req_file}: timeout")
+                errors.append(f"{rel}: timeout")
                 continue
             # pip-audit: exit 0 = sạch, 1 = có vulnerabilities (bình thường); khác = hỏng.
             if rc not in (0, 1):
-                errors.append(f"{req_file}: exit {rc}: {stderr[-200:]}")
+                errors.append(f"{rel}: exit {rc}: {stderr[-200:]}")
                 continue
             try:
                 data = json.loads(stdout.strip())
             except json.JSONDecodeError:
-                errors.append(f"{req_file}: output không phải JSON (exit {rc})")
+                errors.append(f"{rel}: output không phải JSON (exit {rc})")
                 continue
             if not isinstance(data, dict):
-                errors.append(f"{req_file}: output không phải object JSON")
+                errors.append(f"{rel}: output không phải object JSON")
                 continue
 
             for dep in data.get("dependencies", []):
@@ -225,9 +266,9 @@ class PipAuditScanner(BaseScanner):
                     })
 
         # Hỏng một vài file vẫn giữ findings của file còn lại; hỏng TẤT CẢ → báo lỗi.
-        if errors and len(errors) == len(req_files):
+        if errors and len(errors) == attempted:
             raise ScannerRunError("pip-audit thất bại: " + "; ".join(errors[:3]))
         if errors:
             logger.warning("pip-audit lỗi một phần: %s", "; ".join(errors[:3]))
-            self.warnings.append(f"pip-audit lỗi {len(errors)}/{len(req_files)} file: " + "; ".join(errors[:3]))
+            self.warnings.append(f"pip-audit lỗi {len(errors)}/{attempted} file: " + "; ".join(errors[:3]))
         return findings

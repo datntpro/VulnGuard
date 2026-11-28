@@ -15,14 +15,19 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import shutil
+import tempfile
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-from scanner.scanners.base import BaseScanner, make_fingerprint, normalize_severity, run_command
+from scanner.scanners.base import (BaseScanner, ScannerRunError, classify_failed_run, make_fingerprint,
+                                   normalize_severity, run_command)
 
 logger = logging.getLogger(__name__)
+
+_CE_TASK_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # Sonar severity (chuẩn cũ) + MQR impact severity (chuẩn mới) → VulnGuard
 _SEV = {
@@ -124,51 +129,65 @@ class SonarQubeScanner(BaseScanner):
         if not self.is_available():
             logger.info("[sonarqube] bỏ qua — chưa cấu hình URL/token hoặc thiếu sonar-scanner")
             return []
-        rc, out, err = await run_command([
-            self.tool_name,
-            f"-Dsonar.host.url={self.url}",
-            f"-Dsonar.token={self.token}",
-            f"-Dsonar.projectKey={self.project_key}",
-            "-Dsonar.sources=.",
-            "-Dsonar.scm.disabled=true",
-        ], cwd=self.scan_path, timeout=int(_cfg("SONARQUBE_TIMEOUT", 900)))
-        if rc != 0:
-            logger.warning(f"[sonarqube] sonar-scanner lỗi: {(err or out)[-500:]}")
-            # vẫn thử lấy issue từ lần phân tích trước (nếu có)
-        await self._wait_ready()
-        try:
-            return await self._fetch_all()
-        except Exception as e:
-            logger.error(f"[sonarqube] lấy issue lỗi: {e}")
-            return []
+        # Invariant: the scanner's settings, working directory and credentials are owned by
+        # VulnGuard. Files inside the scanned tree never configure the tool or supply state.
+        base_dir = os.path.abspath(self.scan_path)
+        with tempfile.TemporaryDirectory(prefix="vg-sonar-") as td:
+            work = os.path.join(td, "work")
+            settings = os.path.join(td, "project.properties")
+            open(settings, "w").close()  # empty settings file replaces any in-tree one
+            rc, out, err = await run_command([
+                self.tool_name,
+                f"-Dproject.settings={settings}",
+                f"-Dsonar.projectBaseDir={base_dir}",
+                f"-Dsonar.working.directory={work}",
+                f"-Dsonar.host.url={self.url}",
+                f"-Dsonar.projectKey={self.project_key}",
+                "-Dsonar.sources=.",
+                "-Dsonar.scm.disabled=true",
+            ], cwd=td, timeout=int(_cfg("SONARQUBE_TIMEOUT", 900)),
+                env={"SONAR_TOKEN": self.token})
+            kind = classify_failed_run(rc, err)
+            if kind == "timeout":
+                raise ScannerRunError(f"sonar-scanner timeout: {err[-300:]}")
+            if rc != 0:
+                raise ScannerRunError(f"sonar-scanner thất bại (exit {rc}): {(err or out)[-500:]}")
+            task_id = self._read_task_id(os.path.join(work, "report-task.txt"))
+        await self._wait_ready(task_id)
+        return await self._fetch_all()
 
-    async def _wait_ready(self):
-        """Chờ CE task từ report-task.txt (nếu có)."""
-        rt = os.path.join(self.scan_path, ".scannerwork", "report-task.txt")
-        ce_url = None
+    @staticmethod
+    def _read_task_id(path: str) -> str:
+        """Only the task id is taken from the report file; URLs in it are ignored."""
+        task_id = ""
         try:
-            with open(rt) as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 for line in f:
-                    if line.startswith("ceTaskUrl="):
-                        ce_url = line.split("=", 1)[1].strip()
-        except FileNotFoundError:
-            return
-        if not ce_url:
-            return
-        async with httpx.AsyncClient(timeout=20, trust_env=False) as c:
+                    if line.startswith("ceTaskId="):
+                        task_id = line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+        if not _CE_TASK_ID.match(task_id):
+            raise ScannerRunError("sonar-scanner did not produce a task id")
+        return task_id
+
+    async def _wait_ready(self, task_id: str):
+        """Chờ CE task hoàn tất; chỉ gọi server đã cấu hình."""
+        async with httpx.AsyncClient(timeout=20, trust_env=False, follow_redirects=False) as c:
             for _ in range(60):
-                try:
-                    r = await c.get(ce_url, headers=self._headers())
-                    status = (r.json().get("task") or {}).get("status")
-                    if status in ("SUCCESS", "FAILED", "CANCELED"):
-                        return
-                except Exception:
-                    pass
+                r = await c.get(f"{self.url}/api/ce/task", headers=self._headers(), params={"id": task_id})
+                r.raise_for_status()
+                status = (r.json().get("task") or {}).get("status")
+                if status == "SUCCESS":
+                    return
+                if status in ("FAILED", "CANCELED"):
+                    raise ScannerRunError(f"SonarQube CE task {status}")
                 await asyncio.sleep(2)
+        raise ScannerRunError("SonarQube CE task not finished in 120s")
 
     async def _fetch_all(self) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as c:
+        async with httpx.AsyncClient(timeout=30, trust_env=False, follow_redirects=False) as c:
             # Issues (VULNERABILITY + BUG)
             page = 1
             while page <= 20:
@@ -181,12 +200,14 @@ class SonarQubeScanner(BaseScanner):
                 if page * 500 >= data.get("total", 0):
                     break
                 page += 1
+                if page > 20 and data.get("total", 0) > 10000:
+                    self.warnings.append("SonarQube issues truncated at 10000")
             # Security hotspots
             try:
                 r = await c.get(f"{self.url}/api/hotspots/search", headers=self._headers(),
                                 params={"projectKey": self.project_key, "status": "TO_REVIEW", "ps": 500})
                 if r.status_code == 200:
                     findings += parse_issues(r.json(), self.project_key, is_hotspot=True)
-            except Exception:
-                pass
+            except Exception as e:
+                self.warnings.append(f"SonarQube hotspots not fetched: {type(e).__name__}")
         return findings

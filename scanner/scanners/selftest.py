@@ -51,6 +51,43 @@ def _semgrep(root: str) -> Tuple[int, str]:
     return len(findings), f"{len(ids)}/{len(ids)} rule"
 
 
+def _pip_audit_isolation() -> Tuple[int, str]:
+    """A target-supplied local sdist must never be built (no pip is spawned by pip-audit)."""
+    import asyncio
+    import tarfile
+
+    from scanner.scanners.sca import PipAuditScanner
+
+    td = tempfile.mkdtemp(prefix="vg-pipaudit-iso-")
+    try:
+        target, marker = os.path.join(td, "t"), os.path.join(td, "MARKER")
+        pkg = os.path.join(td, "pkg", "canary-1.0")
+        os.makedirs(pkg)
+        os.makedirs(target)
+        with open(os.path.join(pkg, "pyproject.toml"), "w") as f:
+            f.write('[build-system]\nrequires = []\nbuild-backend = "b"\nbackend-path = ["."]\n')
+        with open(os.path.join(pkg, "b.py"), "w") as f:
+            f.write(f"def _m():\n    open({marker!r}, 'w').write('x')\n"
+                    "def get_requires_for_build_wheel(c=None):\n    _m(); return []\n"
+                    "def build_wheel(*a, **k):\n    _m(); raise SystemExit(1)\n"
+                    "def prepare_metadata_for_build_wheel(*a, **k):\n    _m(); raise SystemExit(1)\n")
+        with tarfile.open(os.path.join(target, "canary-1.0.tar.gz"), "w:gz") as t:
+            t.add(pkg, arcname="canary-1.0")
+        with open(os.path.join(target, "requirements.txt"), "w") as f:
+            f.write("./canary-1.0.tar.gz\nrequests==2.0.0\n")
+        sc = PipAuditScanner(target)
+        try:
+            asyncio.run(sc.scan())
+            text = " ".join(sc.warnings)
+        except Exception as e:  # noqa: BLE001 — advisory service is unreachable offline
+            text = str(e)
+        if os.path.exists(marker) or "isolated environment" in text or "Failed to upgrade" in text:
+            raise RuntimeError("pip-audit acted on a target-supplied package")
+        return 1, ""
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
 def build_checks(root: str) -> List[Tuple[str, Callable[[], Tuple[int, str]], int]]:
     from scanner.scanners.iac import CheckovScanner, HadolintScanner, TrivyIaCScanner
     from scanner.scanners.sast import BanditScanner
@@ -68,6 +105,7 @@ def build_checks(root: str) -> List[Tuple[str, Callable[[], Tuple[int, str]], in
         # Chỉ kiểm chạy được: trivy SCA / pip-audit / grype cần tải DB/advisory → không chạy offline.
         ("trivy --version", lambda: (_version("trivy", "--version"), ""), 1),
         ("grype version", lambda: (_version("grype", "version"), ""), 1),
+        ("pip-audit-isolation", _pip_audit_isolation, 1),
         ("pip-audit --version", lambda: (_version("pip-audit", "--version"), ""), 1),
         ("semgrep --version", lambda: (_version("semgrep", "--version"), ""), 1),
     ]

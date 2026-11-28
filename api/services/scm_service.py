@@ -36,7 +36,7 @@ def _clone(conn: ScmConnection, repo: ScmRepo, dest: str) -> None:
     branch = (repo.default_branch or "main").strip()
     # C2: không theo redirect (SSRF qua 30x từ host SCM), chỉ cho giao thức https (http khi SCM_ALLOW_HTTP)
     hard = ["git", "-c", "http.followRedirects=false", "-c", "protocol.allow=never",
-            "-c", "protocol.https.allow=always"]
+            "-c", "protocol.https.allow=always", "-c", "core.symlinks=false"]
     if settings.scm_allow_http:
         hard += ["-c", "protocol.http.allow=always"]
     cmd = hard + ["clone", "--depth", "1", "--single-branch", "--branch", branch, url, dest]
