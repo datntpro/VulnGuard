@@ -179,7 +179,7 @@ def _adversarial_inputs():
         "putty_lines": "PuTTY-User-Key-File-3: a\n" * (n // 25),
         "b64_prefix": "LS0tLS1CRUdJT\n" * (n // 14),
         "end_only": ("-----END PRIVATE KEY-----\n") * (n // 26),
-        "mixed": ("-----BEGIN RSA PRIVATE KEY-----\nPuTTY-User-Key-File-2: x\nLS0tLS1CRUdJT\n") * (n // 70),
+        "mixed": ("-----BEGIN RSA PRIVATE KEY-----\nPuTTY-User-Key-File-2: x\nLS0tLS1CRUdJT\n") * (n // 72),
     }
 
 
