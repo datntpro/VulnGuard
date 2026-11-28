@@ -304,8 +304,9 @@ let routeKind = "";
 function applyAutoPolicy() {
   const aa = document.getElementById("autoApprove");
   if (routeKind === "cloud") { aa.checked = false; aa.disabled = true; aa.title = window.VGRoute.t("autoOffCloud"); }
-  else { aa.disabled = false; aa.removeAttribute("title"); }
+  else if (!riskPending) { aa.disabled = false; aa.removeAttribute("title"); }
 }
+let riskPending = false;
 
 // ── Skills ───────────────────────────────────────────────
 async function loadSkills() {
@@ -430,7 +431,7 @@ function renderConfirm(pending) {
   const no = document.createElement("button"); no.className = "danger"; no.id = "rejectBtn"; no.textContent = "✕ Từ chối";
   const aa = document.getElementById("autoApprove");
   if (risky) {
-    aa.disabled = true; aa.title = T("autoOff");          // ẩn/tắt tự duyệt khi có hành động rủi ro đang chờ
+    riskPending = true; aa.disabled = true; aa.title = T("autoOff");          // ẩn/tắt tự duyệt khi có hành động rủi ro đang chờ
     // Hành động rủi ro (file nhạy cảm / sau nội dung đáng ngờ): KHÔNG tự duyệt được, cần người dùng xác nhận rõ.
     const w = pending.warning || {};
     const hosts = (w.hosts || []).length ? `<div class="meta">${esc(T("riskHosts"))} ${esc((w.hosts || []).join(", "))}</div>` : "";
@@ -455,7 +456,7 @@ let stepCount = 0;
 
 function setBusy(b) {
   busy = b; sendBtn.disabled = b; inputEl.disabled = b;
-  if (b) applyAutoPolicy();
+  if (b) { riskPending = false; applyAutoPolicy(); }
   sendBtn.innerHTML = b ? '<span class="spin"></span>' : "Gửi";
 }
 
