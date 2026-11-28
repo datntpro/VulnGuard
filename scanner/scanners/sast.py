@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import socket
+import tempfile
 import asyncio
 import urllib.request
 from typing import List, Dict, Any
@@ -35,6 +36,15 @@ def _has_internet(host: str = "semgrep.dev", port: int = 443, timeout: float = 3
 # Guard cho CVE-2026-132276 (wcmatch ReDoS): glob `paths:` của rule registry có nhiều '*' giữa literal + tên file
 # do kẻ tấn công đặt = CPU DoS. Glob registry hiện tại ≤2 sao; >3 sao thì bỏ lượt registry (bundled vẫn chạy).
 MAX_REGISTRY_GLOB_STARS = 3
+_CFG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config")
+
+# Built-in default ignores that `--x-ignore-semgrepignore-files` also drops; kept for result parity
+# (the remaining defaults are already covered by EXCLUDE_DIR_NAMES).
+SEMGREP_DEFAULT_IGNORES = [
+    "test", "tests", "testsuite", "*_test.go", "*.min.js", ".svn", "_darcs", ".env",
+    ".yarn", ".npm", "_opam", "_build", "_cargo",
+]
+
 _REGISTRY_URL = "https://semgrep.dev/c/{}"
 _REGISTRY_MAX_BYTES = 30 * 1024 * 1024
 
@@ -207,7 +217,9 @@ class SemgrepScanner(BaseScanner):
             "--timeout", "30",
             "--max-memory", "1500",
             "--no-git-ignore",
+            "--x-ignore-semgrepignore-files",   # target ignore files never configure the tool
             *exclude_args,         # loại thư viện bên thứ ba / venv
+            *[a for pat in SEMGREP_DEFAULT_IGNORES for a in ("--exclude", pat)],
             "--quiet",
             self.scan_path,
         ]
@@ -279,7 +291,8 @@ class BanditScanner(BaseScanner):
         from scanner.scanners.base import EXCLUDE_GLOBS
         cmd = [
             "bandit",
-            "-r", self.scan_path,
+            "--ini", os.path.abspath(os.path.join(_CFG_DIR, "bandit.ini")),
+            "-r", os.path.abspath(self.scan_path),
             "-f", "json",
             "-ll",    # Minimum level: LOW
             "--quiet",
@@ -287,7 +300,9 @@ class BanditScanner(BaseScanner):
             "--exclude", ",".join(EXCLUDE_GLOBS),
         ]
 
-        rc, stdout, stderr = await run_command(cmd, timeout=120)
+        # Owned ini + empty private cwd: target `.bandit` files are never read.
+        with tempfile.TemporaryDirectory(prefix="vg-bandit-") as td:
+            rc, stdout, stderr = await run_command(cmd, cwd=td, timeout=120)
 
         # Bandit exit 1 = có findings, NHƯNG một bandit bị crash (ImportError...) cũng exit 1.
         # Với -f json bandit luôn in JSON ra stdout → chỉ coi là thành công khi parse được
@@ -303,6 +318,13 @@ class BanditScanner(BaseScanner):
             ) from None
         if not isinstance(data, dict) or not isinstance(data.get("results"), list):
             raise ScannerRunError(f"bandit output thiếu 'results' (exit {rc}): {stderr[-500:]}")
+
+        try:
+            n_nosec = int(((data.get("metrics") or {}).get("_totals") or {}).get("nosec", 0) or 0)
+        except (TypeError, ValueError):
+            n_nosec = 0
+        if n_nosec > 0:
+            logger.info("bandit: %d lines suppressed by inline # nosec", n_nosec)
 
         for result in data.get("results", []):
             file_path = result.get("filename", "")

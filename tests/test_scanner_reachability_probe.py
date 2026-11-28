@@ -29,3 +29,11 @@ def test_semgrep_result_guard():
     assert not chk.semgrep_result_ok(P, "t")
     P.returncode, P.stdout = 1, '{"results": [{"check_id": "x"}]}'
     assert chk.semgrep_result_ok(P, "t")
+
+
+def test_captured_argv_carries_cwd_and_env(tmp_path):
+    (tmp_path / "main.tf").write_text("x = 1\n")
+    argv = chk.capture_checkov_argv(str(tmp_path))
+    assert argv.cwd, "probe must run checkov from the scanner's private cwd"
+    assert argv.env and "CKV_EXTERNAL_CHECKS_PUBLIC_KEY" in argv.env
+    assert any(a.startswith("--directory=") for a in argv)

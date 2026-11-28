@@ -88,6 +88,130 @@ def _pip_audit_isolation() -> Tuple[int, str]:
         shutil.rmtree(td, ignore_errors=True)
 
 
+# ── target-config isolation: hostile files are generated here, never committed ──────────────
+_SECRET_A = "ghp_" + "x7K9mQ2wLp4RtZ8vB3nYc6HdJ1sFa5GuE0oW"
+_SECRET_B = "ghp_" + "Qm4Zt8Lw2Rb7Vn3Hc9Xd5Ky1Fa6Gs0JpEuTo"
+_PUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "checkov-external-checks.pub")
+
+
+def _copy(src: str, dst: str) -> str:
+    shutil.copytree(src, dst)
+    return dst
+
+
+def _scan(scanner_cls, path: str) -> list:
+    return asyncio.run(scanner_cls(path).scan())
+
+
+def _checkov_isolation(root: str) -> Tuple[int, str]:
+    from scanner.scanners.iac import CheckovScanner
+
+    td = tempfile.mkdtemp(prefix="vg-iso-checkov-")
+    try:
+        tgt = _copy(os.path.join(root, "smoke", "iac"), os.path.join(td, "t"))
+        base = len(_scan(CheckovScanner, tgt))
+        if base < 1:
+            raise RuntimeError("checkov baseline found nothing")
+        canary, marker = os.path.join(td, "canary"), os.path.join(td, "MARKER")
+        os.makedirs(canary)
+        open(os.path.join(canary, "__init__.py"), "w").close()
+        with open(os.path.join(canary, "c.py"), "w") as f:
+            f.write(f"open({marker!r}, 'w').write('x')\n")
+        # (a) target config that narrows checks must not change the result
+        with open(os.path.join(tgt, ".checkov.yaml"), "w") as f:
+            f.write("check:\n  - CKV_VG_NONE\n")
+        n = len(_scan(CheckovScanner, tgt))
+        if n != base:
+            raise RuntimeError(f"target .checkov.yaml changed results: {n} != {base}")
+        # (b) target config naming an external checks dir must not load it
+        with open(os.path.join(tgt, ".checkov.yaml"), "w") as f:
+            f.write(f"external-checks-dir:\n  - {canary}\n")
+        n = len(_scan(CheckovScanner, tgt))
+        if os.path.exists(marker) or n != base:
+            raise RuntimeError("target config loaded external checks")
+        # (c) the verification key alone must reject any external check
+        empty = tempfile.mkdtemp(prefix="vg-iso-cwd-", dir=td)
+        env = dict(os.environ, CKV_EXTERNAL_CHECKS_PUBLIC_KEY=os.path.abspath(_PUB))
+        p = subprocess.run(["checkov", f"--directory={tgt}", "--external-checks-dir", canary, "--quiet",
+                            "--compact", "--output", "json"], cwd=empty, env=env,
+                           capture_output=True, text=True, timeout=300)
+        if os.path.exists(marker) or p.returncode != 2:
+            raise RuntimeError(f"external-check verification not enforced (exit {p.returncode})")
+        return base, "baseline"
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _gitleaks_isolation(root: str) -> Tuple[int, str]:
+    from scanner.scanners.secrets import GitleaksScanner
+
+    td = tempfile.mkdtemp(prefix="vg-iso-gitleaks-")
+    try:
+        tgt = os.path.join(td, "t")
+        os.makedirs(tgt)
+        with open(os.path.join(tgt, "a.py"), "w") as f:
+            f.write(f'T = "{_SECRET_A}"\n')
+        with open(os.path.join(tgt, "b.py"), "w") as f:
+            f.write(f'T = "{_SECRET_B}"  # gitleaks:allow\n')
+        with open(os.path.join(tgt, ".gitleaks.toml"), "w") as f:
+            f.write("[allowlist]\npaths = ['''.*''']\n")
+        files = {os.path.basename(x["file_path"]) for x in _scan(GitleaksScanner, tgt)}
+        if files != {"a.py", "b.py"}:
+            raise RuntimeError(f"target config / allow comment hid findings: {sorted(files)}")
+        # a root ignore file cannot be disabled in the pinned version: it must be reported as partial
+        with open(os.path.join(tgt, ".gitleaksignore"), "w") as f:
+            f.write("a.py:github-pat:1\n")
+        sc = GitleaksScanner(tgt)
+        asyncio.run(sc.scan())
+        if not sc.warnings:
+            raise RuntimeError("root .gitleaksignore not reported as partial")
+        return len(files), ""
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _bandit_isolation(root: str) -> Tuple[int, str]:
+    from scanner.scanners.sast import BanditScanner
+
+    td = tempfile.mkdtemp(prefix="vg-iso-bandit-")
+    try:
+        tgt = _copy(os.path.join(root, "vulnerable"), os.path.join(td, "t"))
+        found = _scan(BanditScanner, tgt)
+        base = len(found)
+        if base < 1:
+            raise RuntimeError("bandit baseline found nothing")
+        ids = sorted({str(x["rule_id"]) for x in found})
+        os.makedirs(os.path.join(tgt, "sub"), exist_ok=True)
+        for rel in (".bandit", os.path.join("sub", ".bandit")):
+            with open(os.path.join(tgt, rel), "w") as f:
+                f.write("[bandit]\nskips: " + ",".join(ids) + "\n")
+        n = len(_scan(BanditScanner, tgt))
+        if n != base:
+            raise RuntimeError(f"target .bandit changed results: {n} != {base}")
+        return n, ""
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _semgrep_isolation(root: str) -> Tuple[int, str]:
+    from scanner.scanners.sast import SemgrepScanner
+
+    td = tempfile.mkdtemp(prefix="vg-iso-semgrep-")
+    try:
+        tgt = _copy(os.path.join(root, "semgrep_rules"), os.path.join(td, "t"))
+        base = len(_scan(SemgrepScanner, tgt))
+        if base < 1:
+            raise RuntimeError("semgrep baseline found nothing")
+        with open(os.path.join(tgt, ".semgrepignore"), "w") as f:
+            f.write("*\n")
+        n = len(_scan(SemgrepScanner, tgt))
+        if n != base:
+            raise RuntimeError(f"target .semgrepignore changed results: {n} != {base}")
+        return n, ""
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
 def build_checks(root: str) -> List[Tuple[str, Callable[[], Tuple[int, str]], int]]:
     from scanner.scanners.iac import CheckovScanner, HadolintScanner, TrivyIaCScanner
     from scanner.scanners.sast import BanditScanner
@@ -106,6 +230,10 @@ def build_checks(root: str) -> List[Tuple[str, Callable[[], Tuple[int, str]], in
         ("trivy --version", lambda: (_version("trivy", "--version"), ""), 1),
         ("grype version", lambda: (_version("grype", "version"), ""), 1),
         ("pip-audit-isolation", _pip_audit_isolation, 1),
+        ("checkov-target-config-isolation", lambda: _checkov_isolation(root), 1),
+        ("gitleaks-target-config-isolation", lambda: _gitleaks_isolation(root), 1),
+        ("bandit-target-config-isolation", lambda: _bandit_isolation(root), 1),
+        ("semgrep-target-config-isolation", lambda: _semgrep_isolation(root), 1),
         ("pip-audit --version", lambda: (_version("pip-audit", "--version"), ""), 1),
         ("semgrep --version", lambda: (_version("semgrep", "--version"), ""), 1),
     ]

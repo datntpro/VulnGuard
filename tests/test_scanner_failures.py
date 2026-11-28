@@ -346,6 +346,7 @@ def test_iac_failure_surfaces_in_orchestrator(monkeypatch, tmp_path):
 _GITLEAKS_8_18_4_DETECT_FLAGS = {
     "--source", "--report-format", "--report-path", "--no-git", "--exit-code", "--redact",
     "--log-level", "--verbose", "--config", "--baseline-path", "--max-target-megabytes",
+    "--gitleaks-ignore-path", "--ignore-gitleaks-allow",
 }
 
 
