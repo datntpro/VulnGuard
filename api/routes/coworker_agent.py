@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, constr
 from sqlalchemy.orm import Session
 
 from api.database import get_db
@@ -92,7 +92,8 @@ class AgentStepRequest(BaseModel):
 
 
 class RouteRequest(BaseModel):
-    messages: List[ChatMessage]                # dùng tin nhắn để chọn skill phù hợp
+    message: Optional[constr(max_length=4000)] = None   # tin nhắn đầu của người dùng, dùng để chọn skill
+    messages: Optional[List[ChatMessage]] = None        # DEPRECATED (giữ một bản phát hành): dùng tin nhắn user ĐẦU TIÊN
 
 
 class SaveConversationRequest(BaseModel):
@@ -627,14 +628,50 @@ def _confirm_token(row) -> str:
 
 def _risky(row) -> bool:
     w = row.warning or {}
-    return row.kind == "sensitive_read" or bool(w.get("suspicious"))
+    return row.kind in ("sensitive_read", "sensitive_exec") or bool(w.get("suspicious"))
 
 
-def _pending_view(row, preview: Dict[str, Any]) -> Dict[str, Any]:
+def _classify_exec(command: str, cwd: str = "") -> Optional[Dict[str, Any]]:
+    """[W3-12 / audit F4] Lệnh exec chạm file nhạy cảm hoặc lịch sử git → warning (None = bình thường).
+    Fail-closed: không tách được (ngoặc không cân) → rủi ro."""
+    import shlex
+    from api.services import coworker_cloud as cc
+    try:
+        toks = shlex.split(command or "")
+    except ValueError:
+        return {"paths": [], "reason": "sensitive_path"}
+    paths: List[str] = []
+    for t in toks:
+        cands = [t]
+        if ":" in t:
+            cands.append(t.rsplit(":", 1)[1])                   # git show REV:path
+        if "=" in t:
+            cands.append(t.split("=", 1)[1])                    # --file=path
+        for c in cands:
+            if c and cc.is_sensitive_path(c):
+                b = os.path.basename(c.replace("\\", "/").rstrip("/")) or c
+                if b not in paths:
+                    paths.append(b)
+    if cwd and cc.is_sensitive_path(cwd):
+        paths.append(os.path.basename(cwd.rstrip("/")) or cwd)
+    if paths:
+        return {"paths": paths, "reason": "sensitive_path"}
+    for i, t in enumerate(toks):
+        if os.path.basename(t) != "git":
+            continue
+        args_ = toks[i + 1:]
+        sub = next((x for x in args_ if not x.startswith("-")), "")
+        patch = any(x in ("-p", "--patch", "-u") for x in args_)
+        if sub in ("show", "diff", "cat-file") or (sub == "log" and patch) or (sub == "stash" and "show" in args_ and patch):
+            return {"paths": [], "reason": "git_history"}
+    return None
+
+
+def _pending_view(row, preview: Dict[str, Any], route_kind: str = "local") -> Dict[str, Any]:
     v = {"id": row.id, "action": row.action, "args": row.args, "preview": preview, "kind": row.kind,
          "warning": row.warning}
     if row.conversation_id is not None:
-        v.update({"confirm_token": _confirm_token(row), "requires_explicit": _risky(row),
+        v.update({"confirm_token": _confirm_token(row), "requires_explicit": route_kind == "cloud" or _risky(row),
                   "expires_in": PENDING_TTL_SECONDS})
     return v
 
@@ -713,11 +750,12 @@ async def route_skill(req: RouteRequest):
     if not skills:
         return {"skill_id": None, "skill_name": None, "reason": "Chưa có skill nào."}
 
-    user_msg = ""
-    for m in reversed(req.messages):
-        if m.role == "user":
-            user_msg = m.content
-            break
+    user_msg = req.message or ""
+    if not user_msg:
+        for m in (req.messages or []):          # legacy: tin user ĐẦU TIÊN (không phải tin cuối)
+            if m.role == "user":
+                user_msg = m.content
+                break
 
     chosen = None
     # 1) Thử LLM phân loại
@@ -1108,7 +1146,8 @@ def _check_confirm(db, req, *, owner, conv_id) -> None:
         return                                      # _take_pending sẽ trả 409 AI_PENDING_INVALID/EXPIRED
     if not req.ack or req.ack != _confirm_token(row):
         raise HTTPException(status_code=409, detail={"code": "AI_CONFIRM_REQUIRED", "message_key": "ai.error.confirm_required"})
-    if _risky(row) and (req.auto or not req.explicit):
+    # Option A (#134): trên cloud MỌI pending đều cần xác nhận rõ, không tự duyệt (đường này chỉ gọi từ _cloud_step).
+    if req.auto or not req.explicit:
         raise HTTPException(status_code=409, detail={"code": "AI_EXPLICIT_CONFIRM_REQUIRED",
                                                      "message_key": "ai.error.explicit_confirm_required"})
 
@@ -1222,7 +1261,7 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
                                warning={"reason": reason, "resolved": resolved,
                                         "suspicious": bool((_warning_for(state) or {}).get("suspicious"))})
             return {"status": "awaiting_confirmation", "thought": thought, **meta,
-                    "pending": _pending_view(row, {"kind": "sensitive_read", "path": row.args["path"], "reason": reason,
+                    "pending": _pending_view(row, route_kind="cloud", preview={"kind": "sensitive_read", "path": row.args["path"], "reason": reason,
                                                    "resolved": resolved,
                                                    "prompt": "Gửi nội dung file nhạy cảm này lên cloud? / Send this sensitive file to the cloud?"})}
         if name == "read_file" and cc.is_sensitive_path(str(args.get("path", ""))):
@@ -1249,9 +1288,14 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
         _audit_action(conv, uid, name, "refused_markers")
         return await _finish_step(msg, True, msg, {"refused": True})
     preview = await _build_preview(conv.folder_id, name, args)
-    row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind="side_effect", action=name,
-                       args=args, tool_use_id=first.id, extra_ids=extras, warning=_warning_for(state))
-    return {"status": "awaiting_confirmation", "thought": thought, **meta, "pending": _pending_view(row, preview)}
+    warning, kind = _warning_for(state), "side_effect"
+    xw = _classify_exec(str(args.get("command", "")), str(args.get("cwd", "") or "")) if name == "exec" else None
+    if xw is not None:
+        kind, warning = "sensitive_exec", {**(warning or {}), **xw}
+    row = _new_pending(db, owner=uid, conv_id=conv.id, folder_id=conv.folder_id, kind=kind, action=name,
+                       args=args, tool_use_id=first.id, extra_ids=extras, warning=warning)
+    return {"status": "awaiting_confirmation", "thought": thought, **meta,
+            "pending": _pending_view(row, preview, route_kind="cloud")}
 
 
 def _redact_user_text(text: str) -> str:

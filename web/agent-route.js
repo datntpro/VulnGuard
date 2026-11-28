@@ -29,10 +29,12 @@
       refused: 'Co-work không chạy được với cài đặt AI hiện tại — xem Settings › AI',
       riskTitle: 'Hành động rủi ro — tự duyệt đã bị tắt cho hành động này',
       riskSensitive: 'Gửi nội dung file nhạy cảm này lên cloud?',
+      riskSensitiveExec: 'Lệnh này có thể đọc file nhạy cảm hoặc lịch sử git — kết quả sẽ được gửi lên cloud. Chạy?',
       riskSuspicious: 'Đề xuất sau khi đọc nội dung đáng ngờ',
       riskHosts: 'Host bên ngoài:',
       riskConfirm: 'Tôi đã xem và xác nhận',
-      autoOff: 'Tự duyệt đã tắt cho hành động rủi ro'
+      autoOff: 'Tự duyệt đã tắt cho hành động rủi ro',
+      autoOffCloud: 'Tự duyệt bị tắt khi dùng cloud: mọi hành động cần bạn duyệt tay'
     },
     en: {
       local: '🏠 Runs locally · {model} — data stays on this machine',
@@ -56,10 +58,12 @@
       refused: 'Co-work cannot run with the current AI settings — see Settings › AI',
       riskTitle: 'Risky action — auto-approve is disabled for this action',
       riskSensitive: 'Send the contents of this sensitive file to the cloud?',
+      riskSensitiveExec: 'This command may read a sensitive file or git history — its output will be sent to the cloud. Run it?',
       riskSuspicious: 'Proposed after suspicious content',
       riskHosts: 'External hosts:',
       riskConfirm: 'I have reviewed this and confirm',
-      autoOff: 'Auto-approve is disabled for risky actions'
+      autoOff: 'Auto-approve is disabled for risky actions',
+      autoOffCloud: 'Auto-approve is disabled on the cloud route: every action needs your explicit approval'
     }
   };
   var PROVIDERS = { anthropic: 'Anthropic', bedrock: 'AWS Bedrock', openai: 'OpenAI', azure_openai: 'Azure OpenAI', ollama: 'Ollama' };
