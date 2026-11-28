@@ -178,7 +178,8 @@ class PipAuditScanner(BaseScanner):
         # Only requirements*.txt (pip-audit cannot parse the other manifests offline; Trivy covers them)
         req_files = sorted(set(
             f for f in glob.glob(f"{self.scan_path}/**/requirements*.txt", recursive=True)
-            if not os.path.islink(f)))
+            if not os.path.islink(f)
+            and os.path.realpath(f).startswith(os.path.realpath(self.scan_path) + os.sep)))
 
         errors: list = []
         attempted = 0
@@ -186,10 +187,12 @@ class PipAuditScanner(BaseScanner):
             rel = req_file.replace(self.scan_path, "").lstrip("/")
             attempted += 1
             try:
-                kept, _dropped = pinned_requirements(req_file)
+                kept, dropped = pinned_requirements(req_file)
             except (ValueError, OSError) as e:
                 errors.append(f"{rel}: {e}")
                 continue
+            if kept and dropped:
+                self.warnings.append(f"{rel}: {dropped} non-pinned line(s) not audited by pip-audit")
             if not kept:
                 attempted -= 1
                 self.warnings.append(f"{rel}: no exactly-pinned requirements; not audited by pip-audit")

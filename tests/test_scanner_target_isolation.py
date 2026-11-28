@@ -225,3 +225,43 @@ def test_sonar_failure_marks_orchestrator_error(monkeypatch, tmp_path):
 def test_scanner_param_envs_are_not_forwarded():
     base = {"SONAR_SCANNER_JSON_PARAMS": "x", "SONARQUBE_SCANNER_PARAMS": "y", "SONAR_SCANNER_OPTS": "z"}
     assert scrubbed_env(base=base) == {}
+
+
+# ── mixed requirements files ─────────────────────────────────────────────────
+
+def test_pip_audit_mixed_file_is_partial_with_count(monkeypatch, tmp_path):
+    (tmp_path / "requirements.txt").write_text(
+        "requests==2.0.0\nflask>=1\n-r other.txt\n-e .\ncanary @ file:./x.tar.gz\n")
+
+    async def fake(cmd, **k):
+        return 0, '{"dependencies": []}', ""
+
+    monkeypatch.setattr(sca, "run_command", fake)
+    sc = sca.PipAuditScanner(str(tmp_path))
+    _run(sc.scan())
+    assert len(sc.warnings) == 1
+    assert "4 non-pinned" in sc.warnings[0]
+    assert "canary" not in sc.warnings[0] and "flask" not in sc.warnings[0]
+
+
+def test_pip_audit_fully_pinned_file_has_no_warning(monkeypatch, tmp_path):
+    (tmp_path / "requirements.txt").write_text("requests==2.0.0\n# comment\n")
+
+    async def fake(cmd, **k):
+        return 0, '{"dependencies": []}', ""
+
+    monkeypatch.setattr(sca, "run_command", fake)
+    sc = sca.PipAuditScanner(str(tmp_path))
+    _run(sc.scan())
+    assert sc.warnings == []
+
+
+def test_pip_audit_skips_files_reached_through_symlinked_dir(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "requirements.txt").write_text("requests==2.0.0\n")
+    target = tmp_path / "t"
+    target.mkdir()
+    os.symlink(outside, target / "sub")
+    monkeypatch.setattr(sca, "run_command", lambda *a, **k: pytest.fail("must not run"))
+    assert _run(sca.PipAuditScanner(str(target)).scan()) == []
