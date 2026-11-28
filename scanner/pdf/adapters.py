@@ -115,7 +115,7 @@ def _counts(sevs: Iterable[str]) -> Dict[str, int]:
     return c
 
 
-def _verdict(L: Mapping[str, Any], c: Mapping[str, int]) -> tuple[str, str]:
+def _verdict(L: Mapping[str, Any], c: Mapping[str, int], incomplete: bool = False) -> tuple[str, str]:
     if c.get("CRITICAL"):
         k = "critical"
     elif c.get("HIGH"):
@@ -125,7 +125,15 @@ def _verdict(L: Mapping[str, Any], c: Mapping[str, int]) -> tuple[str, str]:
     else:
         k = "clean"
     nar = str(L["narrative"][k]).format(c=c.get("CRITICAL", 0), h=c.get("HIGH", 0), m=c.get("MEDIUM", 0), l=c.get("LOW", 0))
-    return str(L["verdict"][k]), nar
+    verdict = str(L["verdict"][k])
+    if incomplete:
+        if k == "clean":
+            k = "incomplete"
+            verdict, nar = str(L["verdict"][k]), str(L["narrative"][k])
+        else:
+            verdict = f"{verdict} {L['incomplete_note']}"
+            nar = f"{nar} {L['narrative']['incomplete']}"
+    return verdict, nar
 
 
 def _appendix(L: Mapping[str, Any], tools: str = "", extra: Optional[List[dict]] = None) -> List[dict]:
@@ -279,7 +287,8 @@ def scan_doc(
         })
     counts = {s: int(severity_counts.get(s, 0)) for s in SEV_ORDER}
     score = risk_score(counts)
-    verdict, narrative = _verdict(L, counts)
+    tool_rows, tool_warning = _tool_status_rows(L, _g(scan, "summary"), lang)
+    verdict, narrative = _verdict(L, counts, incomplete=bool(tool_warning))
     total = sum(counts.values())
     top = [f"{f['id']} — {f['title']}" for f in findings if f["severity"] in ("CRITICAL", "HIGH")][:3]
     scan_types = ", ".join(L["scan_type"].get(t, t) for t in (_g(scan, "scan_types") or [])) or "—"
@@ -299,7 +308,6 @@ def scan_doc(
             [L["kv_total"], str(total)],
         ],
     }
-    tool_rows, tool_warning = _tool_status_rows(L, _g(scan, "summary"), lang)
     if tool_rows:
         meta["kv"].insert(5, [L["kv_tool_status"], _tool_status_line(L, tool_rows)])
     return {

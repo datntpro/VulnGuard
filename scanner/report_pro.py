@@ -95,7 +95,16 @@ def _risk_score(sev_counts: Dict[str, int]) -> int:
     return min(100, s)
 
 
-def _conclusion(sev_counts: Dict[str, int], score: int) -> str:
+def _conclusion(sev_counts: Dict[str, int], score: int, incomplete: bool = False) -> str:
+    base = _conclusion_base(sev_counts)
+    if not incomplete:
+        return base
+    if base.startswith("KHÔNG PHÁT HIỆN"):
+        return "KẾT QUẢ CHƯA ĐẦY ĐỦ — có công cụ lỗi/bỏ qua/một phần, không thể kết luận là sạch"
+    return base + " (kết quả chưa đầy đủ: có công cụ lỗi/bỏ qua/một phần)"
+
+
+def _conclusion_base(sev_counts: Dict[str, int]) -> str:
     c, h = sev_counts.get("CRITICAL", 0), sev_counts.get("HIGH", 0)
     if c:
         return "CÓ LỖ HỔNG NGHIÊM TRỌNG — cần khắc phục trước khi đưa lên production"
@@ -173,14 +182,13 @@ def render(project, scan, grouped: Dict[str, List[dict]], severity_counts: Dict[
     footer_text = branding.get("footer_text") or "VulnGuard · Báo cáo quét bảo mật"
     confidential = branding.get("confidential_label") or "BẢO MẬT / CONFIDENTIAL"
 
+    total = len(vulns)
+    score = _risk_score(severity_counts)
     from scanner.report_tools import tool_status
     ts = tool_status(getattr(scan, "summary", None))
     tools_banner = _tools_banner(ts)
     tools_html = _tools_html(ts) if ts["rows"] else ""
-
-    total = len(vulns)
-    score = _risk_score(severity_counts)
-    conclusion = _conclusion(severity_counts, score)
+    conclusion = _conclusion(severity_counts, score, incomplete=ts["has_gap"])
     crit = severity_counts.get("CRITICAL", 0); high = severity_counts.get("HIGH", 0)
     med = severity_counts.get("MEDIUM", 0); low = severity_counts.get("LOW", 0)
     info = severity_counts.get("INFO", 0)

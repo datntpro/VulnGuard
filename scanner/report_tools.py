@@ -19,8 +19,22 @@ _GENERATED = {
 }
 
 
+def _redact(t: str) -> str:
+    """Mask secrets (tokens, URL credentials, auth headers, keys) with the redactor the PDF/pentest exports use. Fails closed."""
+    if not t:
+        return t
+    try:
+        from scanner.pentest.redaction import _redact_secrets
+
+        return _redact_secrets(t)
+    except Exception:  # noqa: BLE001
+        return "[REDACTED]"
+
+
 def clean_error(v: Any, n: int = MAX_ERROR) -> str:
+    """Control chars stripped, secrets redacted, then capped (redaction runs on a bounded input)."""
     t = _CTRL.sub(" ", "" if v is None else str(v[:4 * n] if isinstance(v, str) else v)).strip()
+    t = _redact(t[: 8 * n]).strip()
     return t if len(t) <= n else t[: n - 1] + "…"
 
 
@@ -41,7 +55,7 @@ def tool_status(summary: Optional[Mapping[str, Any]], lang: str = "vi") -> Dict[
     rows: List[Dict[str, Any]] = []
     for tool, lg in logs.items():
         lg = lg if isinstance(lg, Mapping) else {}
-        st = lg.get("status", "ok")
+        st = lg.get("status")
         st = st if st in STATUSES else "error"
         name = clean_error(tool, 60)
         rows.append({"tool": name, "label": clean_error(lg.get("label") or name, 60), "status": st,
