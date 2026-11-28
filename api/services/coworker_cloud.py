@@ -316,8 +316,7 @@ def _redact_line(line: str) -> str:
     line = _KV.sub(_kv_cb, line)
     if "aws" in low:
         line = _AWS40.sub(_R, line)
-    if len(line) < 4000:       # cả dòng không có `=`/`:` (thân PEM/PGP/PuTTY, base64 trần)
-        line = _BIGTOKEN.sub(_big_cb, line)
+    line = _BIGTOKEN.sub(_big_cb, line)       # mọi dòng (≤ _LINE_CAP), kể cả không có `=`/`:` và ≥4000 ký tự: thân PEM/PGP/PuTTY, base64 trần
     line = _QS_E.sub(lambda m: m.group(1) + _R, line)
     return line
 
