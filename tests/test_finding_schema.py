@@ -277,3 +277,31 @@ def test_non_string_values_do_not_crash():
     out = fs.enrich({"cvss_v4_vector": 5, "vuln_class": 7, "wstg_id": 3, "param": 9, "cwe": 89})
     assert out["needs_review"] is True and out["vuln_class"] is None and out["param"] is None
     assert fs.fingerprint("e", vuln_class=5, target=3, param=1, cwe=89, title=None)
+
+
+# ── W3-1: severity enum enforced server-side ──
+@pytest.mark.parametrize("raw,exp,review", [
+    ("CRITICAL", "critical", False), (" High ", "high", False), ("informational", "info", False),
+    ("crit", "critical", False), ("<img src=x>", "info", True), (None, "info", True), (42, "info", True),
+    ("x" * 50, "info", True), ("", "info", True),
+])
+def test_enrich_normalises_severity(raw, exp, review):
+    out = finding_schema.enrich({"severity": raw})
+    assert out["severity"] == exp and out["needs_review"] is review
+
+
+def test_valid_cvss_overrides_bogus_severity():
+    good = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+    out = finding_schema.enrich({"severity": "<script>", "cvss_v4_vector": good})
+    assert out["severity"] in finding_schema.SEVERITIES and out["severity"] != "info"
+    assert out["needs_review"] is False
+
+
+def test_save_finding_stores_enum_severity_only():
+    db, r1, _r2, a1, _a2 = _two_runs()
+    try:
+        fid = a1._save_finding(db, r1, {**_BASE, "severity": "<script>"}, None)
+        f = db.query(PentestFinding).filter(PentestFinding.id == fid).first()
+        assert f.severity == "info" and f.needs_review is True
+    finally:
+        db.close()
