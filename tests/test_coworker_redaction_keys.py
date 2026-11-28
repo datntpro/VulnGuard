@@ -166,3 +166,92 @@ def test_wrap_observation_perf_200kb():
     t = time.time()
     cc.wrap_observation(text, cap=200_000)
     assert time.time() - t < 1.0
+
+
+# ── [W3-15 follow-up] tuyến tính + dạng mã hoá còn lại ───────────────────────────────────────────
+def _adversarial_inputs():
+    n = 200_000
+    hdr = "-----BEGIN PRIVATE KEY-----"
+    return {
+        "headers_lines": (hdr + "\n") * (n // (len(hdr) + 1)),
+        "headers_inline": (hdr + " x") * (n // (len(hdr) + 2)),
+        "putty_nonl": "PuTTY-User-Key-File-3:" * (n // 22),
+        "putty_lines": "PuTTY-User-Key-File-3: a\n" * (n // 25),
+        "b64_prefix": "LS0tLS1CRUdJT\n" * (n // 14),
+        "end_only": ("-----END PRIVATE KEY-----\n") * (n // 26),
+        "mixed": ("-----BEGIN RSA PRIVATE KEY-----\nPuTTY-User-Key-File-2: x\nLS0tLS1CRUdJT\n") * (n // 70),
+    }
+
+
+@pytest.mark.parametrize("name", list(_adversarial_inputs()))
+def test_adversarial_200k_is_fast(name):
+    text = _adversarial_inputs()[name]
+    assert 150_000 <= len(text) <= 200_000
+    t = time.time()
+    cc.wrap_observation(text, cap=200_000)
+    assert time.time() - t < 3.0, name       # tuyến tính: ~ms; ngưỡng rộng cho runner chậm (trước đây: hàng trăm giây)
+
+
+def test_fail_closed_when_over_budget(monkeypatch):
+    import time as _t
+
+    def slow(obs, *, cap):
+        _t.sleep(1.0)
+        return "LEAK", [], []
+    monkeypatch.setattr(cc, "wrap_observation", slow)
+    monkeypatch.setattr(cc, "REDACT_BUDGET_S", 0.1)
+    text, kinds, hosts = _run(cc.wrap_observation_async("secret-material " * 10, cap=1000))
+    assert "LEAK" not in text and "secret-material" not in text and cc.FAIL_CLOSED_TEXT in text
+
+
+def _esc(s: str) -> str:
+    return s.replace("\n", "\\n")
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_escaped_newline_forms(kind):
+    pem = _pem(kind)
+    for frag in (pem[: len(pem) // 2], pem):           # cụt và đủ
+        for wrap in ('{"private_key": "%s"}', "key: \"%s\"", "k='%s'"):
+            out = _wrap(wrap % _esc(frag))
+            assert _no_fragment(out, _body(frag)), (kind, wrap)
+
+
+def test_escaped_pgp_and_armor_headers():
+    pgp = _synthetic_pgp()
+    cut = pgp[:1400]
+    assert _no_fragment(_wrap('{"k": "%s"}' % _esc(cut)), _body(cut))
+    body = base64.b64encode(os.urandom(900)).decode()
+    lines = [body[i:i + 64] for i in range(0, len(body), 64)]
+    enc = ("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF\n\n"
+           + "\n".join(lines[:8]))
+    ind = "\n".join("    " + l for l in enc.split("\n"))
+    for text in (enc, ind, _esc(enc), "k: |\n" + ind):
+        assert _no_fragment(_wrap(text), body[:512]), text[:60]
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_line_wrapped_base64_of_pem(kind):
+    b = _b64(_pem(kind))
+    for width in (64, 76):
+        wrapped = "\n".join(b[i:i + width] for i in range(0, len(b), width))
+        assert _no_fragment(_wrap(wrapped), b), width
+        yaml = "data: |\n" + "\n".join("  " + b[i:i + width] for i in range(0, len(b), width)) + "\nnext: value\n"
+        out = _wrap(yaml)
+        assert _no_fragment(out, b) and "next: value" in out
+
+
+def test_base64_of_ppk_and_escaped_ppk():
+    ppk = _synthetic_ppk()
+    b = _b64(ppk)
+    assert _no_fragment(_wrap(b), b)
+    wrapped = "\n".join(b[i:i + 76] for i in range(0, len(b), 76))
+    assert _no_fragment(_wrap(wrapped), b)
+    priv = ppk.split("Private-Lines:")[1].replace("\n", "")[2:600]
+    assert _no_fragment(_wrap('{"k": "%s"}' % _esc(ppk)), priv)
+    assert _no_fragment(_wrap('{"k": "%s"}' % _esc(ppk[:900])), ppk[100:900].replace("\n", "")[:400])
+
+
+def test_code_mentioning_headers_is_untouched():
+    src = 'HDR = "-----BEGIN PRIVATE KEY-----"\nprint(HDR)\nmore code here\n'
+    assert cc.redact_egress(src) == src

@@ -4,6 +4,7 @@ với che secret/PII BẮT BUỘC, bọc nội dung không tin cậy, dò prompt
 Module này KHÔNG biết HTTP/DB: chỉ là các hàm thuần + `coworker_cloud_send()`. Vòng lặp & transcript nằm ở
 api/routes/coworker_agent.py. Mọi thứ rời máy này đều đi qua `coworker_cloud_send()`.
 """
+import asyncio
 import copy
 import logging
 import re
@@ -451,6 +452,19 @@ def wrap_observation(obs: str, *, cap: int) -> Tuple[str, List[str], List[str]]:
     return f"{UNTRUSTED_PREAMBLE}{warn}\n{_OPEN}\n{body}\n{_CLOSE}", kinds, hosts
 
 
+REDACT_BUDGET_S = 5.0     # ngân sách thời gian che cho MỘT quan sát; quá hạn ⇒ fail CLOSED (không gửi gì từ nội dung đó)
+FAIL_CLOSED_TEXT = "[REDACTED: nội dung quá lớn/phức tạp để kiểm tra an toàn trong thời hạn; không gửi]"
+
+
+async def wrap_observation_async(obs: str, *, cap: int) -> Tuple[str, List[str], List[str]]:
+    """wrap_observation chạy NGOÀI event loop (asyncio.to_thread) + ngân sách thời gian. Quá hạn ⇒ che TOÀN BỘ cửa sổ."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(wrap_observation, obs, cap=cap), REDACT_BUDGET_S)
+    except asyncio.TimeoutError:
+        audit.info("coworker_redact_budget_exceeded size=%d", len(obs or ""))
+        return f"{UNTRUSTED_PREAMBLE}\n{_OPEN}\n{FAIL_CLOSED_TEXT}\n{_CLOSE}", [], []
+
+
 def serialize_assistant(driver, raw) -> dict:
     """assistant_entry của driver → dict JSON thuần (lưu DB, replay được; không giữ block SDK)."""
     if driver.family == "anthropic":
@@ -471,8 +485,8 @@ def serialize_assistant(driver, raw) -> dict:
 async def coworker_cloud_send(driver, system: str, messages: List[dict], *, ctx: Optional[dict] = None):
     """ĐIỂM RA DUY NHẤT của Co-work cloud. Che secret + PII trong system prompt (skill) và MỌI message
     trước khi chạm driver — bắt buộc, KHÔNG phụ thuộc cờ privacy `redact_secrets`. Meter (quota/usage) nằm trong driver."""
-    safe_system = _redact_str(system)
-    safe_msgs = redact_messages(messages)
+    safe_system = await asyncio.to_thread(_redact_str, system)       # ngoài event loop; transcript có thể tới ~2 MB
+    safe_msgs = await asyncio.to_thread(redact_messages, messages)
     c = ctx or {}
     try:
         raw = await driver.create(safe_system, safe_msgs, driver.native_tools(COWORK_TOOLS), cache_tail=True)

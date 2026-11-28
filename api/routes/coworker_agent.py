@@ -1148,7 +1148,7 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
             obs = await _exec_pending(row, MAX_OBS_CHARS, raw=True)
             _audit_action(conv, uid, row.action, "approved")
             cap = MAX_FILE_CHARS + 500 if row.kind == "sensitive_read" else MAX_OBS_CHARS
-            text, kinds, hosts = cc.wrap_observation(obs, cap=cap)
+            text, kinds, hosts = await cc.wrap_observation_async(obs, cap=cap)
             _suspicion(state, kinds, hosts)
             entries = _tool_results_entries(driver, row.tool_use_id, text, obs.startswith("LỖI"), row.extra_ids or [])
         else:
@@ -1236,7 +1236,7 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
         except Exception as e:
             obs = f"LỖI: {e}"
         cap = MAX_FILE_CHARS + 500 if name == "read_file" else MAX_OBS_CHARS
-        text, kinds, hosts = cc.wrap_observation(obs, cap=cap)
+        text, kinds, hosts = await cc.wrap_observation_async(obs, cap=cap)
         _suspicion(state, kinds, hosts)
         return await _finish_step(text, obs.startswith("LỖI"), obs[:cap],
                                   {"suspicious": bool(kinds)})
