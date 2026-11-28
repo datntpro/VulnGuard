@@ -14,8 +14,8 @@ kind:
              (+ cổng ADMIN). Loopback & private được phép (đó là chức năng của nó); link-local + metadata
              vẫn bị chặn.
 
-Allowlist host: env `AI_BASE_URL_ALLOWLIST` (CSV, "host" hoặc "*.suffix") + khoá `base_url_allowlist`
-(list) trong ai_config nếu có. Cổng thêm: env `AI_URL_EXTRA_PORTS` (CSV).
+Allowlist host: env `AI_BASE_URL_ALLOWLIST` (CSV, "host", "host:port" hoặc "*.suffix[:port]") + khoá `base_url_allowlist`
+(list) trong ai_config + `policy.base_url_allowlist`. Mục không hợp lệ bị bỏ (fail closed). Mục có cổng chỉ mở đúng cặp host:port. Cổng thêm: env `AI_URL_EXTRA_PORTS` (CSV).
 Thông điệp lỗi do VulnGuard tự viết (không chứa nội dung phản hồi của provider).
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ import asyncio
 import ipaddress
 import os
 import re
+import logging
 import socket
 from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable, List, Optional, Tuple
@@ -32,6 +33,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from scanner.pentest.egress_policy import BASE_ALWAYS_DENY
+
+_log = logging.getLogger(__name__)
 
 BAD_BASE_URL = "BAD_BASE_URL"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -68,33 +71,71 @@ class UrlPolicy:
     def ports(self) -> Tuple[int, ...]:
         return _DEFAULT_PORTS[self.kind] + tuple(self.extra_ports)
 
-    def host_allowlisted(self, host: str) -> bool:
-        for pat in self.allowlist:
-            pat = pat.strip().lower().rstrip(".")
+    def _entries(self):
+        """(pattern, port|None) của từng mục allowlist ("host", "host:port", "*.suffix[:port]")."""
+        for raw in self.allowlist:
+            pat = raw.strip().lower().rstrip(".")
             if not pat:
                 continue
-            if pat.startswith("*."):
-                if host.endswith(pat[1:]) and host != pat[2:]:
-                    return True
-            elif host == pat:
+            host, sep, port = pat.partition(":")
+            yield host, (int(port) if sep and port.isdigit() else None)
+
+    @staticmethod
+    def _host_matches(pat: str, host: str) -> bool:
+        if pat.startswith("*."):
+            if _is_ip(host):          # wildcard không bao giờ khớp IP literal
+                return False
+            return host.endswith(pat[1:]) and host != pat[2:]
+        return host == pat
+
+    def host_allowlisted(self, host: str, port: Optional[int] = None) -> bool:
+        """Mục có cổng chỉ khớp khi đúng cổng; mục không cổng khớp mọi cổng (vẫn phải qua cổng cho phép)."""
+        for pat, pport in self._entries():
+            if self._host_matches(pat, host) and (pport is None or pport == port):
                 return True
         return False
+
+    def port_allowed(self, host: str, port: int) -> bool:
+        if port in self.ports():
+            return True
+        return any(pport == port and self._host_matches(pat, host) for pat, pport in self._entries())
+
+
+def _checked_entries(entries, source: str) -> List[str]:
+    """Chuẩn hoá + bỏ mục không hợp lệ (fail closed). Log chỉ tên nguồn, không log nội dung mục."""
+    from api.services.ai_policy import valid_allow_entry
+    out: List[str] = []
+    bad = 0
+    for e in entries:
+        e = str(e).strip().lower()
+        if not e:
+            continue
+        if valid_allow_entry(e):
+            out.append(e)
+        else:
+            bad += 1
+    if bad:
+        _log.warning("url_guard: bỏ %d mục allowlist không hợp lệ từ nguồn %s", bad, source)
+    return out
 
 
 def policy_for(kind: str, resolver=None) -> UrlPolicy:
     """Policy hiệu lực (env + ai_config). Đọc lại ở mỗi lần dùng để thay đổi của ADMIN có hiệu lực ngay."""
     if kind not in _DEFAULT_PORTS:
         raise ValueError("kind phải là 'cloud' hoặc 'ollama'")
-    allow = [h for h in os.environ.get("AI_BASE_URL_ALLOWLIST", "").split(",") if h.strip()]
+    allow = _checked_entries(os.environ.get("AI_BASE_URL_ALLOWLIST", "").split(","), "env")
     ports: List[int] = []
     for p in os.environ.get("AI_URL_EXTRA_PORTS", "").split(","):
         if p.strip().isdigit() and 0 < int(p) < 65536:
             ports.append(int(p))
     try:
         from api.services.ai_config import load_config
-        extra = load_config().get("base_url_allowlist")
+        cfg = load_config()
+        extra = cfg.get("base_url_allowlist")
         if isinstance(extra, (list, tuple)):
-            allow += [str(h) for h in extra]
+            allow += _checked_entries(extra, "ai_config")
+        from api.services.ai_policy import get_policy
+        allow += _checked_entries(get_policy(cfg).get("base_url_allowlist") or [], "policy")
     except Exception:
         pass
     configured = None
@@ -106,7 +147,7 @@ def policy_for(kind: str, resolver=None) -> UrlPolicy:
                 configured = (sp.hostname.lower().rstrip("."), sp.port or (443 if sp.scheme == "https" else 80))
         except Exception:
             pass
-    return UrlPolicy(kind, tuple(a.strip().lower() for a in allow), tuple(ports), resolver, configured)
+    return UrlPolicy(kind, tuple(allow), tuple(ports), resolver, configured)
 
 
 # ─────────────────────────────────────────────
@@ -199,7 +240,7 @@ def parse_url(url: str, policy: UrlPolicy) -> Tuple[str, str, int, str]:
         raise UrlRejected("thiếu host")
     host = _normalise_host(raw_host)
     port = port or (443 if scheme == "https" else 80)
-    if port not in policy.ports():
+    if not policy.port_allowed(host, port):
         raise UrlRejected(f"cổng {port} không nằm trong danh sách cho phép")
     path = sp.path.rstrip("/")
     if ".." in path.split("/"):
@@ -245,7 +286,7 @@ def check_host(host: str, scheme: str, port: int, policy: UrlPolicy) -> List[str
         ips = [host]
     else:
         ips = (policy.resolver or _system_resolve)(host, port)
-    allow = policy.host_allowlisted(host)
+    allow = policy.host_allowlisted(host, port)
     for ip in ips:
         why = ip_verdict(ip, policy, allow)
         if why:
@@ -286,11 +327,11 @@ def _pin(request: httpx.Request, policy: UrlPolicy) -> None:
     port = url.port or (443 if url.scheme == "https" else 80)
     if url.scheme not in ("http", "https"):
         raise UrlRejected("scheme không hợp lệ")
-    if port not in policy.ports():
-        raise UrlRejected(f"cổng {port} không nằm trong danh sách cho phép")
     if url.scheme == "http" and policy.kind != "ollama":
         raise UrlRejected("chỉ chấp nhận https")
     host = _normalise_host(host)
+    if not policy.port_allowed(host, port):
+        raise UrlRejected(f"cổng {port} không nằm trong danh sách cho phép")
     ips = check_host(host, url.scheme, port, policy)
     ip = ips[0]
     if host != ip:

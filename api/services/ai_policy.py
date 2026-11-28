@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import copy
 import fnmatch
+import logging
 import re
 from typing import Any, Dict, Optional
+
+_log = logging.getLogger(__name__)
 
 BYOK_MODES = ("allowed", "required", "off")
 SCHED_CREDENTIALS = ("org", "owner", "local_only")
@@ -33,7 +36,32 @@ DEFAULT_POLICY: Dict[str, Any] = {
 _AZ_KEY = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?/[a-z0-9][a-z0-9._\-]{0,63}$")
 _MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\-]{0,119}$")
 # [PR-7] base_url_allowlist: "host" | "host:port" | "*.suffix[:port]" — wildcard chỉ ở đầu, không scheme/path/userinfo
-_ALLOW_ENTRY = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9_-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9_-]*[a-z0-9])?)*(:\d{1,5})?$")
+_ALLOW_ENTRY = re.compile(
+    r"(\*\.)?[a-z0-9]([a-z0-9_-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9_-]*[a-z0-9])?)*(:[0-9]{1,5})?", re.ASCII)
+# Heuristic (không dùng Public Suffix List): "*.x" cần >=2 nhãn sau "*." và nhãn đầu của hậu tố 2 nhãn không phải
+# nhãn đăng ký dùng chung (co/com/net/org/gov/edu/ac/or/ne/go) → từ chối *.com, *.co.uk, *.com.vn.
+_SHARED_SUFFIX_LABELS = frozenset({"co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go"})
+# Dịch vụ wildcard-DNS / nền tảng dùng chung: wildcard trên các miền này bị từ chối (chỉ cho phép host cụ thể).
+_NO_WILDCARD_DOMAINS = ("nip.io", "sslip.io", "xip.io", "localtest.me", "lvh.me", "traefik.me", "github.io",
+                        "amazonaws.com", "herokuapp.com", "azurewebsites.net", "cloudfront.net", "vercel.app",
+                        "netlify.app")
+
+
+def valid_allow_entry(e: Any) -> bool:
+    """Mục allowlist hợp lệ: "host" | "host:port" | "*.suffix[:port]" (chữ thường, ASCII, không strip)."""
+    if not isinstance(e, str) or not _ALLOW_ENTRY.fullmatch(e):
+        return False
+    host, sep, port = e.partition(":")
+    if sep and not 0 < int(port) < 65536:
+        return False
+    if host.startswith("*."):
+        labels = host[2:].split(".")
+        if len(labels) < 2 or labels[-2] in _SHARED_SUFFIX_LABELS or labels[-1].isdigit():
+            return False   # nhãn cuối toàn số (vd *.9.9) sẽ khớp địa chỉ IP
+        dom = ".".join(labels)
+        if any(dom == d or dom.endswith("." + d) for d in _NO_WILDCARD_DOMAINS):
+            return False
+    return True
 
 
 def _num(v: Any, name: str, *, integer: bool = False, maximum: float = 1e6) -> Optional[float]:
@@ -79,9 +107,9 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise ValueError("policy.custom_base_url phải là admin_only | off")
     p["base_url_allowlist"] = [e.lower() for e in _str_list(p["base_url_allowlist"], "policy.base_url_allowlist")]
     for e in p["base_url_allowlist"]:
-        port = e.rsplit(":", 1)[1] if ":" in e else None
-        if not _ALLOW_ENTRY.match(e) or (port is not None and not 0 < int(port) < 65536):
-            raise ValueError("policy.base_url_allowlist: mỗi mục phải là host hoặc host:port, wildcard chỉ dạng *.suffix ở đầu")
+        if not valid_allow_entry(e):
+            raise ValueError("policy.base_url_allowlist: mỗi mục phải là host hoặc host:port, wildcard chỉ dạng *.suffix ở đầu "
+                             "(không nhận *.com, *.co.uk…)")
     m = p["azure_deployment_models"]
     if not isinstance(m, dict) or len(m) > 200:
         raise ValueError("policy.azure_deployment_models phải là object <resource>/<deployment> → model")
@@ -102,13 +130,39 @@ def normalize(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return p
 
 
+def _sanitize_allowlist(v: Any, limit: int = 100) -> list:
+    """Hàm toàn phần (không raise): không phải list → []; bỏ từng mục không phải str / rỗng / >200 ký tự / không hợp lệ;
+    cắt còn `limit` mục. Chỉ log số lượng."""
+    if v in (None, ""):
+        return []
+    if not isinstance(v, list):
+        _log.warning("ai_policy: base_url_allowlist đã lưu không phải danh sách, bỏ qua")
+        return []
+    kept = []
+    for e in v:
+        if isinstance(e, str):
+            e = e.strip().lower()
+            if 0 < len(e) <= 200 and valid_allow_entry(e):
+                kept.append(e)
+    if len(kept) != len(v):
+        _log.warning("ai_policy: bỏ %d mục base_url_allowlist không hợp lệ đã lưu", len(v) - len(kept))
+    if len(kept) > limit:
+        _log.warning("ai_policy: base_url_allowlist vượt %d mục, cắt bớt", limit)
+        kept = kept[:limit]
+    return kept
+
+
 def get_policy(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Policy hiệu lực từ cấu hình (không raise: giá trị hỏng → mặc định an toàn)."""
     if cfg is None:
         from api.services.ai_config import load_config
         cfg = load_config()
+    raw = cfg.get("policy")
+    if isinstance(raw, dict) and "base_url_allowlist" in raw:
+        # Dữ liệu cũ/hỏng trong allowlist không được làm policy rơi về mặc định: làm sạch RIÊNG trường này.
+        raw = {**raw, "base_url_allowlist": _sanitize_allowlist(raw["base_url_allowlist"])}
     try:
-        return normalize(cfg.get("policy"))
+        return normalize(raw)
     except ValueError:
         return copy.deepcopy(DEFAULT_POLICY)
 

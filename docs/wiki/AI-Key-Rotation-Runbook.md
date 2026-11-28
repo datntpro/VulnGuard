@@ -46,6 +46,15 @@ VULNGUARD_SECRET_KEY_PREVIOUS='<khoá cũ>' \
 python -c "from api.database import SessionLocal; from api.services import ai_credentials as c; db=SessionLocal(); print('re-encrypted rows:', c.reencrypt_all(db)); db.close()"
 ```
 
+   Nếu chạy bằng Docker Compose, dùng container một lần (ứng dụng đã dừng):
+
+```sh
+docker compose run --rm \
+  -e VULNGUARD_SECRET_KEY='<khoá mới>' -e VULNGUARD_SECRET_KEY_PREVIOUS='<khoá cũ>' \
+  vulnguard python -c "from api.database import SessionLocal; from api.services import ai_credentials as c; db=SessionLocal(); print('re-encrypted rows:', c.reencrypt_all(db)); db.close()"
+```
+
+   Hoặc `docker run --rm` với cùng hai biến `-e`, cùng image và cùng volume `storage/` như dịch vụ `vulnguard`. Lưu ý: đổi `VULNGUARD_SECRET_KEY` làm **mọi phiên đăng nhập (JWT) hết hiệu lực**.
    Số hàng in ra phải bằng số credential có secret. `MultiFernet` giải mã bằng cả hai khoá và mã lại bằng khoá mới. Lưu ý: `reencrypt_all` chạy một transaction rồi commit; nếu bị ngắt giữa chừng, khôi phục từ bản sao lưu bước 1.
 6. Đặt `VULNGUARD_SECRET_KEY=<khoá mới>` vĩnh viễn (và bỏ `storage/secret.key` cũ chỉ khi chắc chắn không còn dùng; nếu dùng file thì ghi khoá mới vào đó, quyền `0600`). **Giữ** `VULNGUARD_SECRET_KEY_PREVIOUS` tới khi xác nhận xong.
 7. Khởi động lại. Kiểm tra: đăng nhập, **Test** vài khoá cá nhân và khoá tổ chức, chạy một scan nhỏ có AI. Log không được có `không giải mã được credential`.
@@ -94,7 +103,15 @@ Procedure (planned maintenance window):
 2. Inventory the shared-box secrets you will re-enter.
 3. Generate a key: `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`.
 4. Stop the app (and `pentest-worker` if used). No jobs may run during rotation.
-5. Run the one-off re-encrypt with the Vietnamese command above (new key as `VULNGUARD_SECRET_KEY`, old key as `VULNGUARD_SECRET_KEY_PREVIOUS`) inside the `vulnguard` container or native environment. The printed row count must equal the number of credentials holding a secret. If interrupted, restore the step-1 backup.
+5. Run the one-off re-encrypt with the Vietnamese command above (new key as `VULNGUARD_SECRET_KEY`, old key as `VULNGUARD_SECRET_KEY_PREVIOUS`) inside the `vulnguard` container or native environment. With Docker Compose use a one-off container (app stopped):
+
+```sh
+docker compose run --rm \
+  -e VULNGUARD_SECRET_KEY='<new key>' -e VULNGUARD_SECRET_KEY_PREVIOUS='<old key>' \
+  vulnguard python -c "from api.database import SessionLocal; from api.services import ai_credentials as c; db=SessionLocal(); print('re-encrypted rows:', c.reencrypt_all(db)); db.close()"
+```
+
+   The plain `docker run --rm` equivalent takes the same two `-e` flags, the same image and the same `storage/` volume. Changing `VULNGUARD_SECRET_KEY` **invalidates all JWT login sessions**. The printed row count must equal the number of credentials holding a secret. If interrupted, restore the step-1 backup.
 6. Set `VULNGUARD_SECRET_KEY=<new>` permanently (or write the new key to `storage/secret.key`, mode `0600`). **Keep** `…_PREVIOUS` until verified.
 7. Start. Verify: log in, **Test** several personal keys and the org key, run a small AI scan. There must be no `không giải mã được credential` log lines.
 8. Re-enter the shared-box secrets. After an observation period (e.g. 7 days) remove `…_PREVIOUS` and destroy the old key per policy — **keep the old DB backup paired with the old key** if you may need to roll back, stored apart (section 0).
