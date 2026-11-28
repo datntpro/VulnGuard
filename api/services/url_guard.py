@@ -83,6 +83,8 @@ class UrlPolicy:
     @staticmethod
     def _host_matches(pat: str, host: str) -> bool:
         if pat.startswith("*."):
+            if _is_ip(host):          # wildcard không bao giờ khớp IP literal
+                return False
             return host.endswith(pat[1:]) and host != pat[2:]
         return host == pat
 

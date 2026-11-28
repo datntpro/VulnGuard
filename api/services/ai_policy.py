@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import copy
 import fnmatch
+import logging
 import re
 from typing import Any, Dict, Optional
+
+_log = logging.getLogger(__name__)
 
 BYOK_MODES = ("allowed", "required", "off")
 SCHED_CREDENTIALS = ("org", "owner", "local_only")
@@ -38,6 +41,10 @@ _ALLOW_ENTRY = re.compile(
 # Heuristic (không dùng Public Suffix List): "*.x" cần >=2 nhãn sau "*." và nhãn đầu của hậu tố 2 nhãn không phải
 # nhãn đăng ký dùng chung (co/com/net/org/gov/edu/ac/or/ne/go) → từ chối *.com, *.co.uk, *.com.vn.
 _SHARED_SUFFIX_LABELS = frozenset({"co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go"})
+# Dịch vụ wildcard-DNS / nền tảng dùng chung: wildcard trên các miền này bị từ chối (chỉ cho phép host cụ thể).
+_NO_WILDCARD_DOMAINS = ("nip.io", "sslip.io", "xip.io", "localtest.me", "lvh.me", "traefik.me", "github.io",
+                        "amazonaws.com", "herokuapp.com", "azurewebsites.net", "cloudfront.net", "vercel.app",
+                        "netlify.app")
 
 
 def valid_allow_entry(e: Any) -> bool:
@@ -49,7 +56,10 @@ def valid_allow_entry(e: Any) -> bool:
         return False
     if host.startswith("*."):
         labels = host[2:].split(".")
-        if len(labels) < 2 or labels[-2] in _SHARED_SUFFIX_LABELS:
+        if len(labels) < 2 or labels[-2] in _SHARED_SUFFIX_LABELS or labels[-1].isdigit():
+            return False   # nhãn cuối toàn số (vd *.9.9) sẽ khớp địa chỉ IP
+        dom = ".".join(labels)
+        if any(dom == d or dom.endswith("." + d) for d in _NO_WILDCARD_DOMAINS):
             return False
     return True
 
@@ -125,8 +135,17 @@ def get_policy(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if cfg is None:
         from api.services.ai_config import load_config
         cfg = load_config()
+    raw = cfg.get("policy")
+    if isinstance(raw, dict) and isinstance(raw.get("base_url_allowlist"), list):
+        # Dữ liệu cũ có thể chứa mục mà bộ kiểm tra mới từ chối: bỏ RIÊNG các mục đó, giữ phần còn lại của policy
+        # (không rơi về mặc định vì một mục allowlist hỏng).
+        kept = [e for e in raw["base_url_allowlist"] if valid_allow_entry(e.lower() if isinstance(e, str) else e)]
+        if len(kept) != len(raw["base_url_allowlist"]):
+            _log.warning("ai_policy: bỏ %d mục base_url_allowlist không hợp lệ đã lưu",
+                         len(raw["base_url_allowlist"]) - len(kept))
+            raw = {**raw, "base_url_allowlist": kept}
     try:
-        return normalize(cfg.get("policy"))
+        return normalize(raw)
     except ValueError:
         return copy.deepcopy(DEFAULT_POLICY)
 

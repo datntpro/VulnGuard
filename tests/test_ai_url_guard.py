@@ -365,3 +365,30 @@ def test_probe_set_with_policy_entries_has_no_bypass(monkeypatch, url):
     _cfg(monkeypatch, policy_list=["*.corp.test", "api.corp.test:8443"])
     with pytest.raises(UrlRejected):
         check_url(url, "cloud", policy=_wpol())
+
+
+# ── [W3-10 follow-up] dữ liệu cũ, wildcard số / dịch vụ wildcard-DNS ─────────────
+def test_legacy_stored_bad_allowlist_entry_does_not_reset_policy(caplog):
+    cfg = {"policy": {"byok": "off", "custom_base_url": "off", "allowed": ["openai:gpt-4o"],
+                      "base_url_allowlist": ["*.com.vn", "ok.corp.test"]}}
+    with caplog.at_level("WARNING"):
+        p = ai_policy.get_policy(cfg)
+    assert p["byok"] == "off" and p["custom_base_url"] == "off" and p["allowed"] == ["openai:gpt-4o"]
+    assert p["base_url_allowlist"] == ["ok.corp.test"]
+    assert "com.vn" not in caplog.text and "1" in caplog.text
+    with pytest.raises(ValueError):          # lưu mới vẫn bị từ chối
+        ai_policy.normalize(cfg["policy"])
+
+
+@pytest.mark.parametrize("entry", ["*.9.9", "*.168.1.1", "*.1.1:8443", "*.nip.io", "*.a.sslip.io", "*.xip.io",
+                                   "*.localtest.me", "*.github.io"])
+def test_numeric_and_wildcard_dns_wildcards_rejected(entry):
+    assert not ai_policy.valid_allow_entry(entry)
+    assert ai_policy.valid_allow_entry("host.nip.io") and ai_policy.valid_allow_entry("*.corp.test")
+
+
+def test_wildcard_never_matches_ip_literal():
+    p = UrlPolicy("cloud", allowlist=("*.9.9",), resolver=_w3_resolver)     # bỏ qua validate: tầng khớp vẫn chặn
+    assert not p.host_allowlisted("10.9.9.9", 443)
+    with pytest.raises(UrlRejected):
+        check_url("https://10.9.9.9/", "cloud", policy=p)
