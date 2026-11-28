@@ -75,6 +75,7 @@ class GitleaksScanner(BaseScanner):
             "--config", os.path.abspath(os.path.join(_CFG_DIR, "gitleaks.toml")),
             "--gitleaks-ignore-path", td,
             "--ignore-gitleaks-allow",
+            "--max-target-megabytes", "25",
             "--report-format", "json",
             "--report-path", report_path,
             "--no-git",
@@ -90,8 +91,8 @@ class GitleaksScanner(BaseScanner):
             if kind == "missing":
                 logger.info("gitleaks chưa cài — bỏ qua")
                 return []
-            if kind == "timeout":
-                raise ScannerRunError(f"gitleaks timeout: {stderr[-300:]}")
+            if kind in ("timeout", "limit"):
+                raise ScannerRunError(f"gitleaks {kind}: {stderr[-300:]}")
             # --exit-code=0: rc != 0 nghĩa là gitleaks hỏng (không phải "có secret").
             if rc != 0:
                 raise ScannerRunError(f"gitleaks thất bại (exit {rc}): {stderr[-500:]}")

@@ -2,12 +2,14 @@
 API tích hợp SCM: kết nối GitHub/GitLab (cloud & onprem), chọn repo, scan tay,
 và lịch quét định kỳ. Token mã hoá, không bao giờ trả raw.
 """
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from api.auth_models import UserRole
 from api.database import get_db
 from api.security import encrypt_secret, decrypt_secret, mask_secret
 from api.scm_models import ScmConnection, ScmRepo, ScanSchedule, ScmProvider
@@ -110,13 +112,31 @@ def list_repos_cfg(db: Session = Depends(get_db)):
     return [_repo_public(r) for r in db.query(ScmRepo).order_by(ScmRepo.created_at).all()]
 
 
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+$")
+
+
+def _check_owner_email(email: str, request: Request) -> Optional[str]:
+    """owner_email receives scan reports: must be well-formed, and only ADMIN may name someone else."""
+    email = (email or "").strip()
+    if not email:
+        return None
+    if len(email) > 200 or not _EMAIL_RE.match(email):
+        raise HTTPException(422, "owner_email không hợp lệ")
+    u = getattr(request.state, "user", None)
+    if u is not None and getattr(u, "role", None) != UserRole.ADMIN \
+            and email.lower() != (getattr(u, "email", "") or "").lower():
+        raise HTTPException(403, "Chỉ ADMIN được đặt owner_email khác email của chính mình")
+    return email
+
+
 @router.post("/repos", status_code=201)
-def add_repo(body: RepoCreate, db: Session = Depends(get_db)):
+def add_repo(body: RepoCreate, request: Request, db: Session = Depends(get_db)):
+    owner_email = _check_owner_email(body.owner_email, request)
     if not db.query(ScmConnection).filter(ScmConnection.id == body.connection_id).first():
         raise HTTPException(400, "connection_id không hợp lệ")
     r = ScmRepo(connection_id=body.connection_id, repo_full_name=body.repo_full_name.strip("/"),
                 default_branch=(body.default_branch or "main").strip(),
-                owner_email=(body.owner_email or "").strip() or None,
+                owner_email=owner_email,
                 scan_types=body.scan_types or [], run_ai=body.run_ai, enabled=True)
     db.add(r); db.commit(); db.refresh(r)
     return _repo_public(r)

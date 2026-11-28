@@ -148,8 +148,8 @@ class SonarQubeScanner(BaseScanner):
             ], cwd=td, timeout=int(_cfg("SONARQUBE_TIMEOUT", 900)),
                 env={"SONAR_TOKEN": self.token})
             kind = classify_failed_run(rc, err)
-            if kind == "timeout":
-                raise ScannerRunError(f"sonar-scanner timeout: {err[-300:]}")
+            if kind in ("timeout", "limit"):
+                raise ScannerRunError(f"sonar-scanner {kind}: {err[-300:]}")
             if rc != 0:
                 raise ScannerRunError(f"sonar-scanner thất bại (exit {rc}): {(err or out)[-500:]}")
             task_id = self._read_task_id(os.path.join(work, "report-task.txt"))

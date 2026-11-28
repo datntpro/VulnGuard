@@ -12,7 +12,7 @@ import asyncio
 import urllib.request
 from typing import List, Dict, Any
 
-from scanner.scanners.base import ScannerRunError, BaseScanner, run_command, normalize_severity, make_fingerprint
+from scanner.scanners.base import ScannerRunError, BaseScanner, run_command, normalize_severity, make_fingerprint, classify_failed_run
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,8 @@ BUNDLED_RULES_DIR = os.path.normpath(
 def _has_internet(host: str = "semgrep.dev", port: int = 443, timeout: float = 3.0) -> bool:
     """Kiểm tra nhanh có kết nối internet không (tránh timeout 120s của semgrep)."""
     try:
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
-        return True
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
     except Exception:
         return False
 
@@ -227,6 +226,8 @@ class SemgrepScanner(BaseScanner):
         rc, stdout, stderr = await run_command(cmd, timeout=timeout)
         if rc == -1 and "timeout" in stderr.lower():
             raise ScannerRunError(f"semgrep timeout sau {timeout}s")
+        if classify_failed_run(rc, stderr) == "limit":
+            raise ScannerRunError(f"semgrep limit: {stderr[-300:]}")
 
         if not stdout.strip():
             # Với --json, semgrep chạy đúng luôn in JSON (kể cả khi sạch / rc 1).

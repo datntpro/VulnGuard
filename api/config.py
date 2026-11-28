@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     sonarqube_token: str = ""        # token tạo trong Sonar (My Account → Security)
     sonarqube_timeout: int = 900
 
+    # ── Giới hạn tài nguyên scanner / clone ──
+    scanner_max_output_mb: int = 128      # stdout tối đa của một lệnh scanner
+    scanner_tool_budget_s: int = 1200     # wall-clock tối đa cho một scanner
+    scm_max_repo_mb: int = 1024           # dung lượng repo clone tối đa
+    scm_max_repo_files: int = 200000      # số file repo clone tối đa
+
     # ── Auth ──
     # AUTH_ENABLED=false chỉ dành cho dev/local 1 người — production luôn bật.
     auth_enabled: bool = True

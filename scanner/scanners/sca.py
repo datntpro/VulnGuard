@@ -5,13 +5,13 @@ SCA Scanners — Software Composition Analysis:
 """
 import json
 import logging
-import glob
+import asyncio
 import os
 import re
 import tempfile
 from typing import List, Dict, Any
 
-from scanner.scanners.base import (ScannerRunError, BaseScanner, run_command, normalize_severity,
+from scanner.scanners.base import (find_files, ScannerRunError, BaseScanner, run_command, normalize_severity,
                                    make_fingerprint, classify_failed_run)
 
 logger = logging.getLogger(__name__)
@@ -72,8 +72,8 @@ class TrivySCAScanner(BaseScanner):
         if kind == "missing":
             logger.info("trivy chưa cài — bỏ qua SCA")
             return []
-        if kind == "timeout":
-            raise ScannerRunError(f"trivy timeout: {stderr[-300:]}")
+        if kind in ("timeout", "limit"):
+            raise ScannerRunError(f"trivy {kind}: {stderr[-300:]}")
         # rc != 0 (không dùng --exit-code) = lỗi thật (tải DB, cache, path…): nêu rõ để
         # orchestrator ghi status "error", KHÔNG báo "0 findings".
         if rc != 0:
@@ -176,10 +176,21 @@ class PipAuditScanner(BaseScanner):
         findings = []
 
         # Only requirements*.txt (pip-audit cannot parse the other manifests offline; Trivy covers them)
-        req_files = sorted(set(
-            f for f in glob.glob(f"{self.scan_path}/**/requirements*.txt", recursive=True)
-            if not os.path.islink(f)
-            and os.path.realpath(f).startswith(os.path.realpath(self.scan_path) + os.sep)))
+        links: list = []
+        found, truncated = await asyncio.to_thread(
+            find_files, self.scan_path, "requirements*.txt", 50, 200_000, links)
+        if truncated:
+            self.warnings.append("pip-audit: more than 50 requirements files; only the first 50 were audited")
+        root_real = os.path.realpath(self.scan_path)
+        req_files = []
+        for f in found:
+            if os.path.realpath(f).startswith(root_real + os.sep):
+                req_files.append(f)
+            else:
+                self.warnings.append(f"{os.path.relpath(f, self.scan_path)}: resolves outside the scan path; not audited")
+        for f in links:
+            if not os.path.realpath(f).startswith(root_real + os.sep):
+                self.warnings.append(f"{os.path.relpath(f, self.scan_path)}: symlink resolves outside the scan path; not audited")
 
         errors: list = []
         attempted = 0
@@ -209,8 +220,8 @@ class PipAuditScanner(BaseScanner):
             if kind == "missing":
                 logger.info("pip-audit chưa cài — bỏ qua")
                 return []
-            if kind == "timeout":
-                errors.append(f"{rel}: timeout")
+            if kind in ("timeout", "limit"):
+                errors.append(f"{rel}: {kind}")
                 continue
             # pip-audit: exit 0 = sạch, 1 = có vulnerabilities (bình thường); khác = hỏng.
             if rc not in (0, 1):
