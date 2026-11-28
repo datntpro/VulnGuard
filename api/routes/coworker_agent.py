@@ -49,6 +49,7 @@ router = APIRouter(prefix="/api/coworker/agent", tags=["coworker-agent"])
 
 MAX_PARSE_RETRY = 3         # số lần thử lại khi model trả JSON sai định dạng
 MAX_FILE_CHARS = 12000      # cắt nội dung file đưa vào context model local
+MAX_RAW_CHARS = 200_000     # trần "thô" cho route cloud: che secret TRƯỚC, cắt SAU (wrap_observation)
 MAX_OBS_CHARS = 6000        # cắt observation (vd output lệnh) cho gọn context
 READ_ONLY_ACTIONS = {"list_dir", "read_file", "find_files"}
 WRITE_ACTIONS = {"write_file", "exec"}
@@ -314,12 +315,12 @@ def _gate_read(gate: bool, path: str, data: dict) -> None:
         raise SensitiveRead(why, str((data or {}).get("resolved") or ""))
 
 
-async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any], *, gate: bool = False) -> str:
+async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any], *, gate: bool = False, raw: bool = False) -> str:
     path = str(args.get("path", "") or "")
     if action == "list_dir":
         data = await _host_request("GET", "/fs/tree", params={"folder_id": folder_id, "path": path})
         entries = data.get("entries", data) if isinstance(data, dict) else data
-        return json.dumps(entries, ensure_ascii=False)[:MAX_OBS_CHARS]
+        return json.dumps(entries, ensure_ascii=False)[:MAX_RAW_CHARS if raw else MAX_OBS_CHARS]
     if action == "find_files":
         query = str(args.get("query", "") or "")
         data = await _host_request("GET", "/fs/find",
@@ -336,20 +337,21 @@ async def _run_readonly(folder_id: str, action: str, args: Dict[str, Any], *, ga
             return "LỖI: thiếu 'path' cho read_file."
         ext = os.path.splitext(path)[1].lower()
         if ext in DOC_EXTS:
-            return await _read_document(folder_id, path, ext, gate=gate)
+            return await _read_document(folder_id, path, ext, gate=gate, raw=raw)
         data = await _host_request("GET", "/fs/file", params={"folder_id": folder_id, "path": path})
         _gate_read(gate, path, data)
         if data.get("binary"):
             return (f"LỖI: '{path}' là file binary, không đọc được dạng text. "
                     f"(Chỉ hỗ trợ trích xuất các định dạng tài liệu: {', '.join(sorted(DOC_EXTS))})")
         content = data.get("content") or ""
-        truncated = content[:MAX_FILE_CHARS]
-        suffix = "" if len(content) <= MAX_FILE_CHARS else "\n…[đã cắt bớt do file dài]…"
+        lim = MAX_RAW_CHARS if raw else MAX_FILE_CHARS
+        truncated = content[:lim]
+        suffix = "" if len(content) <= lim else "\n…[đã cắt bớt do file dài]…"
         return f"Nội dung '{path}':\n{truncated}{suffix}"
     return f"LỖI: tool read-only không hỗ trợ: {action}"
 
 
-async def _read_document(folder_id: str, path: str, ext: str, gate: bool = False) -> str:
+async def _read_document(folder_id: str, path: str, ext: str, gate: bool = False, raw: bool = False) -> str:
     """Lấy bytes tài liệu từ host (base64), trích text + mô tả ảnh nhúng (vision)."""
     from api.services.file_processor import extract_text_from_file, extract_images_from_file
     try:
@@ -381,8 +383,9 @@ async def _read_document(folder_id: str, path: str, ext: str, gate: bool = False
     if not text.strip() and not images:
         return f"Tài liệu '{path}' trích xuất ra rỗng (có thể là file scan/ảnh, không có text layer)."
 
-    truncated = text[:MAX_FILE_CHARS]
-    suffix = "" if len(text) <= MAX_FILE_CHARS else "\n…[đã cắt bớt do tài liệu dài]…"
+    lim = MAX_RAW_CHARS if raw else MAX_FILE_CHARS
+    truncated = text[:lim]
+    suffix = "" if len(text) <= lim else "\n…[đã cắt bớt do tài liệu dài]…"
     out = f"Nội dung '{path}' (trích xuất {ext}, {lines} dòng):\n{truncated}{suffix}"
 
     if images:
@@ -437,7 +440,7 @@ async def _analyze_images(images: List[bytes]) -> str:
 # ─────────────────────────────────────────────────────────────
 # Thực thi tool WRITE/EXEC (chỉ khi đã approved)
 # ─────────────────────────────────────────────────────────────
-async def _run_sideeffect(folder_id: str, action: str, args: Dict[str, Any]) -> str:
+async def _run_sideeffect(folder_id: str, action: str, args: Dict[str, Any], *, raw: bool = False) -> str:
     if action == "write_file":
         path = str(args.get("path", "") or "")
         content = args.get("content", "")
@@ -470,7 +473,7 @@ async def _run_sideeffect(folder_id: str, action: str, args: Dict[str, Any]) -> 
             return "LỖI: host yêu cầu xác nhận nhưng không cấp confirm_id — lệnh không được chạy."
         out = (data.get("stdout") or "") + (("\n[stderr]\n" + data.get("stderr")) if data.get("stderr") else "")
         code = data.get("exit_code", data.get("returncode", "?"))
-        return f"Lệnh '{command}' (exit={code}):\n{out[:MAX_OBS_CHARS]}"
+        return f"Lệnh '{command}' (exit={code}):\n{out[:MAX_RAW_CHARS if raw else MAX_OBS_CHARS]}"
     return f"LỖI: tool side-effect không hỗ trợ: {action}"
 
 
@@ -1003,12 +1006,12 @@ def _attach_user_text(driver, entries: List[dict], text: str) -> None:
         entries.append({"role": "user", "content": text})
 
 
-async def _exec_pending(row, cap_read: int) -> str:
+async def _exec_pending(row, cap_read: int, *, raw: bool = False) -> str:
     """Thực thi (sau khi người dùng duyệt) bằng args do SERVER lưu. Mọi lỗi → text (tool_use luôn có tool_result)."""
     try:
         if row.kind == "sensitive_read":
-            return await _run_readonly(row.folder_id, "read_file", row.args)
-        return await _run_sideeffect(row.folder_id, row.action, row.args)
+            return await _run_readonly(row.folder_id, "read_file", row.args, raw=raw)
+        return await _run_sideeffect(row.folder_id, row.action, row.args, raw=raw)
     except HTTPException as e:
         return f"LỖI khi thực thi: {e.detail}"
     except Exception as e:
@@ -1142,7 +1145,7 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
         row = _take_pending(db, req.approve or req.reject, owner=uid, conv_id=conv.id,
                             to_status="done" if req.approve else "rejected")
         if req.approve:
-            obs = await _exec_pending(row, MAX_OBS_CHARS)
+            obs = await _exec_pending(row, MAX_OBS_CHARS, raw=True)
             _audit_action(conv, uid, row.action, "approved")
             cap = MAX_FILE_CHARS + 500 if row.kind == "sensitive_read" else MAX_OBS_CHARS
             text, kinds, hosts = cc.wrap_observation(obs, cap=cap)
@@ -1225,7 +1228,7 @@ async def _cloud_step(db, conv, uid, req, backend, skill_body):
         if name == "read_file" and cc.is_sensitive_path(str(args.get("path", ""))):
             return _sens("sensitive_path")
         try:
-            obs = await _run_readonly(conv.folder_id, name, args, gate=(name == "read_file"))
+            obs = await _run_readonly(conv.folder_id, name, args, gate=(name == "read_file"), raw=True)
         except SensitiveRead as e:                 # đường dẫn THẬT / symlink / hard link / host cũ không báo meta
             return _sens(e.reason, e.resolved)
         except HTTPException as e:

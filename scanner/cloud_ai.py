@@ -68,7 +68,13 @@ VERDICT_LABEL = {
 # Redaction — che secret trước khi gửi ra cloud
 # ─────────────────────────────────────────────
 _SECRET_PATTERNS = [
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"),
+    # khối khoá không có dòng END (nội dung bị cắt): che tới hết văn bản
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?=[ \t]*\r?\n(?:[A-Za-z-]{1,40}:[^\n]*\n)*\s*[A-Za-z0-9+/=]{20})[\s\S]*\Z"),
+    # PuTTY .ppk (không có header PEM)
+    re.compile(r"PuTTY-User-Key-File-\d+:[^\n]*\n[\s\S]*?(?:Private-MAC:[^\n]*|\Z)"),
+    # base64 của "-----BEGIN" (kubeconfig client-key-data, Helm tls.key…)
+    re.compile(r"LS0tLS1CRUdJT[A-Za-z0-9+/=]*"),
     re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{10,}"),
     re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"),   # gồm sk-proj-… / sk-svcacct-…
