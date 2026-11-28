@@ -153,8 +153,11 @@ class SonarQubeScanner(BaseScanner):
             if rc != 0:
                 raise ScannerRunError(f"sonar-scanner thất bại (exit {rc}): {(err or out)[-500:]}")
             task_id = self._read_task_id(os.path.join(work, "report-task.txt"))
-        await self._wait_ready(task_id)
-        return await self._fetch_all()
+        try:
+            await self._wait_ready(task_id)
+            return await self._fetch_all()
+        except httpx.HTTPError as e:
+            raise ScannerRunError(f"SonarQube API error: {type(e).__name__}: {str(e)[:200]}") from e
 
     @staticmethod
     def _read_task_id(path: str) -> str:
