@@ -158,6 +158,13 @@ def _gitleaks_isolation(root: str) -> Tuple[int, str]:
         files = {os.path.basename(x["file_path"]) for x in _scan(GitleaksScanner, tgt)}
         if files != {"a.py", "b.py"}:
             raise RuntimeError(f"target config / allow comment hid findings: {sorted(files)}")
+        # a root ignore file cannot be disabled in the pinned version: it must be reported as partial
+        with open(os.path.join(tgt, ".gitleaksignore"), "w") as f:
+            f.write("a.py:github-pat:1\n")
+        sc = GitleaksScanner(tgt)
+        asyncio.run(sc.scan())
+        if not sc.warnings:
+            raise RuntimeError("root .gitleaksignore not reported as partial")
         return len(files), ""
     finally:
         shutil.rmtree(td, ignore_errors=True)
