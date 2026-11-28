@@ -8,6 +8,8 @@ updates:
     schedule: { interval: weekly }
   - package-ecosystem: pip
     directory: "/docker/scanners"
+    # Re-check docker/scanners/audit-ignores.toml (and scripts/scanner_reachability) on every
+    # semgrep/checkov bump: CI (audit_scanner_locks.py) fails when an ignore no longer matches the pin.
     schedule: { interval: weekly }
   - package-ecosystem: pip
     directory: "/"

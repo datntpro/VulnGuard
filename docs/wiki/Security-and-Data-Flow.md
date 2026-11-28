@@ -11,6 +11,12 @@
 - **Scope gate** phân giải DNS, chặn IP nội bộ/loopback/metadata (`169.254.169.254`) trừ khi scope ghi rõ IP/CIDR, chống SSRF/DNS rebinding.
 - **MCP HTTP** bắt buộc bearer token (fail-closed).
 
+## Advisory của scanner dependency (docker/scanners/*.txt)
+- CI (`scripts/audit_scanner_locks.py`, job `test`) chạy `pip-audit` trên **cả 4 lock** scanner (semgrep, bandit, checkov, pip-audit) và **chặn merge** nếu có advisory chưa được ignore.
+- Ignore nằm ở `docker/scanners/audit-ignores.toml`: mỗi mục bắt buộc có `reason`, `evidence` (file:line + kết quả probe), `added`, `expires` (tối đa 120 ngày, mặc định 90) và `tracking`. Mục hết hạn = CI đỏ; ignore chỉ áp dụng khi lock vẫn pin đúng `package==version` (bump phiên bản ⇒ phải xác minh lại).
+- Các advisory hiện tại do semgrep/checkov **tự pin** (mcp, opentelemetry-api, wcmatch, asteval, ecdsa, soupsieve) nên không nâng được. Lập luận "không thể khai thác" được kiểm lại mỗi lần CI bằng probe `scripts/scanner_reachability/check.py` (chạy trong image, argv semgrep/checkov thật): code của gói dễ bị tấn công có thể được *import* nhưng không được *thực thi* khi quét (ngoại lệ có ghi rõ: wcmatch chạy ở lượt registry online). Probe tự kiểm bằng positive control nên không thể xanh giả. Chạy tay: `python scripts/scanner_reachability/check.py [--online]` (cần `semgrep`/`checkov` trong PATH).
+- Không thêm glob nhiều `*` vào `paths:` của rule bundled (lập luận wcmatch dựa vào điều này).
+
 ## Dữ liệu nào ở lại máy / dữ liệu nào rời máy
 **Luôn ở lại máy (local-only)**: mã nguồn quét, kết quả/lỗ hổng/triage/báo cáo (SQLite), secret đã cấu hình (mã hoá), phân tích AI bằng Ollama.
 

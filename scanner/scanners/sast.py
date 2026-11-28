@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import socket
+import asyncio
+import urllib.request
 from typing import List, Dict, Any
 
 from scanner.scanners.base import ScannerRunError, BaseScanner, run_command, normalize_severity, make_fingerprint
@@ -28,6 +30,43 @@ def _has_internet(host: str = "semgrep.dev", port: int = 443, timeout: float = 3
     except Exception:
         return False
 
+
+
+# Guard cho CVE-2026-132276 (wcmatch ReDoS): glob `paths:` của rule registry có nhiều '*' giữa literal + tên file
+# do kẻ tấn công đặt = CPU DoS. Glob registry hiện tại ≤2 sao; >3 sao thì bỏ lượt registry (bundled vẫn chạy).
+MAX_REGISTRY_GLOB_STARS = 3
+_REGISTRY_URL = "https://semgrep.dev/c/{}"
+_REGISTRY_MAX_BYTES = 30 * 1024 * 1024
+
+
+def glob_star_count(glob: str) -> int:
+    """Số '*' đơn (bỏ '**' globstar, vì chỉ các '*' giữa literal mới gây backtracking đa thức)."""
+    return str(glob).replace("**", "").count("*")
+
+
+def risky_registry_globs(rules_yaml: str, limit: int = MAX_REGISTRY_GLOB_STARS) -> List[str]:
+    """Các glob `paths.include/exclude` trong YAML rule có > `limit` dấu '*'."""
+    import yaml
+    try:
+        doc = yaml.safe_load(rules_yaml) or {}
+    except yaml.YAMLError:
+        return []
+    bad: List[str] = []
+    for rule in (doc.get("rules") or []) if isinstance(doc, dict) else []:
+        paths = rule.get("paths") if isinstance(rule, dict) else None
+        if not isinstance(paths, dict):
+            continue
+        for key in ("include", "exclude"):
+            for g in paths.get(key) or []:
+                if isinstance(g, str) and glob_star_count(g) > limit:
+                    bad.append(g)
+    return bad
+
+
+def _fetch_ruleset_yaml(ruleset: str, timeout: float = 20.0) -> str:
+    req = urllib.request.Request(_REGISTRY_URL.format(ruleset), headers={"User-Agent": "scanner-client"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 - fixed https host
+        return resp.read(_REGISTRY_MAX_BYTES).decode("utf-8", errors="replace")
 
 
 class SemgrepScanner(BaseScanner):
@@ -121,6 +160,8 @@ class SemgrepScanner(BaseScanner):
             config_args = []
             for ruleset in rulesets:
                 config_args += ["--config", ruleset]
+            if not await self._registry_globs_safe(rulesets):
+                return all_findings
             try:
                 online = await self._run_semgrep(config_args, timeout=120)
                 add_findings(online)
@@ -133,6 +174,23 @@ class SemgrepScanner(BaseScanner):
             logger.info("Semgrep: không có internet — bỏ qua online registry rules (offline mode)")
 
         return all_findings
+
+    async def _registry_globs_safe(self, rulesets: List[str], fetch=None) -> bool:
+        """False (bỏ lượt registry, giữ bundled) nếu rule registry có glob `paths:` > MAX_REGISTRY_GLOB_STARS sao.
+        Không tải được ruleset → cho chạy tiếp (chính semgrep cũng sẽ tải; không chặn vì lỗi mạng)."""
+        fetch = fetch or _fetch_ruleset_yaml
+        for rs in rulesets:
+            try:
+                text = await asyncio.to_thread(fetch, rs)
+            except Exception as e:  # noqa: BLE001 - fail-open có chủ đích, chỉ để guard
+                logger.debug(f"Semgrep: không kiểm được glob của {rs}: {e}")
+                continue
+            bad = risky_registry_globs(text)
+            if bad:
+                logger.warning(f"Semgrep: bỏ lượt registry — {rs} có glob paths: >{MAX_REGISTRY_GLOB_STARS} dấu '*' "
+                               f"(rủi ro ReDoS wcmatch, CVE-2026-132276): {bad[:3]}")
+                return False
+        return True
 
     async def _run_semgrep(self, config_args: List[str], timeout: int = 90) -> List[Dict[str, Any]]:
         """Chạy semgrep với config args đã cho."""

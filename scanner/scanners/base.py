@@ -45,11 +45,46 @@ def scrubbed_env(base=None, extra=None) -> dict:
     return out
 
 
+_KILL_GRACE_SECONDS = 3.0
+
+
+async def _kill_process_group(proc, grace: float = None) -> None:
+    """SIGTERM cả process group (tool + con cháu), chờ `grace` giây rồi SIGKILL. Không để tool chạy mồ côi."""
+    import os as _os
+    import signal as _signal
+    grace = _KILL_GRACE_SECONDS if grace is None else grace
+
+    def _send(sig):
+        try:
+            if hasattr(_os, "killpg"):
+                _os.killpg(proc.pid, sig)      # proc là leader của session mới (start_new_session)
+            elif sig == _signal.SIGTERM:
+                proc.terminate()
+            else:
+                proc.kill()
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    _send(_signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace)
+    except asyncio.TimeoutError:
+        pass
+    # Leader có thể đã thoát nhưng con cháu còn sống → luôn SIGKILL cả group (không lỗi nếu đã chết hết).
+    _send(getattr(_signal, "SIGKILL", _signal.SIGTERM))
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace)
+    except asyncio.TimeoutError:
+        pass
+
+
 async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
                       env: dict = None) -> tuple[int, str, str]:
     """Chạy command async và trả về (returncode, stdout, stderr).
 
-    env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế)."""
+    env: biến môi trường bổ sung (merge vào môi trường hiện tại, không thay thế).
+    Hết `timeout`: giết CẢ process group (SIGTERM → SIGKILL sau grace) rồi trả (-1, "", "Command timeout …"),
+    để caller báo lỗi timeout (không phải 'sạch') và tool không tiếp tục đốt CPU sau khi bị bỏ."""
     run_env = scrubbed_env(extra=env)
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -58,13 +93,19 @@ async def run_command(cmd: List[str], cwd: str = None, timeout: int = 300,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=run_env,
+            start_new_session=True,
         )
+    except FileNotFoundError:
+        return -1, "", f"Tool not found: {cmd[0]}"
+    try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
     except asyncio.TimeoutError:
+        await _kill_process_group(proc)
         return -1, "", f"Command timeout after {timeout}s: {' '.join(cmd)}"
-    except FileNotFoundError:
-        return -1, "", f"Tool not found: {cmd[0]}"
+    except asyncio.CancelledError:
+        await _kill_process_group(proc)
+        raise
 
 
 # Thư mục rác KHÔNG phải mã nguồn của người dùng — loại khỏi mọi scan để báo cáo
